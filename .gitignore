@@ -29,9 +29,16 @@ logs/
 .env
 .env.*
 !.env.example
+# Secret-bearing filenames only. Do NOT use a bare `*token*` glob here: it also
+# matches app/static/css/tokens.css, and a stylesheet excluded from git while
+# SHELL_ASSETS precaches it breaks the offline shell.
 *credentials*
 *secrets*
-*token*
+*token.json
+*-token
+*-token.*
+*_token
+*_token.*
 
 # Editor / OS
 .DS_Store
