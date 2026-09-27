@@ -86,6 +86,21 @@ python3 ~/projects/pwa-template/scripts/vendor.py --check .   # drift gate
 
 GitHub issues on `syyangv/pwa-pantry-recipes` via the `gh` CLI.
 
+### Triage labels
+
+The five canonical triage roles map 1:1 to GitHub labels (`needs-triage`, `needs-info`,
+`ready-for-agent`, `ready-for-human`, `wontfix`). All five exist on the tracker. When a
+skill mentions a role (e.g. "apply the AFK-ready triage label"), use the corresponding
+label string.
+
+Source of truth for the role→label mapping and each role's meaning:
+`~/projects/pwa-template/docs/agents/triage-labels.md`.
+
+Roles are not decoration. A ticket is `ready-for-agent` only when its `## Blocked by` is
+closed, its acceptance criteria name concrete files/functions/routes, and its verification
+command is one the repo can actually run today. A ticket with an unresolved design
+question belongs in `needs-triage`, not in a worker's queue.
+
 ### Domain docs
 
 Single-context repository: `CONTEXT.md` at the root is the glossary. Add a

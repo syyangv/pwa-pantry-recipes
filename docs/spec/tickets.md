@@ -331,7 +331,7 @@ in wave order). In a shared workspace, read the table left to right as a strict 
 
 | Wave | Tickets (all blockers closed) | Safe to parallelize? |
 |---|---|---|
-| 0 | **#1, #2, #3, #4, #19** | **Yes, with 5 isolated worktrees.** All five are roots. #4 touches only `app/static/icons/` + `ci.yml`; #3 only `app/recipes/`; #2 only `app/db/` + `pyproject.toml`. **#1 and #2 both edit `pyproject.toml`** and #1 also owns `app/config.py` + `tests/js/shell_assets.test.mjs`, so in a shared workspace do **#1 → #2**. #19 is **parked** (see §7) and does not join the wave until the decision lands. |
+| 0 | **#1, #2, #3, #4, #19** | **Yes, with 5 isolated worktrees.** All five are roots. #4 touches only `app/static/icons/` + `ci.yml`; #3 only `app/recipes/`; #2 only `app/db/` + `pyproject.toml`. **#1 and #2 both edit `pyproject.toml`** and #1 also owns `app/config.py` + `tests/js/shell_assets.test.mjs`, so in a shared workspace do **#1 → #2**. #19 was parked here pending the glob decision; **that decision has landed (§7.1), so #19 joins the wave as a normal root.** |
 | 1 | **#5, #6, #7, #8, #11** | Yes, with isolated worktrees — five disjoint areas (`app/auth.py` + `app/api/session.py`; `app/vault/`; `app/vault/pantry.py`; `app/pantry/catalog.py`; `app/recipes/reader.py`). **#6 and #7 both create files in `app/vault/`** — sequential in a shared tree. |
 | 2 | **#9** | Single. Needs #8. |
 | 3 | **#10** | Single. Needs #2, #3, #7, #9. This is the critical-path gate; start it as early as the frontier allows. |
@@ -371,10 +371,10 @@ instant work — but #26 does list it as a blocker, so it must land before the d
 
 ## 7. Spec defects found while breaking this down
 
-Two. **Neither was silently fixed in the spec.** One is parked; one is assigned a durable
-engineering guard and reported.
+Two. **Neither was silently fixed in the spec.** One is now resolved and folded into its
+ticket; one is assigned a durable engineering guard and reported.
 
-### 7.1 PARKED — `npm test` cannot see the three new `logic/` test files. Issue **#19** carries `needs-triage`.
+### 7.1 RESOLVED — `npm test` cannot see the three new `logic/` test files. Issue **#19** (now `ready-for-agent`).
 
 `package.json` today is `node --test tests/js/*.test.mjs`. That glob matches **one** directory
 level, so `tests/js/logic/sort.test.mjs`, `chip-class.test.mjs`, and `format.test.mjs` — the three
@@ -389,9 +389,16 @@ are defensible and the spec settles neither:
 1. widen the glob to `tests/js/**/*.test.mjs`, or
 2. flatten to `tests/js/sort.test.mjs` etc.
 
-**#19 is parked pending that choice and is labelled `needs-triage` rather than
-`ready-for-agent`.** It is the only ticket not agent-grabbable. Note that #19 has no blockers, so
-parking it does not stall the critical path — only #20 waits on it.
+**RESOLVED — #19 is no longer parked.** The maintainer chose **option 1, widen the glob to
+`tests/js/**/*.test.mjs`.** The rationale, the version-dependency caveat, and the
+directory-argument fallback are recorded in a `## Resolved decision` block on #19 itself, so
+the worker reads the decision where the work is. #19 now carries `ready-for-agent` and is
+agent-grabbable like the rest of the set; the `needs-triage` label it held is removed (the
+label stays defined — it is canonical, just currently unused).
+
+The implementer's obligation is unchanged in substance and sharpened: **assert that all
+three `logic/` test files were collected**, not merely that `npm test` exited 0. "0 failures"
+was the exact signal that lied.
 
 ### 7.2 ASSIGNED — `pyproject.toml` will not package the eight new subpackages. Issue **#2** (`ready-for-agent`).
 
@@ -422,16 +429,20 @@ graph. Recorded here because it is the same class of gap as §7.1 and was found 
 
 - **No feature was implemented.** No app code was written. No file in `app/`, `tests/`, or
   `scripts/` was touched.
-- **No PR was opened and nothing was pushed.** `git status` in the repo shows only this file,
-  `docs/spec/tickets.md`, added and **uncommitted**.
+- **No PR was opened and nothing was pushed** during the breakdown itself. The follow-up
+  housekeeping commits (§11) commit this file and the `AGENTS.md` triage section, and push to
+  `main`. No PR, no force-push.
 - **No decision was re-opened or re-litigated.** All 24 (D1–D4, F1–F20) are referenced by id only;
   the rationale stays in §3 and is not restated in the tickets. The three hard constraints in the
   spec are carried verbatim as prohibitions: `aiosqlite` is the **only** new runtime dependency
   (F9) and `playwright` the **only** extra, in `[browser]` and **not** in `[test]` (F10).
 - **No new dependencies** beyond `aiosqlite` and `playwright`.
-- **Canonical labels only.** `ready-for-agent` and `needs-triage`, from the house triage vocabulary
-  in `pwa-template/docs/agents/triage-labels.md`. Both were created because they did not exist yet
-  in this repo (see §9).
+- **Canonical labels only**, from the house triage vocabulary in
+  `pwa-template/docs/agents/triage-labels.md`. `ready-for-agent` and `needs-triage` were created
+  during publication because they did not exist yet in this repo; `needs-info` and
+  `ready-for-human` were added later, in the follow-up housekeeping pass, so that the live label
+  set matches the documented five. `wontfix` already existed as a GitHub default and was left
+  untouched. See §9 and §11.
 - **No removed field, removed phase, or rejected behaviour is reintroduced.** Grepped every ticket
   body for the Obsidian CLI, `QuickAdd`, `OBSIDIAN_CLI_EXECUTABLE`, `TV_SYNC_COMMAND_ID`, the
   idempotency ledger, `CreationIdempotencyStore`, `create_new`, the `in_stock` column, the `snack`
@@ -447,16 +458,15 @@ graph. Recorded here because it is the same class of gap as §7.1 and was found 
 - **Every dependency edge points at an existing issue** and **the DAG is acyclic** — both verified
   programmatically against the live tracker state, not against this file.
 
-## 9. Repo-convention gaps found (for `AGENTS.md`, not fixed here)
+## 9. Repo-convention gaps found (for `AGENTS.md`)
 
-- **`AGENTS.md` has no `### Triage labels` section.** The new repo's `AGENTS.md` was modeled on
-  `pwa-template/AGENTS.md` and carries its `### Issue tracker` section, but **omits** the
+- **`AGENTS.md` had no `### Triage labels` section.** The new repo's `AGENTS.md` was modeled on
+  `pwa-template/AGENTS.md` and carries its `### Issue tracker` section, but **omitted** the
   `### Triage labels` section that maps the five canonical triage roles to label strings. The
-  labels themselves did not exist in the repo. `ready-for-agent` and `needs-triage` were created
-  from `pwa-template/docs/agents/triage-labels.md`; the remaining three (`needs-info`,
-  `ready-for-human`, `wontfix` — the last of which **did** already exist) were left alone because
-  no ticket uses them. **Recommend adding the `### Triage labels` section to `AGENTS.md`, modeled on
-  the template's.**
+  labels themselves did not exist in the repo: `ready-for-agent` and `needs-triage` were created
+  during publication, and `needs-info` / `ready-for-human` were still missing, while `wontfix`
+  already existed as a GitHub default. **Both gaps are now closed** — the section is added and
+  all five labels exist. See §11.
 - **`AGENTS.md`'s `### Issue tracker` section** points at `syyangv/pwa-pantry-recipes` via the
   `gh` CLI and is correct. The template's version also cross-references
   `docs/agents/issue-tracker.md`; this repo has no `docs/agents/` directory. The tracker record
@@ -470,3 +480,44 @@ locked decisions, its `## Read these spec sections` list, its `## Blocked by` (t
 GitHub issue dependencies), concrete acceptance criteria naming files / functions / routes /
 tables / columns / test files, its `## Explicit non-goals`, and its verification command with
 what a pass looks like.
+
+## 11. Housekeeping pass — what changed after publication
+
+Three bookkeeping changes, **no feature work**. Recorded here so this file stays the durable
+local map rather than a snapshot that quietly goes stale.
+
+### 11.1 This file was committed, and three drifted claims were corrected
+
+`docs/spec/tickets.md` existed only as an uncommitted local file. Before committing it, it was
+checked against the live tracker on all five axes named for the pass — issue numbers, phase
+mapping, blocked-by edges, critical path, and parallel-safety annotations. Phase mapping was
+already exact (all 26 issues' `**Phase:**` lines match §1 and §2). The other three were not;
+see §3 (critical path and the stale text `## Blocked by` lines) and §6 (waves 0 and 6).
+
+### 11.2 #19's glob decision is recorded on the issue, and #19 is un-parked
+
+The `npm test` one-level-glob defect (§7.1) was decided by the maintainer: **widen the glob
+to `tests/js/**/*.test.mjs`.** The decision, the reason, the Node-version caveat, and the
+`node --test tests/js/` fallback are written into a `## Resolved decision` block appended to
+#19's body — appended, so the original ticket text is intact. `needs-triage` was removed from
+#19 and `ready-for-agent` added.
+
+**The fix itself is deliberately NOT in this repo.** It is #19's implementation work. No file
+in `app/`, `tests/`, `scripts/`, or `package.json` was touched by this pass.
+
+`needs-triage` now has zero issues and **stays defined** — it is one of the five canonical
+roles, not a per-issue label.
+
+### 11.3 The `### Triage labels` section is in `AGENTS.md`, and all five labels exist
+
+`AGENTS.md` gained the `### Triage labels` section it was missing (§9), naming all five
+canonical roles and pointing at `pwa-template/docs/agents/triage-labels.md` as the source of
+truth. `needs-info` and `ready-for-human` were created so the live label set matches the
+documented one. `ready-for-agent`, `needs-triage`, and `wontfix` already existed and were not
+recreated or modified.
+
+Note for the next person: `wontfix` is a GitHub default label, so its description reads
+"This will not be worked on" where the triage doc's meaning column says "Will not be
+actioned". Same role, different wording. Left as-is — the doc specifies no colors or
+descriptions for label creation, so the two labels created here take their descriptions from
+the doc's meaning column and their colors from this repo's existing semantic scheme.
