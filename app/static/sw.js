@@ -43,6 +43,7 @@ const SHELL_ASSETS = [
   '/css/pwa.css?v=' + CACHE_VERSION,
   '/css/tokens.css?v=' + CACHE_VERSION,
   '/css/styles.css?v=' + CACHE_VERSION,
+  '/css/pull-refresh.css?v=' + CACHE_VERSION,
   '/js/main.js?v=' + CACHE_VERSION,
   // Vendored pwa-infra modules imported by /js/main.js. They are part of the
   // boot graph, so a cold offline start needs them in the shell cache.

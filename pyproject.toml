@@ -7,11 +7,14 @@ name = "pwa-pantry-recipes"
 version = "0.1.0"
 description = "Local PWA for recipe browsing, pantry matching, and daily-note cooking logs"
 requires-python = ">=3.12"
-dependencies = ["fastapi>=0.115,<1", "PyYAML>=6,<7", "uvicorn>=0.30,<1", "python-multipart>=0.0.9,<1"]
+dependencies = ["fastapi>=0.115,<1", "PyYAML>=6,<7", "uvicorn>=0.30,<1", "python-multipart>=0.0.9,<1", "aiosqlite>=0.20"]
 
 [project.optional-dependencies]
 test = ["httpx>=0.27,<1", "pytest>=8,<9", "pytest-timeout>=2.3,<3"]
 dev = ["mypy>=1.13,<2", "ruff>=0.8,<1", "types-PyYAML>=6,<7"]
+# The two browser flows need a browser binary on the runner, so they stay
+# opt-in: CI installs ".[test,dev]" and never pays for them.
+browser = ["playwright>=1.44"]
 
 [tool.setuptools]
 # Scaffold modules only. `app.vault` / `app.pantry` / `app.recipes` are created

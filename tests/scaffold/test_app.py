@@ -17,11 +17,17 @@ later, and that a later feature PR could silently undo:
   3. Fail-closed configuration — a missing vault, a missing pantry catalog, a
      non-loopback bind, or a relative/injected server-owned root must refuse to
      start rather than degrade to a silently empty surface.
+  4. The exact `Settings` surface and the placement of the two dependencies
+     the spec added. Both are decisions about what is NOT there as much as
+     about what is: a reintroduced CLI field, or `playwright` in `[test]`,
+     silently undoes a locked decision.
 """
 
 from __future__ import annotations
 
 import re
+import tomllib
+from dataclasses import fields
 from pathlib import Path
 
 import pytest
@@ -30,6 +36,8 @@ from fastapi.testclient import TestClient
 from app.config import ConfigurationError, Settings
 from app.main import APP_VERSION, STATIC_ROOT, create_app
 
+REPO_ROOT = Path(__file__).resolve().parents[2]
+PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
 SW_PATH = STATIC_ROOT / "sw.js"
 TEST_ORIGIN = "https://recipes.test.invalid"
 _CACH_VERSION_RE = re.compile(r"CACHE_VERSION\s*=\s*'([^']+)'")
@@ -222,3 +230,113 @@ def test_create_app_does_not_read_the_environment_when_settings_are_injected(
     monkeypatch.delenv("OBSIDIAN_VAULT_PATH", raising=False)
     monkeypatch.setenv("PANTRY_ITEMS_DB", "/nonexistent/should-not-be-read.db")
     assert create_app(settings).state.settings is settings
+
+
+# --- 4. Configuration surface + dependency placement ---------------------
+
+
+def test_settings_exposes_exactly_the_locked_field_set() -> None:
+    # The set is the contract. A field a locked decision removed, and a field
+    # nobody asked for, are both failures here rather than a silent drift.
+    assert {field.name for field in fields(Settings)} == {
+        "vault_path",
+        "app_data_dir",
+        "public_origin",
+        "tailscale_owner_login",
+        "dev_identity",
+        "bind_host",
+        "app_timezone",
+        "trust_tailscale_headers",
+        "pantry_items_db",
+        "pantry_note_relative",
+        "recipes_root",
+        "daily_notes_root",
+        "daily_notes_year_policy",
+        "read_only",
+        "catalog_cache_seconds",
+        "stock_cache_seconds",
+        "recipe_cache_seconds",
+        "max_recipe_bytes",
+    }
+
+
+def test_new_settings_capture_their_documented_defaults(settings: Settings) -> None:
+    assert settings.pantry_note_relative == "Logistics/库存/Pantry.md"
+    assert settings.daily_notes_year_policy is None
+    assert settings.read_only is False
+    assert settings.catalog_cache_seconds == 300.0
+    assert settings.stock_cache_seconds == 30.0
+    assert settings.recipe_cache_seconds == 60.0
+    assert settings.max_recipe_bytes == 2_000_000
+
+
+def test_overridden_settings_capture_the_operator_values(runtime_root: Path) -> None:
+    values = {
+        **_base(runtime_root),
+        "PANTRY_NOTE_RELATIVE": "库存/Kitchen/Pantry note.md",
+        "DAILY_NOTES_YEAR_POLICY": "2024-2027",
+        "OBSIDIAN_READ_ONLY": "true",
+        "CATALOG_CACHE_SECONDS": "120.5",
+        "STOCK_CACHE_SECONDS": "5",
+        "RECIPE_CACHE_SECONDS": "3600",
+        "MAX_RECIPE_BYTES": "4096",
+    }
+    settings = Settings.from_mapping(values)
+    assert settings.pantry_note_relative == "库存/Kitchen/Pantry note.md"
+    assert settings.daily_notes_year_policy == "2024-2027"
+    assert settings.read_only is True
+    assert settings.catalog_cache_seconds == 120.5
+    assert settings.stock_cache_seconds == 5.0
+    assert settings.recipe_cache_seconds == 3600.0
+    assert settings.max_recipe_bytes == 4096
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "error"),
+    [
+        ("PANTRY_NOTE_RELATIVE", "../escape/Pantry.md", "invalid_pantry_note_relative"),
+        ("PANTRY_NOTE_RELATIVE", "/absolute/Pantry.md", "invalid_pantry_note_relative"),
+        ("PANTRY_NOTE_RELATIVE", "库存/Pantry", "invalid_pantry_note_relative"),
+        ("PANTRY_NOTE_RELATIVE", "库存/Pantry.md/", "invalid_pantry_note_relative"),
+        ("PANTRY_NOTE_RELATIVE", "  ", "invalid_pantry_note_relative"),
+        ("OBSIDIAN_READ_ONLY", "yes", "invalid_read_only"),
+        ("OBSIDIAN_READ_ONLY", "1", "invalid_read_only"),
+        ("OBSIDIAN_READ_ONLY", "", "invalid_read_only"),
+        ("CATALOG_CACHE_SECONDS", "0", "invalid_catalog_cache_seconds"),
+        ("CATALOG_CACHE_SECONDS", "3600.1", "invalid_catalog_cache_seconds"),
+        ("CATALOG_CACHE_SECONDS", "-1", "invalid_catalog_cache_seconds"),
+        ("CATALOG_CACHE_SECONDS", "nan", "invalid_catalog_cache_seconds"),
+        ("CATALOG_CACHE_SECONDS", "inf", "invalid_catalog_cache_seconds"),
+        ("CATALOG_CACHE_SECONDS", "soon", "invalid_catalog_cache_seconds"),
+        ("CATALOG_CACHE_SECONDS", "", "invalid_catalog_cache_seconds"),
+        ("STOCK_CACHE_SECONDS", "0", "invalid_stock_cache_seconds"),
+        ("STOCK_CACHE_SECONDS", "600.5", "invalid_stock_cache_seconds"),
+        ("RECIPE_CACHE_SECONDS", "0", "invalid_recipe_cache_seconds"),
+        ("RECIPE_CACHE_SECONDS", "3601", "invalid_recipe_cache_seconds"),
+        ("MAX_RECIPE_BYTES", "1023", "invalid_max_recipe_bytes"),
+        ("MAX_RECIPE_BYTES", "20000001", "invalid_max_recipe_bytes"),
+        ("MAX_RECIPE_BYTES", "2.5", "invalid_max_recipe_bytes"),
+        ("DAILY_NOTES_YEAR_POLICY", "2027", "invalid_daily_notes_year_policy"),
+        ("DAILY_NOTES_YEAR_POLICY", "27-2027", "invalid_daily_notes_year_policy"),
+        ("DAILY_NOTES_YEAR_POLICY", "2027-27", "invalid_daily_notes_year_policy"),
+    ],
+)
+def test_new_settings_refuse_to_start(
+    runtime_root: Path, key: str, value: str, error: str
+) -> None:
+    values = {**_base(runtime_root), key: value}
+    with pytest.raises(ConfigurationError) as raised:
+        Settings.from_mapping(values)
+    assert raised.value.args[0] == error
+
+
+def test_aiosqlite_is_a_runtime_dependency_and_playwright_is_an_opt_in_extra() -> None:
+    text = PYPROJECT_PATH.read_text(encoding="utf-8")
+    project = tomllib.loads(text)["project"]
+    assert "aiosqlite>=0.20" in project["dependencies"]
+
+    extras = project["optional-dependencies"]
+    assert extras["browser"] == ["playwright>=1.44"]
+    # One occurrence in the whole file, and it is the `browser` extra: a second
+    # one in `[test]` would make the browser suite non-optional in CI.
+    assert text.count("playwright") == 1

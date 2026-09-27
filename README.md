@@ -132,12 +132,13 @@ Honest list of every gap, so nothing here reads as finished:
 - **No icons.** `app/static/icons/` is a placeholder README; all four PNGs the
   manifest and the `apple-touch-icon` link reference are missing. iOS falls back
   to a page screenshot for the Home Screen icon. See that README.
-- **No `sw.js` `SHELL_ASSETS` maintenance.** The precache list covers the
-  scaffold's files only. Every file added under `app/static/js` (beyond the two
-  vendored boot modules) and `app/static/css` must be added there or the
-  offline shell will be incomplete. `tests/js/scaffold.test.mjs` fails on a
-  `SHELL_ASSETS` entry with no file behind it, but it cannot detect a *missing*
-  entry.
+- **`sw.js` `SHELL_ASSETS` must be extended for every new static file.** The
+  precache list covers every file currently in the tree, and
+  `tests/js/shell_assets.test.mjs` fails a commit that adds a module or
+  stylesheet under `app/static/js` (beyond the vendored `js/pwa/` boot modules)
+  or `app/static/css` without a matching precache entry, in either direction. An
+  omission is a silent offline-shell hole: the file works online and is simply
+  absent from the installed app.
 - **No `.env` loading library.** The app reads `os.environ`; use `env`, a
   launchd `EnvironmentVariables` dict, or a `direnv`/shell export. Copying
   `.env.example` to `.env` documents intent but nothing parses it yet.

@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 _DNS_LABEL = re.compile(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?")
+_YEAR_RANGE = re.compile(r"\d{4}-\d{4}")
 
 
 class ConfigurationError(ValueError):
@@ -42,8 +43,17 @@ class Settings:
 
     # --- Server-owned domain roots (requests cannot select these) -------
     pantry_items_db: Path
+    pantry_note_relative: str
     recipes_root: str
     daily_notes_root: str
+    daily_notes_year_policy: str | None
+
+    # --- Server-owned policy and bounds ---------------------------------
+    read_only: bool
+    catalog_cache_seconds: float
+    stock_cache_seconds: float
+    recipe_cache_seconds: float
+    max_recipe_bytes: int
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -92,6 +102,10 @@ class Settings:
         if _path_inside_vault(pantry_db, vault):
             raise ConfigurationError("pantry_items_db_must_be_outside_vault")
 
+        pantry_note = values.get("PANTRY_NOTE_RELATIVE", "Logistics/库存/Pantry.md")
+        if not _safe_relative_file(pantry_note):
+            raise ConfigurationError("invalid_pantry_note_relative")
+
         recipes_root = values.get("RECIPES_ROOT", "Hobbies/做饭/Recipes")
         if not _safe_relative_root(recipes_root):
             raise ConfigurationError("invalid_recipes_root")
@@ -99,6 +113,31 @@ class Settings:
         daily_notes_root = values.get("DAILY_NOTES_ROOT", "日记")
         if not _safe_relative_root(daily_notes_root):
             raise ConfigurationError("invalid_daily_notes_root")
+
+        # An absent or blank policy means the daily-notes layout is the only
+        # bound on the year, so `None` is a real configured value rather than
+        # "unvalidated".
+        year_policy = values.get("DAILY_NOTES_YEAR_POLICY", "").strip()
+        if year_policy and not _YEAR_RANGE.fullmatch(year_policy):
+            raise ConfigurationError("invalid_daily_notes_year_policy")
+
+        # --- Server-owned policy and bounds -----------------------------
+        # Stock's TTL is the maximum staleness a chip colour can have, because
+        # the user toggles Pantry.md lines from Obsidian while the PWA is
+        # open; the other two projections are immutable for a session.
+        read_only = _boolean(values.get("OBSIDIAN_READ_ONLY", "false"), "read_only")
+        catalog_cache_seconds = _ttl_seconds(
+            values, "CATALOG_CACHE_SECONDS", "catalog_cache_seconds", 300.0, 3600.0
+        )
+        stock_cache_seconds = _ttl_seconds(
+            values, "STOCK_CACHE_SECONDS", "stock_cache_seconds", 30.0, 600.0
+        )
+        recipe_cache_seconds = _ttl_seconds(
+            values, "RECIPE_CACHE_SECONDS", "recipe_cache_seconds", 60.0, 3600.0
+        )
+        max_recipe_bytes = _byte_budget(
+            values, "MAX_RECIPE_BYTES", "max_recipe_bytes", 2_000_000
+        )
 
         return cls(
             vault_path=vault,
@@ -110,8 +149,15 @@ class Settings:
             app_timezone=timezone,
             trust_tailscale_headers=trust_headers,
             pantry_items_db=pantry_db,
+            pantry_note_relative=pantry_note,
             recipes_root=recipes_root,
             daily_notes_root=daily_notes_root,
+            daily_notes_year_policy=year_policy or None,
+            read_only=read_only,
+            catalog_cache_seconds=catalog_cache_seconds,
+            stock_cache_seconds=stock_cache_seconds,
+            recipe_cache_seconds=recipe_cache_seconds,
+            max_recipe_bytes=max_recipe_bytes,
         )
 
 
@@ -214,6 +260,15 @@ def _safe_relative_root(value: str) -> bool:
     )
 
 
+def _safe_relative_file(value: str) -> bool:
+    """The same shape, naming a file: the last part must carry a suffix.
+
+    Without it a folder-shaped value survives startup and turns every read into
+    a directory error at request time.
+    """
+    return _safe_relative_root(value) and bool(PurePosixPath(value).suffix)
+
+
 def _path_inside_vault(path: Path, vault: Path) -> bool:
     """True when `path` is the vault itself or nested inside it.
 
@@ -230,6 +285,39 @@ def _boolean(raw: str, label: str) -> bool:
     if normalized not in {"true", "false"}:
         raise ConfigurationError(f"invalid_{label}")
     return normalized == "true"
+
+
+def _ttl_seconds(
+    values: Mapping[str, str], key: str, label: str, default: float, ceiling: float
+) -> float:
+    """A TTL: strictly positive, at most `ceiling` seconds. Zero would mean
+    "re-read on every request", which is a misconfiguration, not a preference."""
+    raw = values.get(key)
+    if raw is None:
+        return default
+    try:
+        seconds = float(raw.strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"invalid_{label}") from exc
+    if not 0.0 < seconds <= ceiling:
+        raise ConfigurationError(f"invalid_{label}")
+    return seconds
+
+
+def _byte_budget(values: Mapping[str, str], key: str, label: str, default: int) -> int:
+    """A read ceiling for one note. The floor keeps a note from being truncated
+    into a plausible-looking empty result; the ceiling bounds a runaway file
+    before it is parsed."""
+    raw = values.get(key)
+    if raw is None:
+        return default
+    try:
+        budget = int(raw.strip())
+    except ValueError as exc:
+        raise ConfigurationError(f"invalid_{label}") from exc
+    if not 1_024 <= budget <= 20_000_000:
+        raise ConfigurationError(f"invalid_{label}")
+    return budget
 
 
 def is_loopback_bind_host(bind_host: str) -> bool:
