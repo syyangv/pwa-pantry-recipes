@@ -1,0 +1,15 @@
+/* Optional Pattern M — wardrobe-proven pull-to-refresh.
+ * Inline height reveal avoids fixed-position collisions with iOS elastic
+ * scrolling. This file is inert unless the app adds the documented markup. */
+.ptr-indicator {
+  height: 0;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--fg-muted, #5a5a60);
+  opacity: 0;
+  pointer-events: none;
+}
+.ptr-indicator[data-ready="true"] { color: var(--accent, #1d6fe0); }
+.ptr-spinner { width: 22px; height: 22px; flex-shrink: 0; }

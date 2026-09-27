@@ -41,10 +41,11 @@ FastAPI (loopback only)  ──  vanilla ES modules  ──  no build step
 ```bash
 cd ~/projects/pwa-pantry-recipes
 
-# 1. venv + dependencies
+# 1. venv + dependencies (setuptools is explicit so the local venv matches CI,
+#    which needs it for the `pip wheel --no-build-isolation` package check)
 python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
-.venv/bin/python -m pip install -e '.[test,dev]'
+.venv/bin/python -m pip install "setuptools>=69" -e '.[test,dev]'
 
 # 2. configure (SERVER-OWNED values; see .env.example for the full contract)
 cp .env.example .env
@@ -85,6 +86,10 @@ npm run check     # node --check on the module graph entry + the worker
 
 # Vendored-infra drift gate (what the pre-commit hook runs)
 python3 ~/projects/pwa-template/scripts/vendor.py --check .
+
+# The package check CI runs: the built wheel must carry the static shell
+rm -rf /tmp/wheel && .venv/bin/python -m pip wheel . --no-deps \
+  --no-build-isolation --wheel-dir /tmp/wheel
 ```
 
 ## Configuration

@@ -1,0 +1,44 @@
+/* Design tokens for the Pantry Recipes PWA.
+ *
+ * Only the tokens the scaffold's placeholder stylesheet consumes. The pwa-infra
+ * baseline (overflow, safe areas, 44px targets, 16px inputs, sheet/toast) lives
+ * in the vendored /css/pwa.css and must not be forked here.
+ *
+ * TODO(implementation): extend with domain tokens (pantry state colors:
+ * in-stock / running-low / out; recipe difficulty; cooking-log status) once the
+ * feature surfaces exist.
+ */
+:root {
+  /* Light theme tokens (default; system light) */
+  --bg: #f4f4f6;
+  --bg-elev: #ffffff;
+  --fg: #131318;
+  --fg-muted: #5a5a60;
+  --border: #e3e3e6;
+  --accent: #b8541f;
+  --accent-fg: #ffffff;
+  --danger: #c92a2a;
+  --danger-fg: #ffffff;
+  --skeleton: #ececef;
+  --radius: 12px;
+  --radius-sm: 8px;
+  --gap: 12px;
+  --tap-min: 44px;
+  --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.04);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --bg: #131318;
+    --bg-elev: #1c1c21;
+    --fg: #f5f5f7;
+    --fg-muted: #a0a0a8;
+    --border: #2a2a2e;
+    --accent: #e8613c;
+    --accent-fg: #131318;
+    --danger: #ff6b6b;
+    --danger-fg: #131318;
+    --skeleton: #1f1f23;
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3);
+  }
+}
