@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Pre-commit gate for pwa-pantry-recipes. Installed via
+#   git config core.hooksPath git-hooks
+#
+# 1. pwa-infra drift gate — the vendored files (app/static/js/pwa/*,
+#    app/static/css/pwa.css, app/static/css/pull-refresh.css,
+#    app/pwa_version.py) must stay byte-identical to the package source of
+#    truth (https://github.com/syyangv/pwa-template), and app/static/sw.js must
+#    still carry the pwa-infra marker. .gitignore cannot protect these: they
+#    ARE tracked, and a hand-edit would silently fork the shared infra.
+#    Re-vendor with:  python3 ~/projects/pwa-template/scripts/vendor.py .
+#    Override the package location with PWA_INFRA_DIR.
+#
+# 2. gitleaks — blocks secret VALUES in tracked source. .gitignore only keeps
+#    secret *files* out of git; a hardcoded token in a script is the failure
+#    mode gitleaks catches. Skipped with a notice when the binary is absent, so
+#    a fresh clone without gitleaks is not blocked (install: brew install
+#    gitleaks).
+set -euo pipefail
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+PKG_DIR="${PWA_INFRA_DIR:-$HOME/projects/pwa-template}"
+if [ ! -f "$PKG_DIR/scripts/vendor.py" ]; then
+    echo "check-pwa-infra: package not found at $PKG_DIR (set PWA_INFRA_DIR or clone pwa-template)" >&2
+    exit 1
+fi
+python3 "$PKG_DIR/scripts/vendor.py" --check "$REPO_ROOT"
+
+if command -v gitleaks >/dev/null 2>&1; then
+    gitleaks protect \
+        --no-banner \
+        --redact \
+        --source "$REPO_ROOT" \
+        --staged \
+        --exit-code 1
+else
+    echo "check-gitleaks: gitleaks not installed — skipping (brew install gitleaks)" >&2
+fi

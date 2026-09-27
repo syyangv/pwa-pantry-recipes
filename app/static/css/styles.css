@@ -1,0 +1,59 @@
+/* App styles for the Pantry Recipes PWA — placeholder layer only.
+ *
+ * The screen-fixed baseline (overflow containment, safe-area insets, 44px
+ * touch targets, 16px inputs, sheet/toast/overlay) comes from the vendored
+ * /css/pwa.css. Do not re-declare those rules here; extend /css/tokens.css for
+ * new values instead.
+ *
+ * TODO(implementation): replace the scaffold panel below with the real
+ * pantry / recipe / cooking-log surfaces.
+ */
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+.content {
+  padding: 16px;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+}
+
+.panel {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px;
+  box-shadow: var(--shadow);
+}
+
+.panel h2 {
+  margin-top: 0;
+  font-size: 1.05rem;
+}
+
+.muted {
+  color: var(--fg-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+code {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+}
+
+.banners {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  padding: 0 16px;
+}
+
+.banners:empty {
+  display: none;
+}
+
+#app-error:empty {
+  display: none;
+}

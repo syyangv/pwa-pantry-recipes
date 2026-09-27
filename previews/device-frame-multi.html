@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en" data-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>PWA Multi-Device Preview — [component]</title>
+  <style>
+    :root { --bg:#fff;--bg-elev:#f6f6f7;--fg:#0a0a0a;--fg-muted:#5a5a60;--border:#e3e3e6;--accent:#1d6fe0;--accent-fg:#fff;--radius:12px;--tap-min:44px; }
+    [data-theme="dark"] { --bg:#0a0a0a;--bg-elev:#161618;--fg:#f5f5f7;--fg-muted:#a0a0a8;--border:#2a2a2e;--accent:#5aa6ff; }
+    *,*::before,*::after { box-sizing:border-box; }
+    body { margin:0;background:#888;font-family:-apple-system,BlinkMacSystemFont,system-ui,sans-serif;padding:24px 16px 40px; }
+    .controls { display:flex;gap:8px;margin-bottom:20px; }
+    .controls button { padding:8px 16px;border-radius:8px;border:none;background:white;cursor:pointer;font-size:14px;font-weight:600; }
+    .stage { display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start; }
+    .col { display:flex;flex-direction:column;align-items:center;gap:8px; }
+    .col-label { font-size:11px;color:white;font-weight:700;text-transform:uppercase;letter-spacing:.06em; }
+    .device { background:var(--bg);display:flex;flex-direction:column;overflow:hidden;
+              box-shadow:0 0 0 10px #1a1a1a,0 20px 60px rgba(0,0,0,.5); }
+    .device__status { background:var(--bg-elev);display:flex;align-items:flex-end;padding:4px 20px;
+                      font-size:11px;font-weight:600;color:var(--fg);flex-shrink:0; }
+    .device__content { flex:1;overflow-y:auto;overflow-x:clip;background:var(--bg);color:var(--fg); }
+    .device__home { background:var(--bg);display:flex;align-items:center;justify-content:center;flex-shrink:0; }
+    .device__home::after { content:'';width:100px;height:4px;background:var(--fg);opacity:.2;border-radius:99px; }
+    /* Per-device geometry */
+    .device--se   { width:375px;min-height:400px;border-radius:38px; }
+    .device--se   .device__status { height:20px; }
+    .device--se   .device__home   { height:0; }   /* home button device, no bar */
+    .device--14   { width:390px;min-height:480px;border-radius:47px; }
+    .device--14   .device__status { height:47px; }
+    .device--14   .device__home   { height:34px; }
+    .device--pro  { width:393px;min-height:480px;border-radius:47px; }
+    .device--pro  .device__status { height:59px; }
+    .device--pro  .device__home   { height:34px; }
+    .device--ipad { width:576px;min-height:600px;border-radius:18px; } /* scaled 768 → 576 for preview */
+    .device--ipad .device__status { height:24px; }
+    .device--ipad .device__home   { height:20px; }
+    .device--android { width:360px;min-height:440px;border-radius:0; }
+    .device--android .device__status { height:24px; }
+    .device--android .device__home  { height:0; }
+    .device--desktop { width:640px;min-height:360px;border-radius:4px; }
+    .device--desktop .device__status { display:none; }
+    .device--desktop .device__home  { display:none; }
+  </style>
+</head>
+<body>
+  <div class="controls">
+    <button onclick="var h=document.documentElement;h.dataset.theme=h.dataset.theme==='dark'?'light':'dark'">Toggle Dark Mode</button>
+  </div>
+  <div class="stage">
+    <div class="col">
+      <span class="col-label">iPhone SE · 375</span>
+      <div class="device device--se">
+        <div class="device__status">9:41</div>
+        <div class="device__content"><!-- COMPONENT --></div>
+        <div class="device__home"></div>
+      </div>
+    </div>
+    <div class="col">
+      <span class="col-label">iPhone 14 · 390</span>
+      <div class="device device--14">
+        <div class="device__status">9:41</div>
+        <div class="device__content"><!-- COMPONENT --></div>
+        <div class="device__home"></div>
+      </div>
+    </div>
+    <div class="col">
+      <span class="col-label">iPhone Pro · 393</span>
+      <div class="device device--pro">
+        <div class="device__status">9:41</div>
+        <div class="device__content"><!-- COMPONENT --></div>
+        <div class="device__home"></div>
+      </div>
+    </div>
+    <div class="col">
+      <span class="col-label">iPad · 768</span>
+      <div class="device device--ipad">
+        <div class="device__status">9:41</div>
+        <div class="device__content"><!-- COMPONENT --></div>
+        <div class="device__home"></div>
+      </div>
+    </div>
+  </div>
+  <script>
+    if (window.matchMedia('(prefers-color-scheme: dark)').matches)
+      document.documentElement.dataset.theme = 'dark';
+  </script>
+</body>
+</html>

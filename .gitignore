@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.venv/
+*.egg-info/
+
+# Local session / scratch artifacts
+.omx/
+.scratch/
+.agy-acp/
+
+# JavaScript
+node_modules/
+dist/
+coverage/
+
+# Runtime and deployment state
+data/
+logs/
+*.log
+*.sock
+
+# Credentials and local configuration
+.env
+.env.*
+!.env.example
+*credentials*
+*secrets*
+*token*
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/

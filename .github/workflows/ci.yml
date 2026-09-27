@@ -1,0 +1,78 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      PWA_TEMPLATE_TOKEN: ${{ secrets.PWA_TEMPLATE_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify vendored pwa-infra matches package
+        if: env.PWA_TEMPLATE_TOKEN != ''
+        env:
+          GH_TOKEN: ${{ env.PWA_TEMPLATE_TOKEN }}
+        run: |
+          gh repo clone syyangv/pwa-template /tmp/pwa-template -- --depth 1
+          python3 /tmp/pwa-template/scripts/vendor.py --check "$PWD"
+      - name: Verify vendored pwa-infra inventory without private template access
+        if: env.PWA_TEMPLATE_TOKEN == ''
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+
+          required = [
+              "app/static/js/pwa/update-manager.js",
+              "app/static/js/pwa/waking-banner.js",
+              "app/static/js/pwa/badge.js",
+              "app/static/js/pwa/pull-refresh.js",
+              "app/static/js/pwa/unstick-on-timeout.js",
+              "app/static/js/pwa/outbox.js",
+              "app/static/css/pull-refresh.css",
+              "app/static/css/pwa.css",
+              "app/pwa_version.py",
+          ]
+          missing = [path for path in required if not Path(path).is_file()]
+          assert not missing, f"missing vendored pwa-infra files: {missing}"
+          assert "pwa-infra service worker" in Path("app/static/sw.js").read_text()
+          PY
+      - run: python -m pip install --disable-pip-version-check "setuptools>=69" ".[test,dev]"
+      - run: python -m ruff check app tests
+      - run: python -m mypy app
+      - run: python -m pytest
+      - run: npm test
+      - run: npm run check
+      - run: python -m pip wheel . --no-deps --no-build-isolation --wheel-dir /tmp/wheel
+      - name: Verify the wheel carries the static shell and vendored infra
+        run: |
+          python -c
+          "import glob, zipfile;
+          wheel = glob.glob('/tmp/wheel/*.whl')[0];
+          names = zipfile.ZipFile(wheel).namelist();
+          required = ['app/__init__.py', 'app/config.py', 'app/main.py',
+          'app/pwa_version.py',
+          'app/static/index.html', 'app/static/sw.js',
+          'app/static/manifest.webmanifest',
+          'app/static/css/pwa.css', 'app/static/css/tokens.css',
+          'app/static/css/styles.css',
+          'app/static/js/main.js', 'app/static/js/pwa/update-manager.js',
+          'app/static/js/pwa/waking-banner.js'];
+          missing = [name for name in required if name not in names];
+          assert not missing, missing"

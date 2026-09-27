@@ -1,0 +1,143 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  pwa-pantry-recipes.example.plist — EXAMPLE LaunchAgent for the Pantry
+  Recipes PWA.
+
+  *** THIS FILE IS AN EXAMPLE ONLY. IT MUST NOT BE INSTALLED WITHOUT EXPLICIT
+      AUTHORIZATION. ***
+
+  The app writes cooking logs into the Obsidian vault, so installing this would
+  start a service that mutates real notes. Scaffold state: the domain routers do
+  not exist yet, so today the service only serves the shell, /health, and
+  /api/version. Authorize and complete the implementation before bootstrapping.
+
+  Invariants:
+  * BIND_HOST MUST be loopback (127.0.0.1). With TRUST_TAILSCALE_HEADERS=true
+    the app rejects a non-loopback bind before serving. The Tailscale Serve
+    proxy (not the app) is the only network-facing surface.
+  * TRUST_TAILSCALE_HEADERS=true means the app trusts the Tailscale-User-Login
+    header ONLY when the connection arrived from the proxy via loopback. If you
+    ever change the bind host, flip this back to false and re-run the smoke
+    suite before considering any external exposure.
+  * The three server-owned roots (PANTRY_ITEMS_DB, RECIPES_ROOT,
+    DAILY_NOTES_ROOT) are set here and are NOT overridable by any request.
+
+  Replace every __UPPER_CASE__ placeholder below. Then, ONLY with explicit
+  authorization:
+      plutil -lint <file>                                  # syntax check
+      cp <file> ~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist
+      launchctl bootstrap gui/$(id -u) \
+        ~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist
+      # or legacy: launchctl load -w ~/Library/LaunchAgents/<label>.plist
+  Restart after a code change (kickstart alone picks up code, not plist edits):
+      launchctl kickstart -k gui/$(id -u)/com.syang.pwa-pantry-recipes
+  Unload / rollback:
+      launchctl bootout gui/$(id -u)/com.syang.pwa-pantry-recipes
+      rm ~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist
+-->
+<plist version="1.0">
+<dict>
+    <!-- Must match the filename in ~/Library/LaunchAgents. -->
+    <key>Label</key>
+    <string>com.syang.pwa-pantry-recipes</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <!-- Absolute python from the project venv. -->
+        <string>__VENV_PYTHON__/bin/python</string>
+        <string>-m</string>
+        <string>uvicorn</string>
+        <!-- The factory reads the environment at boot, not at import. -->
+        <string>app.main:create_app</string>
+        <string>--factory</string>
+        <!-- Loopback only. Never 0.0.0.0. -->
+        <string>--host</string>
+        <string>127.0.0.1</string>
+        <!-- Dedicated app port 8007 (8000/8002-8006 allocated to sibling
+             PWAs). Not 443. -->
+        <string>--port</string>
+        <string>8007</string>
+        <string>--log-level</string>
+        <string>info</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>__REPO_ROOT__</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <!-- Exact PATH the daemon needs: system dirs plus the venv bin, so
+             python/uvicorn resolve without a login shell. -->
+        <key>PATH</key>
+        <string>__VENV_PYTHON__/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>__USER_HOME__</string>
+
+        <!-- === Core (required) === -->
+        <key>OBSIDIAN_VAULT_PATH</key>
+        <string>__OBSIDIAN_VAULT_PATH__</string>
+        <!-- Must be OUTSIDE the vault. -->
+        <key>APP_DATA_DIR</key>
+        <string>__APP_DATA_DIR__</string>
+        <!-- Must equal the exact origin Tailscale Serve serves. -->
+        <key>PUBLIC_ORIGIN</key>
+        <string>__PUBLIC_ORIGIN__</string>
+        <!-- Must equal the normalized login the proxy injects. -->
+        <key>TAILSCALE_OWNER_LOGIN</key>
+        <string>__TAILSCALE_OWNER_LOGIN__</string>
+        <key>DEV_IDENTITY</key>
+        <string>__DEV_IDENTITY__</string>
+        <key>BIND_HOST</key>
+        <string>127.0.0.1</string>
+        <!-- true only behind the loopback Tailscale Serve proxy. -->
+        <key>TRUST_TAILSCALE_HEADERS</key>
+        <string>true</string>
+        <key>APP_TIMEZONE</key>
+        <string>America/New_York</string>
+
+        <!-- === Server-owned domain roots === -->
+        <!-- wholefoods-to-pantry's SQLite catalog. Opened READ-ONLY by this
+             app; that project remains the sole writer. Must be OUTSIDE the
+             vault. A missing file refuses startup. -->
+        <key>PANTRY_ITEMS_DB</key>
+        <string>__PANTRY_ITEMS_DB__</string>
+        <!-- Vault-relative folder of recipe notes. -->
+        <key>RECIPES_ROOT</key>
+        <string>Hobbies/做饭/Recipes</string>
+        <!-- Vault-relative root of year-subfoldered daily notes; cooking logs
+             are appended to the dated note inside it. -->
+        <key>DAILY_NOTES_ROOT</key>
+        <string>日记</string>
+    </dict>
+
+    <!-- Keep the loopback server alive; restart on crash. -->
+    <key>KeepAlive</key>
+    <true/>
+    <!-- Space out respawns so a crash loop cannot spin the CPU. -->
+    <key>ThrottleInterval</key>
+    <integer>2</integer>
+    <!-- RunAtLoad starts it at login; set deliberately. Operators may prefer a
+         manual `launchctl kickstart` during rollout. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- launchd gives a LaunchAgent a 256 maxfiles soft limit, NOT the
+         shell's (ulimit -n). Without this, a descriptor leak is invisible in
+         manual testing and shows up in production as intermittent 500s with
+         "OSError: [Errno 24] Too many open files". Raise the ceiling AND fix
+         leaks; this key alone only delays the failure. -->
+    <key>SoftResourceLimits</key>
+    <dict>
+        <key>NumberOfFiles</key>
+        <integer>8192</integer>
+    </dict>
+
+    <!-- Logs under a git-ignored logs/ dir in the repo. -->
+    <key>StandardOutPath</key>
+    <string>__REPO_ROOT__/logs/pantry-recipes.stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>__REPO_ROOT__/logs/pantry-recipes.stderr.log</string>
+</dict>
+</plist>
