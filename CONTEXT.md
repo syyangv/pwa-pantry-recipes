@@ -34,8 +34,29 @@ be treated as one.
 ## Pantry Stock
 What the household currently holds, as opposed to what has ever been bought.
 Deliberately **not** a Pantry Item: stock is per-household, mutable, and has no
-catalog identity. See the existing `Logistics/库存/Pantry.md` note, which is the
-current home of stock state.
+catalog identity.
+
+State comes from **`Logistics/库存/Pantry.md`** — *in addition to* the catalog,
+not instead of it, and the two are not interchangeable:
+
+- `pantry_items.db` (the catalog) supplies **identity, brand and price**: the
+  rename-stable `pantry_item_id`, the brand, and the `💵` amount.
+- `Logistics/库存/Pantry.md` supplies **state**: `open` / `in_progress` / `done` /
+  `cancelled`, per [Pantry Unit](#pantry-unit).
+
+The engine never infers "I have it" from "I have bought it". A [Pantry
+Item](#pantry-item) that is in the catalog but has no open line in the pantry note
+is **bought before, not held now**, and the two must never be rendered as the
+same thing — conflating them makes a re-buy look like a duplicate and makes a
+finished bag look like a full one.
+
+The `💵` amount on a **parent** line is the **effective per-unit price**, and the
+**unit parent is excluded from every count and every money total**; the per-unit
+Pantry Units are counted at that price. Counting the parent *and* its units
+double-counts; counting the parent *instead of* its units halves a half-used
+item's value. Three implementations of this math must stay in parity: the
+`existingPantryValue` DataviewJS in `Pantry.md`, `Helper/scripts/pantry_snapshot.py`,
+and the PWA's own logic.
 
 ## Recipe
 One Markdown note under `RECIPES_ROOT` (`Hobbies/做饭/Recipes`) describing a
@@ -46,8 +67,10 @@ its steps, and its cooking-history frontmatter is advanced only by the
 ## Ingredient
 A single required input of a Recipe, listed in the recipe note's `材料`
 frontmatter. An Ingredient names a [Pantry Item Alias](#pantry-item-alias);
-it carries no quantity — a Recipe says *what*, a [Cooking Log](#cooking-log)
-says *how much*.
+it carries no quantity — a Recipe says *what*. A [Cooking
+Log](#cooking-log) says *which* Recipe was made on *which* date; it does **not**
+say *how much* was used, and must not be described as if it did (see
+[Cooking Record](#cooking-record)).
 
 ## Seasoning (调料)
 A non-primary input of a Recipe, listed in the recipe note's `调料` frontmatter.
@@ -69,6 +92,15 @@ every [Ingredient](#ingredient) of a Recipe against available
 **derived, read-only** property: it is recomputed from stock and never stored on
 the Recipe.
 
+**Defined but not rendered, and deliberately so.** The PWA publishes **no**
+`cookable: true|false` field in any response. It renders the *evidence* the
+boolean would have been computed from — a `found/total` headline counted from
+`材料` (Ingredients) only, plus a per-Ingredient chip row whose classes say
+*why* — because a single green tick cannot be audited and a user cannot tell which
+jar the app thinks is missing. The term is kept because the concept is real and
+useful; the boolean is not emitted because reducing it to a bit would hide the
+evidence. Consumers must read the score and the chips, never a boolean.
+
 ## Pantry Unit
 The smallest separately-countable unit of a Pantry Item — a can, a bottle, a
 bag, a single piece. A multi-package purchase splits into N Pantry Units, and
@@ -78,6 +110,33 @@ parent, or a half-used item is counted at twice its value. (This is the same
 rule the existing `Logistics/库存/Pantry.md` DataviewJS and the Obsidian Daily
 PWA follow; see `wholefoods-to-pantry/references/pantry-write.md`.)
 
+## Stock Join
+The act of relating a `pantry_item_id` from `pantry_items.db` to a **live line in
+`Logistics/库存/Pantry.md`**, so that a [Pantry Item](#pantry-item) can be shown
+as [Pantry Stock](#pantry-stock) rather than as merely bought-before. It is a
+read-time operation: the result is **not** stored, and no `pantry_item_id` is
+persisted for a pantry line.
+
+- **`pantry_item_id` is NOT unique, and the mapping is NOT one-to-one.** One SKU
+  can satisfy several recipe Ingredients and several pantry lines; a pantry line
+  can also match no row at all. "One item, many uses" is the normal case, so the
+  join must be many-to-few and must tolerate a miss without guessing.
+- **It is a weaker link than the Recipe→Ingredient mapping, and the reason is
+  structural.** A `Pantry.md` line is free text; a catalog row is a normalized
+  name. The join is therefore exact normalized-name, then a product-basename
+  match, then a committed manual override — and there is **no tier ladder, no
+  fuzzy tier, and no re-resolution pass**, because there is **no materialized
+  table to re-resolve against**. That is precisely why
+  `app/pantry/line_overrides.yaml` is **load-bearing rather than a nicety**:
+  without it, a line no tier explains is unexplainable forever, and the only
+  remaining remedy would be editing the user's vault.
+- **A line all tiers miss is simply absent from the in-stock set.** It is not
+  silently treated as in stock and not silently treated as out of stock; it is
+  *unjoined*, counted, and surfaced in the debug provenance view. Absence from
+  the in-stock set is not evidence the household does not have the item.
+- **A successful join can still land on either of two ids**, because the catalog
+  contains duplicate product names under two rows.
+
 ## Cooking Log
 The record that a Recipe was actually made on a specific local date. It is
 written **into the daily note** for that date under `DAILY_NOTES_ROOT`
@@ -86,16 +145,38 @@ write this app performs. See [Cooking Record](#cooking-record).
 
 ## Cooking Record
 The row a [Cooking Log](#cooking-log) appends to a daily note: which Recipe, on
-which date, at what [Pantry Unit](#pantry-unit) quantities, with the resulting
-[Stock Movement](#stock-movement). It is the audit trail a
-[Stock Movement](#stock-movement) must be reconcilable against — a stock change
-with no Cooking Record is a mystery the app must be able to show.
+which date. **This app does not record quantities and does not produce a
+[Stock Movement](#stock-movement)** — it records the cook and does not move
+stock. Quantities and consumption accounting are out of scope: the PWA never
+decrements a [Pantry Unit](#pantry-unit) and never records a consumed amount. A
+stock change in this household is attributable to a purchase restock through the
+[Pantry-Write Contract](#pantry-write-contract) — **not** to a Cooking Record.
+
+The app keeps a **PWA-owned mirror** of each row in `cook_log_receipts`
+(`APP_DATA_DIR`, not the vault). That table is the **audit trail** — it is what
+makes "did the app write this?" answerable — and it is the **double-submit
+dedupe ledger**: a second log of the same Recipe on the same date is a no-op.
+
+**The daily-note wikilink, not the receipts table, is what keeps `cooking_count`
+correct.** `Helper/utils/recipeTracker.md` computes
+`cooking.length = dv.pages('"日记"').where(...)`, which counts **pages, not
+links** — two `[[盐焗鸡]]` lines in one daily note still count as one cook. The
+receipts table therefore guards readability and auditability, not the counter, and
+neither it nor the dedupe may be removed on the theory that the counter needs
+protecting. It does not.
 
 ## Stock Movement
 A change to [Pantry Stock](#pantry-stock) with a stated cause: a
 [Cooking Record](#cooking-record) (consumption) or a purchase restock. A stock
 projection that cannot attribute every movement to one of these two causes is
 incomplete and must fail closed rather than show a plausible total.
+
+**Only the restock cause occurs in this app.** A [Cooking
+Record](#cooking-record) records that a meal was made; it is not a consumption
+measurement and must not be presented as one. So any Stock Movement a reader sees
+in the vault originated from a purchase through the
+[Pantry-Write Contract](#pantry-write-contract), and the PWA is a consumer of that
+stock, never an author of a movement.
 
 ## Recipe Cooking History
 The aggregate frontmatter a Recipe note carries about past cooks:
@@ -108,8 +189,11 @@ daily notes it summarizes.
 ## Server-Owned Root
 A path or folder that comes from the process environment only
 (`PANTRY_ITEMS_DB`, `RECIPES_ROOT`, `DAILY_NOTES_ROOT`, `OBSIDIAN_VAULT_PATH`,
-`APP_DATA_DIR`). A request may contribute *which recipe*, *which date*, and
-*which quantities* — never *which paths*. See the terminology note below.
+`APP_DATA_DIR`). A request may contribute *which recipe* and *which date* — never
+*which paths*. (*Which quantities* is reserved and **not implemented**; no
+request field carries one today, and none may until
+[Cooking Record](#cooking-record) records quantities.) See the terminology note
+below.
 
 ## Pantry-Write Contract
 The `wholefoods-to-pantry` project's documented rule set for how a grocery order
@@ -134,10 +218,11 @@ overwritten cooking log loses a real meal.
 | Pantry Stock | inventory, pantry items, supplies, on-hand items | "Pantry Item" is the immutable catalog record; stock is what the household has. Conflating them makes a re-buy look like a duplicate. |
 | Pantry Category | aisle, section, department, type | The catalog column is a numeric code, not a human grouping; "section" is already taken by the `Pantry.md` note's `##` headings. |
 | Pantry Unit | serving, portion, pack, piece, count | "Portion"/"serving" are consumption amounts, not the physical countable unit; "pack" hides the N-units case that causes double counting. |
+| Stock Join | stock match, pantry join, line match, availability join, restock key, join key | "Stock match" reads as the Recipe→Ingredient resolution, which is a different and stronger link. "Availability join" implies availability comes from the join; it comes from the pantry note's status. "Restock key" implies it keys a restock write, which it never does. |
 | Ingredient | 材料 item, ingredient line, shopping item | "Shopping item" implies the app builds a shopping list, which it does not. |
 | Seasoning (调料) | ingredient, spice, condiment, flavoring | 调料 is a *separate* frontmatter list from 材料. Calling them ingredients collapses two lists into one and breaks Cookable. |
 | Cooking Tool | equipment, utensil, appliance, pan | "Appliance"/"equipment" imply shoppable, inventory-tracked things; tools are requirements, not stock. |
-| Cookable | available, can-make, makeable, ready, possible | "Available" collides with [Pantry Stock](#pantry-stock) availability and with API availability. "Makeable" is not a word. |
+| Cookable | available, can-make, makeable, ready, possible | "Available" collides with [Pantry Stock](#pantry-stock) availability and with API availability. "Makeable" is not a word. Use the `n/total` score and the chip row, not a bare boolean — the boolean is never published. |
 | Cooking Log | log, entry, record, activity, meal log | "Entry"/"record" are used by other surfaces; the log is specifically the daily-note write. |
 | Cooking Record | log entry, row, meal | A row inside a daily note, not the write operation. |
 | Stock Movement | delta, change, diff, transaction | "Transaction"/"delta" imply accounting; a movement is attributed to a cause and is not a ledger entry. |
