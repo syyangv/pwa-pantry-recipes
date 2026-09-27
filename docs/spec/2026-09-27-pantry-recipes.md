@@ -69,10 +69,11 @@ back into the vault.
 - **Inspect** one Recipe: its Ingredients, Seasonings, Cooking Tools, steps, and
   Recipe Cooking History, with a per-Ingredient breakdown of *why* each match
   resolved the way it did.
-- **Log a cook**: pick a date (defaulting to today) and the app appends a
-  `[[RecipeName]]` wikilink under the daily note's `笔记` heading — the exact
-  input `recipeTracker.md` consumes, which then advances the recipe's cooking
-  frontmatter.
+- **Log a cook**: pick a date (defaulting to today) and the app inserts a
+  `[[RecipeName]]` **list item** directly under the daily note's `笔记` heading —
+  the exact input `recipeTracker.md` consumes, which then advances the recipe's
+  cooking frontmatter. If that day's daily note does not exist, the app **fails
+  with a named, actionable error** and never creates the note (F4).
 - **Curate** three short PWA-owned Meal Shortlists (breakfast / lunch / dinner)
   to answer "what do I usually eat for lunch" without touching the vault.
 
@@ -85,11 +86,21 @@ never edits a recipe note, never creates a Pantry Item, and never writes to
 
 ## 3. Decisions locked by the user
 
-These four product decisions are **closed**. A future implementer or reviewer
-must not re-litigate them and, critically, must not treat the known-bad matching
-quality in D1 as an undiscovered bug and "fix" it away. The evidence was
-measured during the grilling session and shown to the user, who chose to proceed
-anyway.
+**Seven decisions are closed: four product decisions (D1–D4) and three
+implementation decisions (F1, F3, F4)** that were flagged for confirmation when
+this spec was first written and have since been answered by the user. A future
+implementer or reviewer must not re-litigate any of them and, critically, must
+not treat the known-bad matching quality in D1 as an undiscovered bug and "fix"
+it away. The evidence under each was measured against the live vault and the
+live catalog and shown to the user, who chose to proceed on that evidence.
+
+F1, F3 and F4 **keep their original `F` numbers** so that every existing
+cross-reference in this document, in the research record, and in the grilling
+session still resolves to the decision it was written about. §17 therefore
+lists only the seventeen flags that remain genuinely open — **F2 and F5–F20** —
+and the `F` sequence has deliberate gaps at 1, 3 and 4 because those three
+numbers now name locked decisions. A gap in the `F` sequence is therefore
+evidence that a decision was resolved, not a lost cross-reference.
 
 ### D1 — Match recipe `材料` against `pantry_items.db`, as originally asked
 
@@ -103,7 +114,7 @@ catalog. Match results are materialized into a PWA-owned mapping table.
 | Recipes fully cookable today (every Ingredient resolved) | **3 of 16** | Exact + variants + normalized-exact join over the 16 real recipe notes and the 178-row catalog |
 | Distinct `材料` values with no catalog match at all | **58%** | Distinct-value join; includes values that are seasonings-by-another-name and brand-only strings |
 | Naive fuzzy (Levenshtein ≤ 2 over the raw string) false-positive rate | **~27%** | Fuzzy join of every distinct `材料` value against all 178 `canonical_name`s |
-| Naive substring/prefix matches that are demonstrably wrong | 5 named live rows | See below |
+| Naive substring/prefix matches that are demonstrably wrong | 5 rows / 6 collisions (see below) | `蒜` hits two catalog rows, so six pairwise collisions exist across five table rows |
 
 **The must-not-match cases, all confirmed present in the live catalog.**
 
@@ -120,30 +131,69 @@ A live proof that "strip the first token as a brand" is wrong: the catalog row
 position, while `柴米 蒜香蒸茄子` has a real brand (`柴米`) in the same position.
 Position cannot disambiguate; a closed lexicon can.
 
-**Evidence corrections found while verifying the above.** The user's numbers are
-directionally right but two are stale. Use these instead — they are the numbers
-the golden test (§10.3) freezes.
+**A sixth collision case, and the reason both guards must be tested separately.**
+Counted by *recipe-side token*, there are **six** live flavour collisions, not
+five: `蒜` hits **two** catalog rows — `柴米 蒜香蒸茄子 300 克` (72) *and*
+`乐事 2026FIFA世界杯限定联名薯片蒜蓉面包味` (110, category `4`) — on top of
+`土豆`→62, `芝麻`→25 and `芝麻`→102. The extra fact that matters is **which
+guard stops each row**:
+
+| Row rejected | Stopped by the segment-boundary guard alone | Stopped by the category-family guard alone |
+|---|---|---|
+| `蒜` → 72 `柴米 蒜香蒸茄子 300 克` (`1.2`) | **yes** — `蒜香` is a longer CJK word | no — `1.2` is in the same family as produce |
+| `蒜` → 110 `乐事 …薯片蒜蓉面包味` (`4`) | **yes** — `蒜蓉` is a longer CJK word | **yes** — family `4` vs real garlic's `1.1` |
+| `土豆` → 62 `好丽友 呀!土豆 薯条` (`4`) | **yes** — `土豆` is not a whole segment | **yes** — family `4` vs produce's `1.1` |
+| `芝麻` → 25 `好丽友 高笑美芝麻饼干` (`4`) | **yes** — `芝麻饼干` is a longer CJK word | **yes** — family `4` vs sesame oil's `1.1` |
+| `芝麻` → 102 `芝麻烧饼` (`1.1`) | **yes** — `芝麻烧饼` is a longer CJK word | no — same family |
+
+So the category-family guard **independently** rejects `芝麻`→25 and `蒜`→110 on
+category alone, with no tokenization at all; and the segment-boundary guard
+independently rejects **all five rows in the table above, i.e. all six
+collisions**. **Both guards are independently required**, and
+`tests/recipes/test_must_not_match.py` must assert **each row individually**
+*and* include a **negative control per guard**: a test that disables one guard
+and asserts the row that only that guard stops now resolves **wrongly** — a
+positive control would pass whether or not the guard worked. A guard with no test
+that fails when it is deleted is not a guard, and a single combined assertion
+over the rows would leave either guard deletable.
+
+**Evidence corrections found while verifying the above.** The direction of every
+figure the user reported is right, but **several are stale or mistranscribed**.
+Use these instead — they are the numbers the golden test (§10.3) freezes.
 
 - There are **26 distinct `材料` values** across the 16 recipes, in **five**
   shapes, not four (§9.6). The fifth shape the user did not enumerate is
   `X/Y` with **no leading emoji** (`香料/Basil`; `🍞/focaccia` also has a `/`
   but does have an emoji). The parser must handle it.
-- **6 of 26** distinct `材料` values are emoji-only with no recoverable name
-  (`🥦 🥚 🍚 🥔 🍠 🍅`) — 23%, not 20%. A further three emoji-only values
-  (`🧄 🫚 🍋‍🟩`) exist but live in `调料`, not `材料`. `🍔` appears nowhere in the
-  16 notes; `🥔` (potato) is the value that was meant. `🥚` appears in **3 of
-  16** recipes (Easy Fragrant Fried Rice, 番茄炒蛋, 茶碗蒸) — confirmed.
+- The **emoji-only** list spans **both** frontmatter keys, and the transcription
+  it was first reported with is wrong. **`🍔` appears in none of the 16 notes**;
+  `🥔` (potato, from 烤土豆) is the value that was meant. The corrected list is
+  **6 from `材料`** — `🥦 🥚 🍚 🥔 🍠 🍅`, which is 6 of the 26 distinct `材料`
+  values, i.e. **23%** — plus **3 from `调料`**: `🧄 🫚 🍋‍🟩`. `🥚` appears in
+  **3 of 16** recipes (Easy Fragrant Fried Rice, 番茄炒蛋, 茶碗蒸) — confirmed.
+  `🌶️` is *not* in this list: in `材料` it occurs only in the `🌶️/Shishito`
+  shape, which carries a recoverable name. Because `🍋‍🟩` is a **three-codepoint
+  ZWJ sequence**, the parser needs an **explicit dictionary key set** (§9.6) — a
+  Unicode property class cannot express "one key that happens to be a ZWJ run",
+  and matching the three codepoints separately produces garbage.
 - Exact-name-join fragility is **worse** than stated. `Logistics/库存/Pantry.md`
   has **46** open non-unit task lines today and **2** of them fail an exact join
   against the catalog: `禾苑 蟹粉鱼肉狮子头 冷冻 280 克` (catalog id 108 is
   `禾苑 蟹粉鱼肉狮子头`) and `Sanpellegrino CIAO! Peach Sparkling Water,
-  24-Pack`. The user quoted "1 of 23".
+  24-Pack`. The user quoted "1 of 23". This is the evidence behind F1's join
+  design, and it is *worse* than the recipe→ingredient join — see F1.
 - The `variants` column is **effectively empty**: only 3 of 178 rows are
   non-empty, and two of those are just the long product name. The
   "exact `variants` alias" tier will match essentially nothing against the real
   catalog. It is implemented for completeness and is **not** load-bearing; the
   load-bearing tiers are exact `canonical_name`, the brand+size-stripped
   normalized tiers, the synonym set, and the staples allowlist.
+  **Consequence for the golden test: tier 3's coverage in
+  `golden_match_results.json` is legitimately near-zero. Near-zero tier-3
+  coverage is the expected outcome, not a bug** — do not "fix" it by loosening
+  the tier, by widening the synonym set to compensate, or by deleting the tier.
+  The tier stays because `CONTEXT.md` defines Pantry Item Alias in terms of
+  `variants` and a future catalog re-import could populate it.
 - **Category `1.1c` (condiments) has exactly 1 row in 178** — id 177,
   `李锦记 蒸鱼豉油 14 盎司`. This single fact is the empirical basis for the
   assumed-on-hand treatment of Seasonings and for the `严格模式（含调料）` toggle
@@ -163,9 +213,10 @@ overrides).
 
 ### D2 — Logging a cook appends a `[[RecipeName]]` wikilink under the daily note's `笔记` heading
 
-**The decision.** The one vault write this app performs is a bare line
-`[[RecipeName]]` inserted into `日记/YYYY/YYYY-MM-DD.md` under the `笔记`
-heading, on a user-chosen date defaulting to today.
+**The decision.** The one vault write this app performs is a bare
+`[[RecipeName]]` wikilink — written as a Markdown **list item** — inserted into
+`日记/YYYY/YYYY-MM-DD.md` under the `笔记` heading, on a user-chosen date
+defaulting to today. The exact byte placement is F3.
 
 **Why the format is not negotiable.** `Helper/utils/recipeTracker.md` computes
 `first_cooked`, `last_cooked`, `cooking_count`, `cooking_frequency`,
@@ -182,22 +233,35 @@ equal the recipe note's basename exactly — not a display alias. The bare form
 is what the vault already contains (`[[盐焗鸡]]`, `[[花蛤拌饭]]`).
 
 **A subtlety the writing path must know.** `cooking.length` counts *pages*, not
-links. Two `[[盐焗鸡]]` lines in one daily note still count as **one** cook. A
+links:
+
+```
+cooking.length = dv.pages('"日记"').where(...)
+```
+
+Two `[[盐焗鸡]]` lines in one daily note still count as **one** cook. A
 duplicate append therefore cannot corrupt `cooking_count`; the dedupe
 requirement in §9.14 is for auditability and for a readable daily note, not for
-count correctness. Stated explicitly so no one "optimizes" it away.
+count correctness. Stated here, restated as a numbered invariant in §13, and
+restated again in F3 — **three copies on purpose, so that nobody "optimizes"
+the dedupe away on the theory that it protects a counter. It does not.**
 
-**A concrete placement conflict, resolved with a flag (F3).**
-`parse_sections()` from `app/vault/sections.py` computes the `笔记` region as
-**just the heading line** — verified against the live
-`日记/2026/2026-09-27.md`: byte span `4265..4275`, region content `b'\n'`,
-`blank=True` — because the very next line is a ` ````columns ` fence and a
-region's end is the first following fence or heading line. Meanwhile the vault's
-*existing* logged cooks sit in two other places: `2026-03-10.md` has
-`[[盐焗鸡]]` immediately after the `![[dailyModify.base|ordered-list]]` embed,
-and `2026-09-14.md` has `[[花蛤拌饭]]` immediately after the `# Event` heading,
-before that section's `columns` fence. "Under the `笔记` heading" as literally
-specified means *above* the columns fence, matching neither existing example.
+**A concrete placement conflict, now resolved as F3.** `parse_sections()` from
+`app/vault/sections.py` computes the `笔记` region as **just the heading line** —
+verified against the live `日记/2026/2026-09-27.md`: byte span `4265..4275`,
+region content `b'\n'`, `blank=True` — because the very next line is a
+` ````columns ` fence and a region's end is the first following fence or heading
+line. Meanwhile the vault's *existing* logged cooks sit in two other places:
+`2026-03-10.md` has `[[盐焗鸡]]` immediately after the
+`![[dailyModify.base|ordered-list]]` embed, and `2026-09-14.md` has
+`[[花蛤拌饭]]` immediately after the `# Event` heading, before that section's
+`columns` fence. "Under the `笔记` heading" as literally specified means *above*
+the columns fence, matching neither existing example.
+
+**The rule is now fixed: the link is a list item directly under the `笔记`
+heading.** F3 below states the exact region-insertion algorithm, including the
+`blank=True` empty-region case. The two existing logged cooks remain where they
+are; they were typed by hand and are not a precedent the write path follows.
 
 ### D3 — Breakfast/Lunch/Dinner are three PWA-owned shortlists; the vault stays meal-free
 
@@ -242,9 +306,357 @@ Pantry Item (immutable catalog record of what was *bought*) and Pantry Stock
 (what the household *has*). A merely `chip--have-been-buying` chip is the UI's
 way of not conflating them.
 
+**Those two stock tiers are only honest if Pantry Stock is read from the live
+vault, not inferred from the catalog — which is F1, below.** With the catalog
+alone, `红苋菜苗` and `新鲜小叶茼蒿` would render as `chip--in-stock` while being
+bought-before-but-not-held, and the distinction D4 is built on would collapse
+into a single colour. F1 is not an optimization on top of D4; it is what makes
+D4's core distinction true.
+
 The `调试` toggle in Settings reveals, behind every chip: the resolved tier, the
 `match_method`, the candidate Pantry Item id(s) considered, and the confidence.
 It is a render toggle, not a second data path (§9.13.4, flag F7).
+
+### F1 — Pantry Stock state comes from the live vault `Pantry.md`, in addition to the catalog
+
+**The decision.** The stock layer reads **two** sources, and both are required.
+`pantry_items.db` supplies **identity** — the rename-stable `pantry_item_id`,
+the brand, and the `💵` price. `Logistics/库存/Pantry.md` supplies **state** —
+`open` / `in_progress` / `done` / `cancelled`, per Pantry Unit. The engine never
+infers "I have it" from "I have bought it".
+
+**The measured evidence, and why catalog-only is not merely worse but wrong.**
+
+| Pantry Item | id | In the catalog | Open in `Pantry.md`? | Catalog-only verdict | Truth |
+|---|---|---|---|---|---|
+| `红苋菜苗` | 139 | yes | **no** | in stock | bought before, not held |
+| `新鲜小叶茼蒿` | 70 | yes | **no** | in stock | bought before, not held |
+| `空心菜嫩苗` | 83 | yes | **no** — an earlier line was `❌` cancelled 2026-09-22 and the item was re-bought 2 days later | in stock | held again, but only the second purchase is current |
+
+The first two would both render as `chip--in-stock` from the catalog alone. The
+third is the subtler failure: `空心菜嫩苗` was cancelled on 2026-09-22 and
+re-bought on 2026-09-24, so the catalog's single row cannot distinguish "held"
+from "held, then cancelled, then re-held", and a catalog-only answer would have
+been right by accident today and wrong the moment the household finished the
+second bag. **This is what makes D4's `in-stock` / `have-been-buying` tiers real
+rather than decorative.**
+
+**What is reused, unchanged, from
+`pwa-obsidian-daily/app/vault/pantry.py`.** The port is a port, not a rewrite;
+the parser is already hardened against the exact failure modes the vault has.
+
+| Element | Contract, kept verbatim |
+|---|---|
+| `parse_pantry(source: bytes, *, max_bytes: int = 2_000_000) -> PantrySnapshot` | Walks numbered H1 sections, H2/H3 subsections, `dataviewjs` / `Tasks` fences, and task lines. `_MAX_ITEMS_TOTAL = 1000` bound kept. Byte-span `start`/`end` discipline kept. Typed `PantryError` failures kept. |
+| `_TASK` | `^(?P<indent>[ \t]*)- \[(?P<status>.)\][ \t]*(?P<text>.*)$` — the status character is a **single character**, and it is matched, not assumed. |
+| `_MONEY` | `💵\s*\$?([\d,]+(?:\.\d+)?)` — the effective per-unit price (see the invariant below). |
+| `_UNIT` | `^\d+\/\d+` — the unit-split marker that identifies a `k/N` **child**. |
+| `_ADDED` / `_ENDED` | `➕\s*(\d{4}-\d{2}-\d{2})` and `[✅❌]\s*(\d{4}-\d{2}-\d{2})` — the latter is what makes a cancellation date recoverable. |
+| `_TAG` / `_TAG_TOKEN` | `(?:^\|[\s\t])#(?P<tag>[^\s#]+)` and its consuming twin. Pipes are escaped as `\|` for GFM table safety; the regex itself has none. |
+| `_OPEN_STATUSES` | `{" ", "/"}` — `[ ]` is open, `[/]` is in-progress. **An unrecognized marker is never open**: `[-]`, `[>]` and friends are dropped. |
+| `derived_status(index)` | A parent is `done` iff **all** children are `done`; `in_progress` if **any** child is `done` or `in_progress`; else `open`. Childless rows use `raw_status`. |
+| Per-unit parent exclusion | A row matching `_UNIT` is a unit. Its parent is **excluded from every count and every money total** — see the invariant below. |
+| `PantryIndex` | TTL-cached read-only snapshot provider: `snapshot()` → `_refresh()` gated on `time.monotonic()`, `PathSafetyError` → `PantryError("pantry_source_unreadable")`, `None` → `PantryError("pantry_source_missing")`. The PWA's `PantryStockIndex` is this class renamed, with `stock_cache_seconds` as its TTL. |
+
+**The CRITICAL invariant — restated here, and it is a test obligation.**
+`💵 $X.XX` on a **parent** line is the **effective per-unit price**, not an item
+total. Every consumer must therefore **EXCLUDE the unit parent** and count each
+**open `k/N` subtask at that price**. A half-used item counted at twice its
+value is the failure this prevents, and it is `CONTEXT.md`'s Pantry Unit rule
+verbatim.
+
+**Three implementations of this math must stay in parity:**
+
+1. the `existingPantryValue` dataviewjs block in `Logistics/库存/Pantry.md`,
+2. `Helper/scripts/pantry_snapshot.py`, and
+3. the PWA's own logic in this app.
+
+All three skip `[x]`, `[>]` and `[-]`, all three still count `[/]`
+(in-progress), all three skip the parent of a `1/N` subtask while counting those
+subtasks at the parent's per-unit price, and all three drop tagged rows.
+Divergence between them is invisible until a number is wrong in a place the
+user trusts, and two of the three are not in this repo's test suite — so
+**parity is asserted here, mechanically**:
+
+- `scripts/snapshot_pantry_catalog.py` **regenerates and diffs** (it already
+  exists for the catalog; this is its second job, not a new script). When run
+  against the live vault it computes the untagged, open, non-unit-parent total
+  **twice** — once with the PWA's rule and once with `pantry_snapshot.py`'s own
+  total for the same date — and **refuses to emit a refreshed fixture if the two
+  disagree**. A parity break therefore blocks fixture regeneration rather than
+  being merged silently.
+- `tests/fixtures/pantry_stock_math_parity.json` freezes the agreed total, the
+  contributing line count, and the per-unit-excluded parent count.
+- `tests/pantry/test_stock_math.py` asserts the PWA's logic reproduces that
+  frozen number, and includes the three shape cases that break naive
+  implementations: a `3/3` parent that derives to `done` and contributes
+  nothing, a `1/2` parent with one open unit contributing **one** unit price, and
+  a `[/]` in-progress unit counted as open.
+- CI never reads the live vault or the live `Helper/` script, exactly as F14
+  requires for the catalog. The live comparison is a **deliberate, local,
+  human-run act**, the same discipline as the golden fixtures.
+
+**The join between a catalog `pantry_item_id` and a `Pantry.md` line — and an
+honest admission that it is the weakest link in this app.** A `Pantry.md` line
+is free text; a catalog row is a normalized name. The join is therefore a
+**normalized-name index built on `normalize_ingredient()`** — the *same*
+normalization the matcher uses, which is the only reason the two sides can
+agree at all — with, in order:
+
+1. an exact hit on the normalized name index (`by_name`);
+2. a hit on the tier-4 catalog basename index (`by_basename`), so
+   `空心菜嫩苗 0.95-1.05 磅` on the pantry side reaches id 83;
+3. an explicit **manual override**.
+
+**The manual override is a committed, PWA-owned YAML file**, not a new table and
+not a lexicon: `app/pantry/line_overrides.yaml`, keyed by the *normalized
+`Pantry.md` line name* and valued by a `canonical_name` that is looked up in the
+**live** catalog at read time. It is deliberately not keyed by id, because §9.8's
+"never store a Pantry Item id in a lexicon file" rule exists for exactly this
+reason (`items.id` is `AUTOINCREMENT` and a re-import can renumber it) and an
+override file is a lexicon in every respect but location.
+
+**This join is measurably less reliable than the recipe→ingredient join, and the
+spec says so rather than hiding it.** The measured figure is **2 failures in 46
+open lines, not 1 in 23**: the misses are `禾苑 蟹粉鱼肉狮子头 冷冻 280 克` (the
+catalog row is `禾苑 蟹粉鱼肉狮子头`, id 108 — a trailing `冷冻` size/condition
+token survives) and `Sanpellegrino CIAO! Peach Sparkling Water, 24-Pack` (no
+catalog row resolves at all). Add the 5-row duplicate-name set from D1 and a
+*successful* join can still land on either of two ids. So:
+
+- The join gets **its own unresolved bucket**, separate from the ingredient
+  matcher's, surfaced in the `调试` provenance toggle as
+  `stockJoinState ∈ {joined, override, unresolved}` alongside the resolved
+  `pantry_item_id`, so a pantry line that no catalog row explains is visible
+  rather than silently dropped from `in_stock_names`.
+- `/health` gains `stock.unjoinedLineCount`, and `GET /api/recipes` returns
+  `stockUnjoinedCount` so a rising number is visible without opening the debug
+  view — the same treatment `staleMappingCount` gets in §7.3.
+- The escape hatch is therefore **load-bearing, not a nicety**: without it, two
+  live pantry lines are permanently unexplainable and the only remedy would be
+  editing the user's vault, which this app must never do.
+
+**The extra cost, stated honestly, and the degradation decision.** F1 buys
+honest stock at the price of **one more vault file to read** (a second
+server-owned relative path, a second TTL, a second `note_revision`) and **one
+more failure mode**: if `Pantry.md` is missing, unreadable, or unparseable, the
+**entire state layer degrades** — not one recipe, all of them.
+
+**The degradation decision is fail closed, and it is not a close call.**
+`PantryStockIndex` raises `PantryError`; `GET /api/recipes` and
+`GET /api/recipes/{name}` return **503 `pantry_stock_unreadable`** and the UI
+shows an error state naming the pantry note. There is deliberately **no**
+fallback:
+
+- not "assume in stock" — that silently inflates every score and is precisely
+  the conflation `AGENTS.md` and `CONTEXT.md` forbid;
+- not "assume not in stock" — that silently deflates every score to
+  `have-been-buying`, which is a plausible-looking wrong answer, the exact thing
+  `AGENTS.md` #3 says never to produce;
+- not "serve the list with every chip downgraded" — that *looks* like data.
+
+An honest empty answer and a plausible wrong answer are not the same thing, and
+this app only ships the first. This is why §9.16 already carries a 503 on
+`GET /api/recipes` for an unreadable source — F1 makes that branch real rather
+than theoretical, and names it `pantry_stock_unreadable`. The recipe *index* is
+unaffected, so `#/recipe/{name}` still shows a note's steps and history; only the
+stock-derived chip colours are unavailable, and the provenance view says so
+explicitly.
+
+### F3 — The cook wikilink is a list item directly under the `# 笔记` heading
+
+**The decision.** The Cooking Log append is `- [[RecipeName]]` inserted as the
+**first list item inside the `笔记` region**, immediately after the `# 笔记`
+heading line and before the following ` ````columns ` fence. This is F3; the
+preference for inserting after the `![[dailyModify.base|ordered-list]]` embed
+is **withdrawn**.
+
+**The evidence that motivated the flag is preserved, because it explains why the
+question was ever open.** `parse_sections()` from `app/vault/sections.py`
+computes the `笔记` region as **just the heading line** — measured live against
+`日记/2026/2026-09-27.md`: byte span **`4265..4275`**, region content
+**`b'\n'`**, **`blank=True`** — because the very next line is a
+` ````columns ` fence and a region ends at the first following fence or heading
+line. The vault's two existing logged cooks are in **different** places:
+`2026-03-10.md` has `[[盐焗鸡]]` immediately after the
+`![[dailyModify.base|ordered-list]]` embed, and `2026-09-14.md` has
+`[[花蛤拌饭]]` immediately after the `# Event` heading, before that section's
+`columns` fence. `recipeTracker` is **position-agnostic** — it scans every
+outlink on the page — so *every* one of these placements works for the tracker.
+The two existing cooks were typed by hand and are ad-hoc, not a convention.
+
+**The exact algorithm, against the `sections.py` heading/region engine.**
+
+1. `store.read_existing_if_exists(relative)`. `None` → the F4 error path
+   (§9.15). Never create.
+2. `parse_sections(source)` → `require_unique("笔记", level=None,
+   code="ambiguous_notes_section")`. More than one `笔记` region **fails closed**
+   with 409 `ambiguous_notes_section`.
+3. Locate the region's `heading_end` — the byte offset just past the newline that
+   terminates the `# 笔记` heading line. This is the single insertion point; the
+   region's `end` offset is **not** used, because for the `blank=True` empty
+   region `end == heading_end` and for a populated region `end` is the first
+   following fence, which would place the link *below* the columns fence and
+   outside the section's column layout.
+4. **"Creating the region" is a misnomer, and the spec resolves it explicitly:
+   the heading already exists — nothing is created.** The `# 笔记` heading comes
+   from the vault's own daily-note template and is present in every real daily
+   note, so the region engine always finds it. `parse_sections` is a
+   *locator*, never a writer: it returns offsets, and this spec adds no code path
+   that emits a `# 笔记` heading. The only operation is **"insert the first list
+   item under an existing heading"**. A note genuinely lacking a `笔记` heading
+   is therefore a `require_unique` failure (409 `ambiguous_notes_section` is
+   wrong for that case — the code is `notes_section_missing`, 422), never a
+   silent heading insertion.
+5. **Blank-line handling for the `blank=True` empty-region case, and the line
+   terminator.** The measured live case is exactly this one: region content is
+   `b'\n'` and `blank=True` — the heading line's own terminator is the only byte
+   in the region. The splice at `heading_end` is:
+
+   ```
+   source[:heading_end] + b"- [[" + recipe + b"]]" + terminator + source[heading_end:]
+   ```
+
+   **The terminator is read from the source, never assumed to be `b"\n"`.** This
+   is not hypothetical: the measured heading `# 笔记` is 8 bytes in UTF-8 and the
+   measured region span `4265..4275` is **10** bytes, so the live note's line
+   terminator is **two** bytes — the vault note is CRLF, or the heading carries a
+   trailing space. Either way, a splice that hard-codes `\n` would introduce a
+   **mixed-terminator file** into the user's daily note: `git` and Obsidian both
+   surface that as a whole-file diff, and `task-date-recorder` re-writes on a
+   `modify` event, so the noise is not transient. The implementation therefore
+   takes the bytes between the heading text and `heading_end` from the region
+   engine's own span and reuses them verbatim. `tests/cooklog/test_writer.py`
+   asserts the terminator is byte-identical to the pre-image's, for both a
+   one-byte and a two-byte terminator.
+
+   With the terminator handled, the `blank=True` case reduces to: the heading's
+   own terminator is preserved in `source[:heading_end]`, the new list item
+   brings its own, and the following ` ````columns ` fence still starts on its
+   own line. The result is a two-line region (`# 笔记` / `- [[RecipeName]]`) and
+   the region becomes `blank=False`. **No additional blank line is inserted and
+   no existing blank line is consumed** — inserting one would place the link
+   inside the columns fence's visual area on some renderers. When the region is
+   already populated, the identical splice at `heading_end` makes the new item
+   the **first** item, above existing content.
+6. `link_line` is `- [[<recipe_note>]]`: a Markdown list item, no timestamp, no
+   emoji, no trailing metadata, no `- [ ]` task box. It must not be a task — a
+   task would be checkable and the user could strike it, and `recipeTracker`
+   would still read it, so a struck cook would be silently counted.
+7. Commit via `AtomicNoteStore.transform_existing`, with CAS and
+   `PostWriteVerificationError`, exactly as §9.14 already specifies. The splice
+   remains a pure byte operation over offsets computed from the original
+   `source`; nothing is re-serialized.
+
+**`recipeTracker` is position-agnostic, and that is why this is safe.** Its
+predicate is `p.file.outlinks.some(l => l.path.includes(recipe) ||
+l.display === recipe)` over every daily-note page, so the link is found wherever
+in the note it lands. The list-item form is still the **bare** wikilink text the
+plugin requires: `[[RecipeName]]` verbatim, never a display alias
+(`[[盐焗鸡|盐焗鸡]]` would also match via `display`, but the bare form is what the
+vault already contains and what §9.14's dedupe regex expects).
+
+**And once more, because it is the finding most likely to be "optimized" away:
+`recipeTracker` counts PAGES, not links.** `cooking.length =
+dv.pages('"日记"').where(...)` returns one entry per daily-note page, so **a
+duplicate append inside one daily note cannot inflate `cooking_count`** — not by
+one, not by any amount. §9.14's dedupe and `cook_log_receipts`' unique index
+therefore exist for **note readability and the audit trail**, *not* for count
+correctness. They are not redundant and must not be removed on the theory that
+the counter is safe; a note with four copies of `[[盐焗鸡]]` is a note the user
+has to clean up by hand, and the receipt row is what makes "did the app write
+this?" answerable.
+
+### F4 — A missing daily note is a named error, never an automatic creation
+
+**The decision.** If the daily note for the requested date **does not exist, the
+PWA does not create it.** The Cooking Log write fails with a clear, actionable
+error that names the date and the expected vault path, and the user creates the
+note in Obsidian and retries. The user chose this over the subprocess-and-ledger
+alternative explicitly.
+
+**The error shape.**
+
+- **Status: `404`.** The addressed resource — `日记/YYYY/YYYY-MM-DD.md` — is
+  absent, and 404 is the code that says so without pretending the request was
+  malformed (422) or lost a race (409).
+- **Envelope.** The scaffold's existing envelope is `{"requestId", "code"}`. This
+  error is the **one** code that adds fields, and the extension is additive so
+  no existing consumer changes shape:
+
+  ```json
+  {
+    "requestId": "…",
+    "code": "daily_note_missing",
+    "message": "找不到 2026-09-27 的日记：日记/2026/2026-09-27.md。请先在 Obsidian 中创建这一天的日记，然后重试。",
+    "date": "2026-09-27",
+    "relativePath": "日记/2026/2026-09-27.md",
+    "retryable": true
+  }
+  ```
+
+  `message` names **both** the human date and the exact vault-relative path, so
+  the fix is one paste into Obsidian's quick switcher. `retryable: true` is
+  literal: the same request succeeds unchanged once the note exists. The UI
+  renders `message` verbatim and does **not** synthesize its own copy, so there
+  is one wording to keep correct.
+- **This is a genuine extension to `_api_error`, and it is called out here
+  because §9.16 and §9.19 previously said the envelope was unchanged.** The
+  change is: the exception detail may carry an optional `message`, `date`,
+  `relativePath`, and `retryable`, all of which are optional and all of which
+  default to absent. Every pre-existing error code keeps emitting exactly
+  `{"requestId", "code"}`. `/health` still leaks no paths, and `relativePath` is
+  vault-*relative*, never absolute, so the Server-Owned Root invariant holds.
+- **`GET /api/cook-logs?date=` returns the same 404 `daily_note_missing`** for a
+  missing date, with the same shape. A read-back that returned an empty
+  `entries` array for a date whose note does not exist would be a lie: it would
+  say "you cooked nothing that day" when the truth is "there is no record of
+  that day at all".
+
+**A creation conflict is not "not found".** The note can exist in the vault
+while the app saw it missing — iCloud sync lag, an Obsidian write landing
+between our two reads, a network volume briefly stale. Reporting that as
+`daily_note_missing` sends the user to create a note that already exists, and
+the second attempt then fails differently, which is a confusing two-error
+round-trip for what is really a lost race.
+
+The rule follows the **concurrent-external-writer rule** already encoded in
+`atomic_write.py`, where the write primitive never assumes it is the only
+writer:
+
+1. On `None` from `read_existing_if_exists`, **re-check exactly once** —
+   re-resolve the path through `AtomicNoteStore` and re-read, with a bounded
+   retry (2 attempts, no sleep loop; the race window is milliseconds).
+2. If the second read returns bytes, the note **appeared under us**. This is
+   reported as **`409 daily_note_created_concurrently`**, in the same envelope
+   extension, with `relativePath`, `currentRevision`, and `retryable: true` —
+   and it reuses §9.14's existing 409 conflict UX and resolve panel rather than
+   inventing a second one. The user taps retry; the write proceeds normally
+   because a note now exists.
+3. The same shape covers the mirror case: if `transform_existing` raises
+   `ConcurrentFileChange` because the target vanished before replace, that is
+   `409 daily_note_changed`, the existing code, not `daily_note_missing`.
+4. Only after **two** reads both return `None` is it `404 daily_note_missing`.
+
+The point is that `daily_note_missing` means *the note is absent*, full stop. A
+lost race is a `409`, and a `404` is a standing fact the user can act on.
+
+**What is removed, and why this is a net simplification.** The previous draft of
+this spec specified an Obsidian CLI + QuickAdd creation path, nine `Settings`
+fields, a subprocess sandbox, a Templater settle window, an unusable-note
+rollback, and a SQLite idempotency ledger keyed by a caller-supplied UUID. **All
+of it is out of scope.** `AGENTS.md` non-negotiable #1 ("never creates a missing
+daily note") is therefore **correct as written and needs no amendment** — which
+is the single strongest argument for the decision, because the alternative forced
+an amendment to a non-negotiable, a `README.md` line, and an `.env.example`
+comment. `CONTEXT.md` needs no amendment either.
+
+The cost, stated plainly: back-dating into a day the user never journalled now
+requires one action in Obsidian before logging. That is a real cost, paid
+deliberately, in exchange for removing a subprocess, a sandbox, a settle window,
+a rollback, a ledger table, nine `Settings` fields, and a contradiction with a
+non-negotiable — for a case that happens when the user has not written that
+day's note at all, which is exactly when they should be writing it.
 
 ---
 
@@ -262,6 +674,16 @@ FastAPI (loopback :8007)  ──  vanilla ES modules  ──  no build step
 No ORM, no bundler, no build step, no `node_modules` at runtime — the same
 constraint as every sibling. New runtime dependencies: **one** (`aiosqlite`,
 precedent `pwa-wardrobe/app/database.py`); flag **F9**.
+
+**Two ports, not one, and never one end-to-end.** The app process binds loopback
+**`:8007`**. Tailscale Serve ingress, once deployment is authorized (§12), takes
+**`:8452`** — the 2026-09-27 port audit recorded in `.env.example` assigns 8000
+and 8002–8006 to sibling PWAs, 8443 and 8445–8451 as allocated, and 8446 to
+wardrobe. `PUBLIC_ORIGIN` is `http://127.0.0.1:8007` in development and
+`https://home-macbook-air.tailcd6e49.ts.net:8452` in production, and §9.16's
+host guard is written against whichever one `PUBLIC_ORIGIN` names. Any diagram,
+smoke check, or Playwright base URL that assumes the app is reachable on a
+single port is wrong; §12 owns the ingress plan.
 
 ### 4.1 Test seams
 
@@ -307,12 +729,14 @@ app/
     frontmatter.py             ported (loss-minimizing parse + single-field patch)
     sections.py                ported (heading/region engine)
     daily_paths.py             ported (DailyNotePathPolicy)
-    pantry.py                  ported (Pantry.md open-items parser)
-    obsidian_cli.py            ported (DailyNoteCreationService)
+    pantry.py                  ported (Pantry.md open-items parser — F1)
   pantry/
     __init__.py
     catalog.py                 PantryCatalog — read-only items access
-    stock.py                   PantryStockIndex — in-stock set from Pantry.md
+    stock.py                   PantryStockIndex — Pantry Stock from Pantry.md,
+                              the catalog<->line join and its override lookup,
+                              the per-unit money math (F1)
+    line_overrides.yaml        manual escape hatch for lines the join misses
   recipes/
     __init__.py
     reader.py                  RecipeIndex / RecipeNote / parse_recipe
@@ -341,13 +765,20 @@ app/
       components/{chips,sheet,stepper}.js                    NEW
       logic/{sort,chip-class,format}.js                      NEW (pure, node --test)
 docs/spec/2026-09-27-pantry-recipes.md    this file
-scripts/snapshot_pantry_catalog.py        NEW: regenerate the golden catalog snapshot
+scripts/snapshot_pantry_catalog.py        NEW: regenerate the golden catalog
+                                         snapshot AND verify the per-unit
+                                         money math against
+                                         Helper/scripts/pantry_snapshot.py,
+                                         refusing to emit on disagreement (F1)
 tests/
   conftest.py                  EXTEND: recipe fixtures, seeded catalog, app_data
   fixtures/real_recipes/*.md           NEW: the 16 real recipe notes, frozen
   fixtures/pantry_items_snapshot.json   NEW: frozen 178-row catalog
   fixtures/golden_match_results.json    NEW: the expected per-Ingredient outcome
-  vault/…  recipes/…  mapping/…  shortlists/…  cooklog/…  db/…  api/…   NEW
+  fixtures/pantry_stock_math_parity.json  NEW: the frozen per-unit money total
+                                         and its contributor counts (F1)
+  vault/…  pantry/…  recipes/…  mapping/…  shortlists/…  cooklog/…  db/…
+  api/…                     NEW
   js/scaffold.test.mjs         EXTEND
   js/shell_assets.test.mjs     NEW: closes the "missing SHELL_ASSETS entry" hole
   js/logic/*.test.mjs          NEW
@@ -387,12 +818,20 @@ publishes a `cookable: true|false` field in any API response. Flag **F17**.
 
 `AGENTS.md` requires a new domain term to land in `CONTEXT.md`, with its
 forbidden synonyms, **in the same commit that introduces the code that
-implements it**. Two new terms:
+implements it**. Three new terms:
 
 | Term | Definition | Forbidden synonyms |
 |---|---|---|
 | **Ingredient Mapping** | The persisted, auditable resolution of one Ingredient slot to at most one Pantry Item. Carries `raw_value`, `parsed_name`, `parse_method`, `match_method`, tier, confidence, and the rejected candidates. Lives only in the PWA's SQLite; the vault has no equivalent. | match, mapping, link, resolution, join |
 | **Meal Shortlist** | One of three PWA-owned, user-ordered lists of Recipe notes for `breakfast` / `lunch` / `dinner`. A planning convenience. **Not** a vault record, not synced back, not a classification of the Recipe, and not a grouping of Cooking Records. | meal plan, menu, category, tag, meal type |
+| **Stock Join** | The resolved correspondence between one task line in `Logistics/库存/Pantry.md` and at most one [Pantry Item](#pantry-item), keyed on a **normalized name** and repaired by a committed manual override. Computed per read; **never stored as a Pantry Item id**. Its own unresolved bucket is surfaced to the user. F1 states the measured miss rate. | stock match, pantry join, line match, availability join, restock key |
+
+**`CONTEXT.md` also needs a clause added to Pantry Stock** in the same commit:
+that the state is read from **two** sources, the catalog for identity and
+`Pantry.md` for state (F1). The existing definition says stock is "per-household,
+mutable, and has no catalog identity", which remains true — but a reader would
+otherwise reasonably assume the *catalog* is the other source, and F1's whole
+point is that it is not sufficient.
 
 `cook_log_receipts` (§7.5) is a PWA-owned mirror of the daily-note row, not a
 new domain concept, so it needs no `CONTEXT.md` entry — but §13 notes that
@@ -415,34 +854,42 @@ validate it in a route"):
 
 | Field | Env var | Default | Validation | Why |
 |---|---|---|---|---|
-| `pantry_note_relative` | `PANTRY_NOTE_RELATIVE` | `Logistics/库存/Pantry.md` | same shape as `_safe_relative_root`, extended to a file path | The Pantry Stock source (flag **F1**) |
+| `pantry_note_relative` | `PANTRY_NOTE_RELATIVE` | `Logistics/库存/Pantry.md` | same shape as `_safe_relative_root`, extended to a file path | The Pantry **state** source (F1) |
 | `read_only` | `OBSIDIAN_READ_ONLY` | `false` | `_boolean` | Read-only gate in `auth.py` (flag **F18**) |
 | `catalog_cache_seconds` | `CATALOG_CACHE_SECONDS` | `300.0` | `0 < v <= 3600` | TTL for the read-only catalog snapshot |
-| `stock_cache_seconds` | `STOCK_CACHE_SECONDS` | `30.0` | `0 < v <= 600` | TTL for the `Pantry.md` open-items snapshot. Short on purpose: the user toggles stock from Obsidian while the PWA is open. |
+| `stock_cache_seconds` | `STOCK_CACHE_SECONDS` | `30.0` | `0 < v <= 600` | TTL for the `Pantry.md` Pantry Stock snapshot. Short on purpose: the user toggles stock from Obsidian while the PWA is open, so this is the TTL that decides how stale a chip can be. |
 | `recipe_cache_seconds` | `RECIPE_CACHE_SECONDS` | `60.0` | `0 < v <= 3600` | TTL for the recipe index |
-| `max_recipe_bytes` | `MAX_RECIPE_BYTES` | `2_000_000` | `1024 <= v <= 20_000_000` | Matches `pantry.py`'s `max_bytes` default |
-| `cli_executable` | `OBSIDIAN_CLI_EXECUTABLE` | `None` | absolute path, non-symlink, or `None` | Daily-note creation (flag **F4**) |
-| `cli_vault_id` | `OBSIDIAN_CLI_VAULT_ID` | `None` | `_valid_cli_text(max=128)` or `None` | " |
-| `daily_template_name` | `DAILY_TEMPLATE_NAME` | `None` | `_valid_cli_text(max=128)` or `None` | " |
-| `daily_quickadd_choice` | `DAILY_QUICKADD_CHOICE` | `None` | `_valid_cli_text(max=128)` or `None` | Selects `quickadd:run` instead of `create template=` |
-| `cli_timeout_seconds` | `OBSIDIAN_CLI_TIMEOUT_SECONDS` | `20.0` | `1 <= v <= 120` | " |
-| `cli_settle_seconds` | `OBSIDIAN_CLI_SETTLE_SECONDS` | `5.0` | `0 <= v <= 30` | Templater rewrites the note asynchronously |
-| `cli_max_output_bytes` | `OBSIDIAN_CLI_MAX_OUTPUT_BYTES` | `65536` | `1024 <= v <= 1048576` | " |
-| `cli_home` | `OBSIDIAN_CLI_HOME` | `None` | absolute directory or `None` | Fixed subprocess `HOME` |
-| `daily_required_markers` | `DAILY_REQUIRED_MARKERS` | `()` | tuple of short printable strings | Postcondition that a created note is a real daily note |
-| `daily_notes_year_policy` | `DAILY_NOTES_YEAR_POLICY` | `None` | `YYYY-YYYY` or `None` | Bounds the year a request may name |
+| `max_recipe_bytes` | `MAX_RECIPE_BYTES` | `2_000_000` | `1024 <= v <= 20_000_000` | Matches the ported `pantry.py`'s `max_bytes` default, and bounds the `Pantry.md` read the same way |
+| `daily_notes_year_policy` | `DAILY_NOTES_YEAR_POLICY` | `None` | `YYYY-YYYY` or `None` | Bounds the year a request may name, so `DailyNotePathPolicy` cannot be steered outside the vault's own layout |
 
-`cli_*` fields default to `None`, so an unconfigured checkout has
-`settings.creation.available == False`, and the Cooking Log write returns a typed
-`daily_note_creation_unavailable` **only when the note is actually missing**.
-Logging into an existing note keeps working. This mirrors
-`pwa-obsidian-daily`, where an unusable creation adapter must not take down the
-existing-note service.
+**Seven new `Settings` fields, down from sixteen.** The nine fields the previous
+draft added for automatic daily-note creation — `cli_executable`,
+`cli_vault_id`, `daily_template_name`, `daily_quickadd_choice`,
+`cli_timeout_seconds`, `cli_settle_seconds`, `cli_max_output_bytes`,
+`cli_home`, and `daily_required_markers` — are **removed by F4** and must not
+appear in `config.py`, `.env.example`, or the test fixtures. There is no
+`OBSIDIAN_CLI_EXECUTABLE`, no `OBSIDIAN_CLI_VAULT_ID`, no `DAILY_TEMPLATE_NAME`,
+no `DAILY_QUICKADD_CHOICE`, no `OBSIDIAN_CLI_*` timeout/output/home variable,
+and no `DAILY_REQUIRED_MARKERS` anywhere in this repository. `config.py` gains
+six fields plus the retained year policy; a new-field test asserts the exact
+set, so a reintroduced CLI field is a CI failure rather than a silent
+regression.
 
-`.env.example` also needs its `DAILY_NOTES_ROOT` comment narrowed. It currently
-states "the PWA does not create missing daily notes", which flag **F4** changes
-to "the PWA never creates a daily note by writing the file; the only creation
-path is the configured Obsidian CLI / QuickAdd invocation".
+Because `OBSIDIAN_READ_ONLY` is the only gate between a mutation and the vault,
+and because F4 removes the only write path that had an availability fallback,
+the two interact simply: in read-only mode `POST /api/cook-logs` is 403
+`read_only` **before** any note-existence check, so a read-only deployment
+cannot leak whether a given daily note exists through a status-code difference.
+
+`.env.example` needs **no** change to its `DAILY_NOTES_ROOT` comment. It
+currently states "the PWA does not create missing daily notes", F4 confirms
+that as the rule rather than changing it — the flag is what previously proposed
+narrowing it to "the only creation path is the configured Obsidian CLI /
+QuickAdd invocation", and that proposal is withdrawn. `AGENTS.md`
+non-negotiable #1, `README.md`, and `CONTEXT.md`'s Cooking Log definition all
+remain accurate as written. The `.env.example` comment that *does* need adding
+is the port pair: `8007` is the app bind and `8452` is Tailscale Serve ingress,
+and the two are not the same number (§4, §12).
 
 ---
 
@@ -638,7 +1085,9 @@ Numbered and exhaustive. Each names the actor, the capability, and the benefit.
    can scan the state of a recipe at a glance.
 5. As a home cook, I want a chip that is *bought-before but not currently in
    stock* to look different from one that *is* in stock, so that the app does
-   not lie about what is in my kitchen.
+   not lie about what is in my kitchen. The distinction is read from the live
+   `Pantry.md`, not inferred from the catalog (F1) — so a cancelled or finished
+   item stops counting as held the moment I tick it in Obsidian.
 6. As a home cook, I want Seasonings shown as an assumed-on-hand chip row, so
    that owning a teaspoon of soy sauce does not require a grocery trip.
 7. As a home cook, I want a `严格模式（含调料）` toggle, so that I can see the
@@ -662,7 +1111,10 @@ Numbered and exhaustive. Each names the actor, the capability, and the benefit.
 ### Provenance and repair (D4)
 
 15. As a skeptical home cook, I want a `调试` toggle, so that I can see why a
-    chip says what it says.
+    chip says what it says — including, separately, when an open `Pantry.md` line
+    maps to no catalog row at all, so that a pantry item silently missing from
+    every score is visible instead of invisible (F1's Stock Join unresolved
+    bucket).
 16. As a skeptical home cook, I want the resolution tier behind every chip, so
     that I can tell an exact hit from a synonym guess.
 17. As a skeptical home cook, I want the candidate Pantry Item id(s) behind every
@@ -700,12 +1152,14 @@ Numbered and exhaustive. Each names the actor, the capability, and the benefit.
     a no-op, so that a double tap does not litter my note.
 30. As a home cook, I want a read-back of what the app wrote, so that I can
     confirm the link landed.
-31. As a home cook, I want the app to create a missing daily note for me, so
-    that back-dating into a day I never journalled works.
-32. As a home cook, I want the created daily note to be a real templated daily
-    note, so that it looks like every other note in my vault.
-33. As a home cook, I want the app to never write the daily-note file directly,
-    so that Obsidian's template and plugin pipeline stays the only creator.
+31. As a home cook, I want a clear, actionable error naming the date and the
+    exact vault path when that day's daily note does not exist, so that I know
+    precisely what to create and do not have to guess which note is missing.
+32. As a home cook, I want to retry that same log unchanged once I have created
+    the note, so that a missing note is a one-step detour and not lost work.
+33. As a home cook, I want the app to never create or write a daily note itself,
+    so that Obsidian's template and plugin pipeline stays the only creator and
+    my vault's structure stays mine.
 34. As a home cook, I want a 409 conflict surfaced with both versions, so that I
     can choose rather than watch a silent overwrite.
 
@@ -778,12 +1232,16 @@ apply.
 **Overflow baseline — template §2b.** The vendored `css/pwa.css` provides
 `html { overflow: visible; }`, `body { overflow-x: hidden; }`, `.scroll-row`
 (nowrap + `min-width: 0`), and a `.grid` using `minmax(0, 1fr)`. Note the
-vendored rule targets `#app`, while the shell's content root is `#app-root`, so
-`styles.css` must add `#app-root { overflow-x: hidden; }` — it creates a BFC and
-contains children, which `overflow-x: clip` does not. The chip row is the only
-horizontal scroller in the app and uses the vendored `.scroll-row` class (§2c: a
-scrollable row must opt out of intrinsic width with `min-width: 0`, or it expands
-the page width).
+vendored rule targets `#app`, while the shell's content root is **`#app-root`** —
+so the vendored rule **does not apply to this app's content root at all**, and
+`styles.css` must add `#app-root { overflow-x: hidden; }`; it creates a BFC and
+contains children, which `overflow-x: clip` does not. The mismatch is a real
+scaffold bug, not a style preference: without the compensating rule the chip row
+can widen the page, and the symptom (horizontal page scroll) appears only on a
+device, never in a desktop browser or an un-emulated Playwright run. The chip row
+is the only horizontal scroller in the app and uses the vendored `.scroll-row`
+class (§2c: a scrollable row must opt out of intrinsic width with
+`min-width: 0`, or it expands the page width).
 
 **Grid columns** (§2d): any multi-column Recipe grid uses `minmax(0, 1fr)`, never
 bare `1fr`, plus `.grid > * { min-width: 0; }` and the base rule before any
@@ -793,11 +1251,13 @@ bare `1fr`, plus `.grid > * { min-width: 0; }` and the base rule before any
 (`apple-mobile-web-app-capable`, `mobile-web-app-capable`,
 `apple-mobile-web-app-status-bar-style=black-translucent`) and the
 `apple-touch-icon` link are already present and correct. **What is missing is the
-file.** All four PNGs referenced by `app/static/manifest.webmanifest` and by the
-`apple-touch-icon` link are absent — `app/static/icons/` holds only a placeholder
-README (`.gitkeep` is intentionally absent so the note is visible). iOS falls
-back to a page screenshot for the Home Screen icon and Chrome logs a manifest
-warning. This is a real gap, and this spec closes it:
+files.** All four PNGs are **confirmed absent**: `app/static/icons/` holds only a
+placeholder README (`.gitkeep` is intentionally absent so the note is visible),
+and the four are referenced from **two** places — `app/static/manifest.webmanifest`
+references **three** of them (`icon-192`, `icon-512`, `icon-monochrome-512`) and
+`index.html`'s `apple-touch-icon` link references the **fourth**
+(`icon-180-apple`). iOS falls back to a page screenshot for the Home Screen icon
+and Chrome logs a manifest warning. This is a real gap, and this spec closes it:
 
 - `app/static/icons/icon-192.png` — 192×192, `purpose: any`
 - `app/static/icons/icon-512.png` — 512×512, `purpose: any maskable`
@@ -807,8 +1267,11 @@ warning. This is a real gap, and this spec closes it:
 Siblings commit their generated binaries to git; do the same, and rewrite
 `app/static/icons/README.md` to become the regeneration note rather than the
 "missing" table. `pyproject.toml`'s `package-data` already globs
-`static/icons/*`, and the CI wheel-content check does **not** assert icons — add
-all four to it.
+`static/icons/*`, so packaging picks the files up once they exist — but **the CI
+wheel-content check does not assert them**, which is why four empty references
+have survived this long. Adding the four to the wheel check is part of closing
+the gap, not an optional extra: without it, a `.png` that fails to land in the
+built wheel produces an installed app with no icon and no test failure.
 
 `display: standalone` is already in the manifest and is asserted by
 `tests/scaffold/test_app.py::test_sw_manifest_and_styles_are_served_from_the_same_process`.
@@ -848,14 +1311,23 @@ files. Every file this spec adds under `app/static/js` and `app/static/css` must
 be added to `SHELL_ASSETS` in the same commit, each as
 `'/js/views/home.js?v=' + CACHE_VERSION`.
 
-**Gap: nothing catches a *missing* `SHELL_ASSETS` entry.**
+**Gap: nothing catches a *missing* `SHELL_ASSETS` entry — and this spec adds
+~15 modules, so the gap must be closed first.**
 `tests/js/scaffold.test.mjs` fails on an entry with no file behind it but cannot
 detect a file with no entry — the exact failure mode `GEMINI.md` and `README.md`
-both call out, and it is a silent offline-shell hole. Spec a new
-`tests/js/shell_assets.test.mjs` that walks `app/static/js/**` and
-`app/static/css/**`, excludes the vendored `js/pwa/` directory and `sw.js`
-itself, and asserts every remaining file appears in `SHELL_ASSETS`. That closes
-the hole before this spec adds ~15 modules.
+both call out, and it is a silent offline-shell hole. The direction that is
+tested is the harmless one: a `SHELL_ASSETS` entry pointing at a deleted file
+fails loudly. The direction that is untested is the damaging one: a new module
+that is imported, served, and cached by nothing — it works perfectly online and
+is simply **absent from the installed app**, which is a failure only a user on a
+subway can diagnose. With ~15 new modules landing under `app/static/js` and
+`app/static/css`, the probability of at least one omission is high and the cost
+is a broken offline shell. Spec a new `tests/js/shell_assets.test.mjs` that walks
+`app/static/js/**` and `app/static/css/**`, excludes the vendored `js/pwa/`
+directory and `sw.js` itself, and asserts every remaining file appears in
+`SHELL_ASSETS`. **This is a build-order prerequisite, not a nice-to-have: it
+ships in P1, before the first new frontend module, so the hole is closed before
+anything can fall into it.**
 
 **Variation matrix picks (Part 4), one per dimension:**
 
@@ -1046,9 +1518,28 @@ audit anchor, and `CONTEXT.md`'s loss-minimizing discipline applies to it too.
 | 4 | Emoji only, no alt | `🥦`, `🥚`, `🍚`, `🥔`, `🍠`, `🍅` | `emoji_only` | 6 |
 | 5 | `X/Y` with **no** leading emoji | `香料/Basil` | `alt_pair` | 2 |
 
-**The emoji dictionary is hardcoded and required.** 6 of 26 distinct `材料`
-values (23%) carry no recoverable name, and `🥚` alone appears in 3 of 16
-recipes. Minimum required keys:
+The emoji-only list is **not** confined to `材料`: three more emoji-only values
+exist in `调料` (`🧄`, `🫚`, `🍋‍🟩`) and the same parser handles them. The count
+in row 4 is 6 of the 26 distinct `材料` values. `🍔` is **not** among them —
+`🍔` appears in none of the 16 notes, and `🥔` (potato, from 烤土豆) is the value
+the earlier transcription meant.
+
+**The emoji dictionary is hardcoded and required, and it spans BOTH frontmatter
+keys.** 6 of the 26 distinct `材料` values (23%) carry no recoverable name, and
+`🥚` alone appears in 3 of 16 recipes. Three further emoji-only values live in
+`调料` — `🧄`, `🫚`, `🍋‍🟩` — and are parsed by the **same** function, which is
+why the dictionary is one set and not a `材料`-only table. `🌶️` is in the
+dictionary but is not an emoji-*only* value: in `材料` it appears only in the
+`🌶️/Shishito` shape, which carries a recoverable name.
+
+**This is an explicit key set, not a Unicode property class.** The distinction is
+forced by the data, not stylistic: `🍋‍🟩` is `U+1F34B U+200D U+1F7E9`, a
+**three-codepoint ZWJ sequence**. `\p{Extended_Pictographic}` matches its parts,
+not the run; the `regex` module's grapheme clustering is a new dependency
+(flag **F15**);
+and matching the three codepoints independently yields three unrelated emoji and
+garbage text. A *set of literal keys* is the only thing that expresses "this
+three-codepoint sequence is one key named 青柠". Minimum required keys:
 
 ```python
 EMOJI_NAMES = {
@@ -1243,10 +1734,20 @@ Two proofs that position cannot substitute for the lexicon, both live:
    `families` allowlist. Two candidates from different families are rejected.
    This is what makes the real data work: `芝麻` as a condiment is `1.1` (id 102)
    while `芝麻饼干` is `4` (id 25), so the class guard rejects the snack on
-   category alone, before the segment guard even runs.
+   category alone, before the segment guard even runs. The same holds for `蒜`:
+   real garlic is `1.1` while `乐事 …薯片蒜蓉面包味` is `4` (id 110), so the
+   family guard rejects it **independently of any tokenization**.
 
-Both guards are checked, not either. A test that only checks one is an incomplete
-implementation, and §10.2 asserts each of the five live rows individually.
+**Both guards are checked, not either — and each is independently required.**
+The per-row table in D1 shows which guard stops which row, and the result is
+asymmetric: the segment-boundary guard independently rejects all **six** live
+rows, while the family guard independently rejects **two** of them
+(`芝麻`→25 and `蒜`→110). That asymmetry is exactly why a single combined
+assertion over the six rows is not sufficient coverage: it would pass with
+either guard deleted. §10.2 therefore requires per-row assertions *plus* a
+negative control per guard — a test that removes one guard and asserts the row
+only that guard stops now resolves to the wrong candidate, which fails if the
+guard is deleted and passes if it works.
 
 **Fuzzy tolerance.** The final tier uses Levenshtein distance ≤ 1 on the
 **normalized** strings only, and only when both are ≥ 6 characters and
@@ -1270,7 +1771,7 @@ Order is not negotiable: a weaker tier must never pre-empt a stronger one.
 |---|---|---|---|
 | 1 | `exact_id` | The mapping already carries `pantry_item_id` and that id is still live in the catalog | 1.0 |
 | 2 | `exact_name` | `canonical_name == parsed_name`, exact after NFKC + whitespace trim only | 1.0 |
-| 3 | `variant_alias` | `parsed_name` equals a `variants[]` entry, case-insensitively, trimmed | 0.95 |
+| 3 | `variant_alias` | `parsed_name` equals a `variants[]` entry, case-insensitively, trimmed. **Expected to be near-dead: 3 of 178 rows have a non-empty `variants`, two of which are just the long product name.** Implemented because `CONTEXT.md` defines Pantry Item Alias in terms of `variants`; not load-bearing. | 0.95 |
 | 4 | `note_basename` | `parsed_name` relates to a catalog row's effective basename by the prefix + segment-boundary rule | 0.9 |
 | 5 | `normalized_exact` | `normalize_ingredient(parsed_name) == normalize_ingredient(canonical_name)` and the normalized form is ≥ 2 characters | 0.85 |
 | 6 | `synonym` | `parsed_name` hits a `synonyms.yaml` entry whose `families` allowlist contains **every** candidate's family, and all candidates share one family | 0.7 |
@@ -1479,22 +1980,69 @@ is what repairs mappings after a catalog re-import renumbers an id — the reaso
 re-resolution exists alongside the "never store an id in a lexicon file" rule
 (§9.8).
 
-#### 9.11.3 `PantryStockIndex` (`app/pantry/stock.py`) — the in-stock signal (flag F1)
+#### 9.11.3 `PantryStockIndex` (`app/pantry/stock.py`) — the in-stock signal (F1, locked)
 
-D4 requires an `in-stock` chip colour, which requires Pantry Stock. Stock lives in
-`Logistics/库存/Pantry.md` — `CONTEXT.md`: "See the existing
-`Logistics/库存/Pantry.md` note, which is the current home of stock state."
-`PANTRY_NOTE_RELATIVE` is a Server-Owned Root.
+D4 requires an `in-stock` chip colour, which requires Pantry Stock, and F1 fixes
+where Pantry Stock comes from: **the live vault note
+`Logistics/库存/Pantry.md`, in addition to the catalog.** `CONTEXT.md`: "See the
+existing `Logistics/库存/Pantry.md` note, which is the current home of stock
+state." `PANTRY_NOTE_RELATIVE` is a Server-Owned Root.
 
-The read reuses the **ported `app/vault/pantry.py` hardened parser** with its
-behaviour unchanged: `parse_pantry()` walks numbered H1 sections, H2/H3
-subsections, `dataviewjs` / `Tasks` fences, and task lines with
-`💵 $price ✍️/➕/🛫/✅` metadata; a unit-split child (`1/2`) counts per unit and the
-split parent is excluded from counts because its `💵` is the *per-unit* price;
-open is `[ ]` or `[/]`, and unrecognized markers are never open. Its
-`_MAX_ITEMS_TOTAL = 1000` bound, its byte-span `start`/`end` discipline, and its
-typed `PantryError` failures are kept as-is. The per-unit price rule is
-`CONTEXT.md`'s Pantry Unit rule and is not relaxed anywhere in this port.
+**Two sources, two jobs, and the split is not negotiable.** `pantry_items.db`
+answers *"which product is this?"* — `pantry_item_id`, brand, `💵` price. The
+vault note answers *"do I have it right now?"* — `open` / `in_progress` /
+`done` / `cancelled`, per Pantry Unit. Neither alone answers D4's question:
+`红苋菜苗` (139) and `新鲜小叶茼蒿` (70) are in the catalog and are **not** open in
+the pantry, and `空心菜嫩苗` (83) was `❌` cancelled on 2026-09-22 and re-bought
+two days later, so its catalog row cannot say which purchase is current. The
+full measured table is in F1; it is the reason this subsection exists.
+
+**Reuse, not reimplementation.** The read uses the **ported
+`app/vault/pantry.py`** with behaviour unchanged. The full element-by-element
+contract is the table in F3's sibling decision F1; in summary:
+
+- `parse_pantry(source: bytes, *, max_bytes: int = 2_000_000) -> PantrySnapshot`
+  walks numbered H1 sections, H2/H3 subsections, `dataviewjs` / `Tasks` fences,
+  and task lines with `💵 $price ✍️/➕/🛫/✅` metadata. Its
+  `_MAX_ITEMS_TOTAL = 1000` bound, its byte-span `start`/`end` discipline, and
+  its typed `PantryError` failures are kept as-is. F1 carries the
+  element-by-element table of the regex vocabulary, the status set, and
+  `derived_status`; the points that most often get re-derived wrongly are:
+- The regex vocabulary is carried over verbatim: `_TASK` (single-character
+  status, matched not assumed), `_MONEY`, `_UNIT` (`^\d+\/\d+`, the unit-split
+  marker), `_ADDED`, `_ENDED` (`[✅❌]` plus a date — this is what recovers a
+  cancellation date), `_TAG` / `_TAG_TOKEN`.
+- `_OPEN_STATUSES = {" ", "/"}`. `[ ]` is open, `[/]` is in-progress, and an
+  **unrecognized marker is never open** — `[-]`, `[>]` and anything else is
+  dropped. This is load-bearing: it is why the money totals in the three existing
+  implementations agree.
+- `derived_status(index)`: a parent is `done` iff **all** children are `done`,
+  `in_progress` if **any** child is `done` or `in_progress`, else `open`; a
+  childless row uses `raw_status`.
+- The **per-unit parent exclusion** rule: a `_UNIT` row is a unit; its parent is
+  excluded from every count and every money total, because its `💵` is the
+  *per-unit* price. The per-unit price rule is `CONTEXT.md`'s Pantry Unit rule
+  and is not relaxed anywhere in this port.
+- `PantryIndex` is the TTL-cached, read-only snapshot provider this app inherits
+  as `PantryStockIndex`: `snapshot()` → `_refresh()` gated on
+  `time.monotonic()`, `PathSafetyError` → `PantryError("pantry_source_unreadable")`,
+  `None` → `PantryError("pantry_source_missing")`, TTL from
+  `stock_cache_seconds`. `invalidate()` and `close()` are wired even though the
+  PWA never writes stock, so a future write path does not have to add them.
+
+**The `💵 $X.XX` per-unit invariant, restated because it is the single easiest
+thing in this app to get wrong.** `💵 $X.XX` on a **parent** line is the
+**effective per-unit price**. Every consumer must **EXCLUDE the unit parent** and
+count each **open `k/N` subtask at that price**. Counting the parent *and* its
+units double-counts; counting the parent *instead of* its units halves a
+half-used item's value. **Three implementations of this math must stay in
+parity** — the `existingPantryValue` dataviewjs in `Logistics/库存/Pantry.md`,
+`Helper/scripts/pantry_snapshot.py`, and this app's logic — and the parity is a
+**test obligation**, not a comment: `scripts/snapshot_pantry_catalog.py` refuses
+to refresh `tests/fixtures/pantry_stock_math_parity.json` when the PWA's total
+and `pantry_snapshot.py`'s total disagree, and
+`tests/pantry/test_stock_math.py` asserts the PWA reproduces the frozen number.
+F1 specifies the three shape cases that must be covered.
 
 `PantryStockIndex` exposes:
 
@@ -1504,28 +2052,76 @@ typed `PantryError` failures are kept as-is. The per-unit price rule is
   by the ported `_clean_text` / `_tags_of`. So `空心菜嫩苗 0.95-1.05 磅` yields
   `空心菜嫩苗`, and the tier-4 basename lookup finds id 83. Using the *same*
   normalization as the matcher is what makes the two agree.
+- `in_stock_ids: frozenset[int]` — the joined view: every `in_stock_names` entry
+  that the Stock Join resolved to a live catalog row. This, not the name set, is
+  what the chip classifier consumes.
+- `unjoined: tuple[StockJoinMiss, ...]` — open pantry lines with no catalog
+  row, each carrying its raw line text and its normalized product core. Surfaced
+  in the `调试` toggle and counted in `/health` as
+  `stock.unjoinedLineCount` and in `GET /api/recipes` as `stockUnjoinedCount`.
 - `sections: tuple[PantrySection, ...]` — for the counters in `/health` and for a
   future Pantry view (deferred, §15).
 - `note_revision` — `"sha256:" + sha256(source)`, the same convention as every
-  other note revision in the app.
-- `invalidate()` and `close()` — wired even though the PWA never writes stock, so
-  a future write path does not have to add them.
+  other note revision in the app, and the value returned as `stockRevision`.
+- `invalidate()` and `close()`.
 
-**The join is on the normalized name, never on a raw string.** That is the
-justification for the whole tier ladder: today **2 of 46** open `Pantry.md` lines
-fail an exact raw join against the catalog (`禾苑 蟹粉鱼肉狮子头 冷冻 280 克` vs
-id 108, and `Sanpellegrino CIAO! Peach Sparkling Water, 24-Pack`), and a 5-row
-duplicate-name set in the catalog (`优质白桃礼盒` 104/128, `韩国紫苏叶` 39/105,
-`POM Wonderful …` 155/167, `台湾旺旺浪味仙 …` 27/38, `乐事 … 薯片牛肉派味`
-111/124) means even a *successful* name join can land on either of two ids. The
-tier ladder tolerates both; a materialized mapping plus a repair path is the only
-thing that can be made stable when it is not.
+**The Stock Join, and the honesty it requires.** A pantry line is free text; a
+catalog row is a normalized name. The join is a normalized-name index built on
+`normalize_ingredient()` — the same function the matcher uses, which is the only
+reason the two sides can agree — in the order: exact `by_name` hit; tier-4
+`by_basename` hit; then a **manual override** from the committed
+`app/pantry/line_overrides.yaml`, which is keyed by the *normalized pantry-line
+name* and valued by a `canonical_name` looked up in the **live** catalog at read
+time. It is deliberately not keyed by id, because §9.8's "never store a Pantry
+Item id in a lexicon file" rule applies verbatim: `items.id` is `AUTOINCREMENT`
+and a re-import can renumber it.
+
+**This join is measurably weaker than the recipe→ingredient join, and the spec
+says so.** The measured miss rate is **2 in 46 open lines, not 1 in 23**: the
+misses are `禾苑 蟹粉鱼肉狮子头 冷冻 280 克` (the catalog row is
+`禾苑 蟹粉鱼肉狮子头`, id 108 — a trailing condition token survives) and
+`Sanpellegrino CIAO! Peach Sparkling Water, 24-Pack` (no catalog row resolves at
+all). On top of that, D1's 5-row duplicate-name set means even a *successful*
+join can land on either of two ids. The consequences are concrete and all three
+are specified in F1: the join gets **its own unresolved bucket**, separate from
+the ingredient matcher's; the debug toggle surfaces
+`stockJoinState ∈ {joined, override, unresolved}` beside the resolved id; and the
+override file is **load-bearing rather than a nicety**, because without it two
+live pantry lines are permanently unexplainable and the only remaining remedy
+would be editing the user's vault, which this app must never do.
+
+**The extra cost and the degradation decision.** F1 buys honest stock at the price
+of **one more vault file to read** (a second Server-Owned relative path, a second
+TTL, a second `note_revision`) and **one more whole-layer failure mode**: if
+`Pantry.md` is missing, unreadable, or unparseable, *every* recipe loses its
+stock colours, not one.
+
+**The decision is to fail closed.** `PantryStockIndex` raises `PantryError`;
+`GET /api/recipes` and `GET /api/recipes/{name}` return **503
+`pantry_stock_unreadable`**; the UI shows an error state naming the pantry note.
+There is no fallback, in either direction and none at all:
+
+- not "assume in stock" — silently inflates every score, and is exactly the
+  Pantry Item / Pantry Stock conflation `AGENTS.md` and `CONTEXT.md` forbid;
+- not "assume not in stock" — silently deflates every score to
+  `have-been-buying`, a plausible-looking wrong answer, the specific thing
+  `AGENTS.md` #3 says never to produce;
+- not "serve the list with every chip downgraded" — that *looks like data*.
+
+This is why §9.16 already specifies a 503 on `GET /api/recipes` for an
+unreadable source — F1 makes that branch real rather than theoretical, and names
+it `pantry_stock_unreadable`. The **recipe index is unaffected**, so `#/recipe/{name}` still renders a note's steps
+and cooking history; only the stock-derived chip colours are unavailable, and
+the provenance view says so explicitly rather than showing an empty chip row that
+could be mistaken for "nothing in stock".
 
 **Stock is derived per response, never stored.** The `in_stock` column that an
 early draft of §7.3 proposed is deliberately **not** created. Stock is volatile —
 the user toggles a task from Obsidian while the PWA is open — so persisting it
 would make the chip colour wrong and would give the app denormalized state that
-can silently go stale.
+can silently go stale. For the same reason the Stock Join is **not** a table:
+it is recomputed on every `stock_cache_seconds` refresh, and the only thing
+persisted is the hand-written override file, which is reviewed source.
 
 #### 9.11.4 `CookingLogWriter` (`app/cooklog/writer.py`)
 
@@ -1657,6 +2253,19 @@ the rejected `candidates_json`. That view also hosts the two repair actions
 (§9.10) — "重新解析未匹配项" and the per-row manual re-map picker, which searches
 `GET /api/pantry/items?q=` and writes through the manual endpoint.
 
+**The view also hosts F1's Stock Join table**, and this is not optional — F1's
+join is measurably the weakest link in the app (2 misses in 46 open lines), so
+the only thing standing between it and silent wrongness is that the misses are
+visible. It lists every open `Pantry.md` line with its raw text, its normalized
+product core, and its `stockJoinState ∈ {joined, override, unresolved}` plus the
+resolved `pantry_item_id` when joined. The `unresolved` rows are the actionable
+ones: each names the `canonical_name` to add to
+`app/pantry/line_overrides.yaml`, so repairing a miss is a one-line reviewed
+source edit rather than a database write or — far worse — an edit to the user's
+vault. `joined` rows resolved to a **duplicate** catalog name (D1's 5-row set)
+are shown with both candidate ids so the ambiguity is visible before it becomes
+a wrong chip.
+
 Flag **F7**: the API always returns the provenance fields on every recipe response
 (a 16-recipe list is a few kilobytes) so toggling 调试 is instant and cannot race.
 Single-user, private, loopback — the fields are not sensitive.
@@ -1687,17 +2296,25 @@ reaches a path.** `daily_notes_year_policy` bounds the year; a date outside it i
 1. `store.read_existing_if_exists(relative)` through `AtomicNoteStore` — a
    descriptor-pinned, no-follow read that normalizes transient descriptor races
    to a typed `PathSafetyError`. `None` means absent → step 1a.
-   1a. **Create via the Obsidian CLI + QuickAdd** (§9.15), then re-read.
+   1a. **The note is absent: the F4 error path, never a creation.** Re-check
+   **once** (F4 step 1); if the note is now present, return 409
+   `daily_note_created_concurrently`; if it is still absent after two reads,
+   return 404 `daily_note_missing` with `message`, `date`, `relativePath`, and
+   `retryable: true`. Full contract in §9.15. The PWA does not create the note
+   and does not invoke any external process to create it.
 2. `parse_sections(source)` → `require_unique("笔记", level=None,
    code="ambiguous_notes_section")`. More than one `笔记` region **fails closed**
    with 409 `ambiguous_notes_section` — the vault's own `sectionUpsert` is
    first-match-wins substring matching (`lines[i].includes(keyword)`) and the PWA
-   must not replicate that, per `sections.py`'s own docstring.
+   must not replicate that, per `sections.py`'s own docstring. A note with **no**
+   `笔记` heading at all is 422 `notes_section_missing`, never a silent heading
+   insertion.
 3. **Dedupe.** Scan the **entire** note source for an existing wikilink to this
    recipe. The check is a whole-note scan, not a region check, because the vault
-   already places logged cooks in two different regions (§3, D2). The predicate
-   mirrors `recipeTracker.md`'s own match — an outlink whose `path.includes(recipe)`
-   or `display === recipe` — implemented as a regex over the source:
+   already places logged cooks in two other regions than the one this spec writes
+   to (§3, F3: `2026-03-10` and `2026-09-14`). The predicate mirrors
+   `recipeTracker.md`'s own match — an outlink whose `path.includes(recipe)` or
+   `display === recipe` — implemented as a regex over the source:
    `\[\[[^\]]*\|?\s*<escaped-recipe>\s*\]\]`. A hit returns
    `CookLogResult(status="duplicate", wrote=False)` with the current
    `noteRevision`, HTTP 200, and **no write**.
@@ -1708,13 +2325,18 @@ reaches a path.** `daily_notes_year_policy` bounds the year; a date outside it i
    statement about a date, not a delta, so a blind retry would be wrong.
 5. **The patch.** A pure function
    `append_cook_link(source: bytes, region: Region, link_line: bytes) -> bytes`
-   that splices `source[:insert_at] + link_line + newline + source[insert_at:]`
-   and touches **nothing else**. This is the same span discipline as
-   `frontmatter.py`'s `render()` and `pantry.py`'s `_set_status` — byte spans
-   into the original `source`, never a re-serialization. `link_line` is
-   `[[<recipe_note>]]`: no timestamp, no emoji, no bullet, no trailing metadata.
-   `recipeTracker` counts *pages*, so decoration would only pollute the user's
-   daily note.
+   that splices `source[:insert_at] + link_line + terminator + source[insert_at:]`
+   and touches **nothing else**, where `terminator` is the line terminator read
+   from `source` at the insertion point — **not** a hard-coded `b"\n"`, for the
+   measured reason in F3 step 5. This is the same span discipline as
+   `frontmatter.py`'s `render()` and the ported `pantry.py`'s `_set_status` — byte
+   spans into the original `source`, never a re-serialization. `link_line` is
+   `- [[<recipe_note>]]`: a Markdown **list item**, no timestamp, no emoji, no
+   task box, no trailing metadata. The exact `insert_at`, the `blank=True`
+   empty-region handling, the terminator rule, and the "the heading already
+   exists, nothing is created" clarification are all specified in **F3**; this
+   step references F3 rather than restating it. `recipeTracker` counts *pages*,
+   so decoration would only pollute the user's daily note.
 6. **Commit** via `AtomicNoteStore.transform_existing(relative, transform)`,
    which already provides: a per-relative `flock` plus an in-process lock; a
    `_same_file` identity check (dev/ino/size/mtime_ns) **before** the replace; a
@@ -1748,22 +2370,18 @@ daily note would rewrite `modified_at`, disturb the `INPUT[toggle(...)]` inline
 fields, and potentially reorder frontmatter keys. Step 5 is a byte splice;
 nothing else is permitted.
 
-**Flag F3 — the placement ambiguity.** `parse_sections()` computes the `笔记`
-region as only the heading line — verified live against
-`日记/2026/2026-09-27.md`, byte span `4265..4275`, content `b'\n'`,
-`blank=True` — because the next line is a ` ````columns ` fence and a region ends
-at the first following fence or heading line. "Insert at the end of the `笔记`
-region" therefore places the link **between `# 笔记` and the columns fence**:
-valid Markdown, and `recipeTracker` will still find it (it scans every outlink on
-the page, so position is irrelevant to it), but it matches neither of the vault's
-two existing logged cooks.
-
-**Recommended resolution, to confirm as F3:** insert immediately after the last
-line of the `![[dailyModify.base|ordered-list]]` embed when that embed is present
-in the note; otherwise fall back to the end of the `笔记` region. This matches the
-`2026-03-10` precedent, keeps the link inside 笔记's column layout, and is still a
-pure byte splice. The alternative — directly under the `# 笔记` heading — is
-simpler, is the literal reading of D2, and is equally correct for `recipeTracker`.
+**Placement is F3, and it is locked.** The `笔记` region computed by
+`parse_sections()` in the live `日记/2026/2026-09-27.md` is only the heading line
+— byte span `4265..4275`, content `b'\n'`, `blank=True` — because the next line
+is a ` ````columns ` fence. The insertion point is the region's **`heading_end`**
+offset, not its `end` offset, so the link lands **between `# 笔记` and the columns
+fence**. That is valid Markdown, `recipeTracker` finds it (it scans every outlink
+on the page, so position is irrelevant to it), and the previous draft's
+"insert after the `![[dailyModify.base|ordered-list]]` embed" preference is
+**withdrawn**. The full algorithm, the blank-line handling, the confirmation that
+the heading already exists so nothing is created, and the withdrawn-preference
+rationale are all in **F3**. `tests/cooklog/test_writer.py` and
+`tests/vault/test_sections.py` assert the F3 byte layout directly.
 
 **Conflict UX (§5a, set semantics).** A 409 shows a resolve panel with the
 PWA's intent and the current server state side by side, and any follow-up write
@@ -1777,66 +2395,103 @@ paired with the vendored `unstickOnTimeout` helper
 `app/static/js/**` is paired with the helper — the same coverage
 `pwa-obsidian-daily` has.
 
-### 9.15 Creating a missing daily note (flag F4)
+### 9.15 A missing daily note is an error, not a creation (F4, locked)
 
-**Decision to confirm.** D2 asks for creating an absent daily note "via the same
-hardened path as the sibling app", which points at `pwa-obsidian-daily`'s
-`DailyNoteCreationService`. This spec adopts that: an `app/vault/obsidian_cli.py`
-port that shells out to the **official Obsidian CLI** and, when
-`daily_quickadd_choice` is configured, to `quickadd:run` so the vault's own macro
-creates through the Templater API. The PWA **never writes the daily-note file
-itself** — `AtomicNoteStore.create_new` is explicitly *not* used for daily notes,
-and `tests/browser/test_cook_log_flow.py` step 5 asserts that no file is created.
+This section replaces the Obsidian CLI / QuickAdd creation design entirely. See
+**F4** in §3 for the decision, its rationale, and what was removed.
 
-This contradicts `AGENTS.md` non-negotiable #1 ("never creates a missing daily
-note") and the matching lines in `README.md` and `.env.example`. **Both files
-must be amended in the same commit that adds `app/vault/obsidian_cli.py`**,
-narrowing the claim to "never creates a daily note by writing the file; the only
-creation path is the configured Obsidian CLI / QuickAdd invocation". Flagged
-rather than silently reinterpreting a non-negotiable.
+**There is no creation code.** No `app/vault/obsidian_cli.py`, no subprocess,
+no `OBSIDIAN_CLI_EXECUTABLE`, no `TV_SYNC_COMMAND_ID`, no QuickAdd choice, no
+Templater settle window, no `CreationIdempotencyStore`, and no idempotency
+ledger table. `AtomicNoteStore.create_new` and `create_directory` are **not**
+ported for this purpose and the daily-note path never calls them. The only
+primitive the Cooking Log uses is `transform_existing`, on a file already
+present.
 
-Ported behaviour, kept intact:
+**The error contract.** `read_existing_if_exists` returning `None` is the only
+trigger.
 
-- Direct argument vector, never a shell, never `overwrite`:
-  `<cli> vault=<id> create path=<derived> template=<template>`, or
-  `<cli> vault=<id> quickadd:run choice=<choice> vars={"date":"<validated>"}`.
-  A request contributes only the already-validated date, so it can never select
-  the binary, the vault, the target path, the template, the choice, or the
-  environment.
-- Fixed subprocess environment allowlist: `HOME` (configured `cli_home` or
-  inherited), minimal `PATH=/usr/bin:/bin:/usr/sbin:/sbin`, `LANG`/`LC_ALL` =
-  `C.UTF-8`, inherited `TMPDIR`. No request data can set an environment variable.
-- Bounded pipes with a `selectors` loop, a `cli_max_output_bytes` cap, a
-  `cli_timeout_seconds` deadline, `start_new_session=True`, and a process-group
-  `SIGKILL` teardown.
-- `VaultUnavailable` vs `ObsidianUnavailable` classification from a stderr tail
-  bounded to 2048 bytes and never logged verbatim.
-- **Settle window**: Templater rewrites the note asynchronously, so the target can
-  appear byte-stable with unresolved `<% %>` tokens. Poll until
-  `validate_created_content(source, daily_required_markers)` passes or the window
-  expires.
-- **Rollback of an unusable created note**: if the settle window expires, the
-  bytes are provably ours (absent before, never validated) and are discarded. A
-  half-expanded frontmatter poisons that date and would make every later read 409
-  until someone repaired it by hand.
-- **Idempotency ledger**: `CreationIdempotencyStore` in the PWA's SQLite, keyed by
-  a caller-supplied UUID `idempotency_key`, with a `request_fingerprint` over
-  `{relative, vault_id, template, quickadd_choice, root, executable, markers}`. A
-  reused key with a different fingerprint is 409 `idempotency_key_reused`; a
-  reused key with the same fingerprint replays the stored result. An
-  `intent`/`complete` pair means a crash mid-create is recovered by re-checking
-  whether the target now exists.
+| Step | Action | Result |
+|---|---|---|
+| 1 | `store.read_existing_if_exists(relative)` | `bytes` → proceed with the write |
+| 2 | On `None`: re-resolve the path and re-read, **once**, bounded at 2 attempts, no sleep loop | `bytes` → the note appeared under us |
+| 3 | `bytes` on the second read | **409 `daily_note_created_concurrently`** with `relativePath`, `currentRevision`, `retryable: true` |
+| 4 | `None` on both reads | **404 `daily_note_missing`** with `message`, `date`, `relativePath`, `retryable: true` |
+| 5 | `transform_existing` raises `ConcurrentFileChange` because the target vanished before replace | **409 `daily_note_changed`** — the existing code, *not* `daily_note_missing` |
 
-**Degradation is creation-only.** If the CLI is unconfigured or Obsidian is
-unavailable, the service reports `creation_unavailable` and the Cooking Log write
-returns 503 `daily_note_creation_unavailable` **only when the note is actually
-missing**. Logging into an existing note keeps working. This mirrors
-`pwa-obsidian-daily`, where an unusable creation adapter must not take down the
-existing-note service.
+Steps 2–4 are the **concurrent-external-writer rule** from `atomic_write.py`,
+where the write primitive never assumes it is the only writer. The consequence
+is the important part: **`daily_note_missing` means the note is absent, full
+stop.** A note that exists in the vault but that the app saw missing — iCloud
+sync lag, an Obsidian write landing between reads, a briefly stale network
+volume — is a `409`, never a `404`. Reporting a lost race as "not found" would
+send the user to create a note that already exists, and the second attempt would
+then fail differently, which is a confusing two-error round trip for what is
+really a millisecond race.
 
-**Folder creation.** The ported `AtomicNoteStore.create_directory` is used for the
-`日记/{year}/` directory only — descriptor-pinned, idempotent, no-follow. It is
-never called with a request-derived path, and never for a nested arbitrary path.
+The `409 daily_note_created_concurrently` **reuses §9.14's existing 409 resolve
+panel** rather than introducing a second conflict UI. The user taps retry; the
+write then proceeds normally because a note exists.
+
+**The envelope extension.** The scaffold's error envelope is
+`{"requestId", "code"}`. Two codes add optional fields, and the change is
+additive so no existing response changes shape:
+
+```json
+{
+  "requestId": "…",
+  "code": "daily_note_missing",
+  "message": "找不到 2026-09-27 的日记：日记/2026/2026-09-27.md。请先在 Obsidian 中创建这一天的日记，然后重试。",
+  "date": "2026-09-27",
+  "relativePath": "日记/2026/2026-09-27.md",
+  "retryable": true
+}
+```
+
+The `message` is in Chinese because that is the app's user-facing language
+throughout (`笔记`, `严格模式（含调料）`, `待 Obsidian 同步`, `⚠ 已重命名`). Gloss
+for a reader of this spec: *"Cannot find the daily note for 2026-09-27:
+日记/2026/2026-09-27.md. Create that day's note in Obsidian first, then retry."*
+
+- `message` names **both** the human date and the exact vault-relative path, so
+  the fix is one paste into Obsidian's quick switcher. The UI renders `message`
+  **verbatim** and synthesizes no copy of its own, so there is exactly one
+  wording to keep correct. A localization change is a one-line change.
+- `relativePath` is **vault-relative**, never absolute, so the Server-Owned Root
+  invariant survives and `/health` still leaks no path.
+- `retryable: true` is literal: the identical request succeeds once the note
+  exists. The client shows a retry affordance rather than a dead end.
+- Every pre-existing error code keeps emitting exactly `{"requestId", "code"}`.
+  `message`, `date`, `relativePath`, and `retryable` default to absent.
+
+**`GET /api/cook-logs?date=` returns the same 404** with the same shape for a
+missing date. A read-back that returned `{"entries": []}` for a date whose note
+does not exist would assert "you cooked nothing that day", which is a different
+claim from "there is no record of that day" and is not one this app can support.
+
+**Read-only mode ordering.** `OBSIDIAN_READ_ONLY=true` yields 403 `read_only`
+**before** any note-existence check (§9.16's guard order), so a read-only
+deployment cannot be used to probe which daily notes exist by comparing 403
+against 404.
+
+**What is deliberately gone, so a future reader does not "restore" it.** The
+removed design had a direct argument in its favour — `pwa-obsidian-daily` already
+implements it, and back-dating into an un-journalled day is a real use case. It
+is still the wrong call here, for reasons that are specific to *this* repo:
+
+1. It contradicted `AGENTS.md` non-negotiable #1 and required amending that
+   file, plus `README.md` and `.env.example`, to narrow the claim. F4 keeps the
+   non-negotiable **correct as written**, which is worth more than the feature.
+2. It added a subprocess sandbox, a Templater settle window, a
+   unusable-note rollback, and a UUID idempotency ledger — roughly ten times the
+   surface area — to handle the case where the user has not written that day's
+   note, which is exactly when they should be writing it.
+3. Its fatal edge case was a half-expanded frontmatter left in a daily note,
+   which poisons that date and makes every later read 409 until repaired by hand.
+   The error path has no such state.
+
+The cost that remains: back-dating into an un-journalled day needs one action in
+Obsidian first. Accepted deliberately, and stated again in §15.
 
 ### 9.16 API contract
 
@@ -1844,15 +2499,18 @@ All `/api/*` responses are `Cache-Control: no-store` (the scaffold's
 `cache_policy` middleware already does this, correctly exempting `/api/version`,
 whose stronger headers the vendored `install_pwa_version` owns). All errors use
 the scaffold's existing envelope: `{"requestId": ..., "code": ...}` plus
-`X-Request-ID`.
+`X-Request-ID`. **Two** error codes add optional `message` / `date` /
+`relativePath` / `retryable` fields — `daily_note_missing` and
+`daily_note_created_concurrently` (§9.15) — and the extension is additive: every
+other code still emits exactly `{"requestId", "code"}`.
 
 | Method + path | Purpose | Success | Errors |
 |---|---|---|---|
 | `GET /api/version` | Existing convergence gate | `{"version": "v…"}` | — |
 | `GET /api/session` | Identity, CSRF token, capability flags | `{"identity","csrfToken","version","readOnly","appTimezone"}` | 401 `identity_*` |
 | `GET /api/pantry/items?q=&limit=` | Catalog search for the manual picker | `{"items":[{id,canonicalName,category,area,variants,lastSeen}],"catalogRevision"}` | 422 bad query |
-| `GET /api/recipes?strict=0` | The list, with per-Ingredient provenance | `{"recipes":[…],"catalogRevision","stockRevision","staleMappingCount","strict"}` | 503 pantry/stock unreadable |
-| `GET /api/recipes/{note_name}` | One Recipe, full | `{"recipe":{…,"ingredients":[{index,rawValue,parsedName,parseMethod,matchMethod,matchTier,pantryItemId,confidence,chipClass,isSeasoning}],"history":{…}}}` | 404 `recipe_not_found` |
+| `GET /api/recipes?strict=0` | The list, with per-Ingredient provenance | `{"recipes":[…],"catalogRevision","stockRevision","strict","staleMappingCount","stockUnjoinedCount"}` | 503 `pantry_stock_unreadable` / `pantry_db_unreadable` |
+| `GET /api/recipes/{note_name}` | One Recipe, full | `{"recipe":{…,"ingredients":[{index,rawValue,parsedName,parseMethod,matchMethod,matchTier,pantryItemId,confidence,chipClass,stockJoinState,isSeasoning}],"history":{…}}}` | 404 `recipe_not_found`; 503 `pantry_stock_unreadable` |
 | `POST /api/recipes/resolve` | Re-resolve unresolved and stale rows | `{"reconsidered":N,"resolved":N,"stillUnresolved":N,"staleReset":N}` | 409 while a resolve is in flight |
 | `PUT /api/recipes/{note_name}/ingredients/{index}/mapping` | Manual re-map | `{"mapping":{…}}` | 404 / 422 / 403 `read_only` |
 | `DELETE /api/recipes/{note_name}/ingredients/{index}/mapping` | Clear a manual row | `{"mapping":null}` | 404 |
@@ -1860,8 +2518,25 @@ the scaffold's existing envelope: `{"requestId": ..., "code": ...}` plus
 | `POST /api/shortlists/{slot}` | Add | `{"slot","items":[…]}` | 422 bad slot / unknown recipe |
 | `DELETE /api/shortlists/{slot}/{note_name}` | Remove | `{"slot","items":[…]}` | 404 |
 | `PUT /api/shortlists/{slot}/order` | Reorder | `{"slot","items":[…]}` | 422 membership mismatch |
-| `GET /api/cook-logs?date=` | Read-back for a date | `{"date","relativePath","noteRevision","entries":[{recipeNote,writtenAt,trackerSynced}]}` | 422 bad date |
-| `POST /api/cook-logs` | The Cooking Log write | `201 {"status":"logged","relativePath","noteRevision"}` or `200 {"status":"duplicate",…}` | 409 `daily_note_changed` / `ambiguous_notes_section`; 503 `daily_note_creation_unavailable`; 413 body cap |
+| `GET /api/cook-logs?date=` | Read-back for a date | `{"date","relativePath","noteRevision","entries":[{recipeNote,writtenAt,trackerSynced}]}` | 422 bad date; **404 `daily_note_missing`** (same envelope extension, §9.15) |
+| `POST /api/cook-logs` | The Cooking Log write | `201 {"status":"logged","relativePath","noteRevision"}` or `200 {"status":"duplicate",…}` | 404 `daily_note_missing`; 409 `daily_note_changed` / `daily_note_created_concurrently` / `ambiguous_notes_section`; 422 `notes_section_missing`; 413 body cap |
+
+**F1's two new response fields.** `stockUnjoinedCount` on `GET /api/recipes` is
+the count of open `Pantry.md` lines the Stock Join could not resolve to a
+catalog row (F1). `stockJoinState` on each Ingredient is
+`joined | override | unresolved` — the Stock Join's own state, distinct from
+`matchMethod`, which describes the recipe→catalog resolution. Both exist so that
+F1's acknowledged weak join is **visible** rather than silent, and both are what
+the `调试` toggle renders.
+
+**F4's 503 is gone.** There is no `daily_note_creation_unavailable`, because
+there is no creation service. A missing daily note is a **404**, not a 503: the
+request is well-formed and the resource is absent, and 503 would wrongly imply
+the server is temporarily unhealthy and invite a blind retry. The remaining 503s
+on the read paths are F1's **fail-closed** `pantry_stock_unreadable` and the
+catalog's `pantry_db_unreadable` — both genuinely "a source this app depends on
+is unreadable", and both permanent until the user fixes the vault, which is why
+the UI must not present them as retry-soon.
 
 `{note_name}` is the **URL-encoded basename**, resolved against the in-memory
 index. It is never joined to a path by the client and never trusted as one: the
@@ -1910,7 +2585,9 @@ CSRF          → 403 csrf_required | csrf_invalid          [mutations]
   must not be able to distinguish the read-only flag from the identity checks.
   Unlike `pwa-obsidian-daily` there is **no** write allowlist in read-only mode
   (flag **F18**) — a read-only Pantry Recipes PWA that could still log a cook or
-  edit a shortlist would be a confusing half-mode.
+  edit a shortlist would be a confusing half-mode. `read_only` is checked
+  **before** any note-existence check, so a read-only deployment cannot be used
+  to probe which daily notes exist by comparing 403 against 404 (§9.15).
 - **CSRF.** `secrets.token_urlsafe(32)` (43 characters), 3600 s TTL, a rolling
   window of 16 tokens so concurrent tabs do not race, bounded at 128 characters on
   input, cleared on process restart, issued by `GET /api/session`.
@@ -2046,12 +2723,14 @@ and a rolling deploy stay safe while the startup migration remains authoritative
 ### 9.19 `main.py` wiring
 
 - The `lifespan` opens `PantryCatalog` (read-only), `RecipeIndex`,
-  `PantryStockIndex`, the `AtomicNoteStore`, `IngredientMappingStore`,
-  `MealShortlistStore`, and `DailyNoteCreationService`, and runs `init_db()`.
+  `PantryStockIndex`, the `AtomicNoteStore`, `IngredientMappingStore`, and
+  `MealShortlistStore`, and runs `init_db()`.
   Every one is closed in a `finally` — a descriptor leak must not outlive
   shutdown. The LaunchAgent's `SoftResourceLimits NumberOfFiles 8192` exists
   because launchd's default 256 is not the shell's `ulimit -n`, and a descriptor
-  leak otherwise only appears in production.
+  leak otherwise only appears in production. **There is no creation service in
+  the lifespan** (F4): the previous draft listed `DailyNoteCreationService`
+  here, and it does not exist.
 - Route registration order is load-bearing and unchanged in shape
   (`app/main.py` docstring + `CLAUDE.md` § *Traps*):
   `install_pwa_version` → exception handlers → `cache_policy` middleware →
@@ -2062,12 +2741,17 @@ and a rolling deploy stay safe while the startup migration remains authoritative
 - The `/api/{unmatched_path:path}` catch-all keeps its
   `{"requestId","code":"not_found"}` envelope, so an unknown `/api/*` never falls
   through to the static mount's HTML 404.
-- `_api_error` is unchanged. New error codes are raised by
+- `_api_error` is unchanged, **except** for the additive envelope extension in
+  §9.15: an exception detail may carry optional `message`, `date`,
+  `relativePath`, and `retryable`, all defaulting to absent, so every
+  pre-existing code still emits exactly `{"requestId", "code"}`. `relativePath`
+  is always vault-relative, so `/health` and the envelope both leak no absolute
+  path. All other new error codes are raised by
   `HTTPException(status, detail=...)` from a route, which the existing
   `StarletteHTTPException` handler already maps to the envelope for `/api/*`.
 - `/health` gains `pantry_db.rowCount`, `recipes.count`, `recipes.skipped`,
-  `stock.openCount`, and `mappings.unresolvedCount`, and continues to leak **no**
-  paths.
+  `stock.openCount`, `stock.unjoinedLineCount`, and
+  `mappings.unresolvedCount`, and continues to leak **no** paths.
 
 ### 9.20 Deferred integrations — named so they are not invented twice
 
@@ -2119,24 +2803,26 @@ icon files to the wheel-content check.
 
 | File | Covers |
 |---|---|
-| `tests/scaffold/test_app.py` (extend) | The converge gate, `/js/{path}` injection, traversal rejection, the JSON 404 envelope, fail-closed config. Add: `/api/session` shape, the new `/health` counters, and the security headers on every response. |
+| `tests/scaffold/test_app.py` (extend) | The converge gate, `/js/{path}` injection, traversal rejection, the JSON 404 envelope, fail-closed config. Add: `/api/session` shape, the new `/health` counters, the security headers on every response, and **an assertion of the exact new-`Settings`-field set**, so that any field F4 removed is a test failure rather than a silent regression. The field names are enumerated once, in §6; this test asserts the set, it does not restate it. |
 | `tests/scaffold/test_routes.py` (new) | Every route in §9.16 responds; `/api/does-not-exist` returns the envelope; `/js/../config.py` still 404s; `POST /api/cook-logs` with no CSRF token is 403. |
 | `tests/db/test_migrations.py` (new) | `init_db()` is idempotent; `schema_migrations` records every version; a re-run is a no-op; the six pragmas are applied on every connection. |
 | `tests/vault/test_atomic_write.py` (new) | Descriptor pinning, symlink refusal, CAS via `race_hook`, backup-then-replace, post-write verification failure and its `finally` cleanup, `ConcurrentFileExists`. |
 | `tests/vault/test_frontmatter.py` (new) | `render()` leaves unrelated bytes byte-identical; a block list round-trips; a duplicate key fails closed. |
-| `tests/vault/test_sections.py` (new) | The `笔记` region is the heading line in a real daily note (the `2026-09-27.md` shape, span `4265..4275`); `require_unique` raises on two. |
+| `tests/vault/test_sections.py` (new) | The `笔记` region is the heading line in a real daily note (the `2026-09-27.md` shape, span `4265..4275`, content `b'\n'`, `blank=True`); `require_unique` raises on two; a note with no `笔记` heading raises the missing-section error rather than inserting one. |
 | `tests/vault/test_daily_paths.py` (new) | `resolve("2026-09-27") == "日记/2026/2026-09-27.md"`; rejects `2026-9-27`, `../x`, an absolute path, and a year outside the policy. |
-| `tests/vault/test_pantry_stock.py` (new) | Open vs done markers; `禾苑 蟹粉鱼肉狮子头 冷冻 280 克` yields a product core that tier 4 finds at id 108; a unit-split parent is excluded and its units are not; the `[1 MiB]` / count bounds hold. |
-| `tests/recipes/test_ingredients.py` (new) | All five shapes; `🌶️` with and without `U+FE0F`; `🍋‍🟩` as **one** ZWJ run; `"[[Mackerel]]"`; bare `空心菜`; `raw` preserved byte-for-byte. |
+| `tests/vault/test_pantry_stock.py` (new) | Open vs done markers, from the ported parser: `[ ]` and `[/]` are open, `[x]`/`[X]` are done, `[-]`/`[>]`/unknown are **never** open; `derived_status` is `done` iff all children are done, `in_progress` if any child is done or in-progress, else `open`; `_ADDED`/`_ENDED` recover the `➕`/`✅`/`❌` dates; `禾苑 蟹粉鱼肉狮子头 冷冻 280 克` yields a product core that tier 4 finds at id 108; the `_MAX_ITEMS_TOTAL` and `max_bytes` bounds hold. |
+| `tests/pantry/test_stock_join.py` (new) | **F1's join.** The exact-name tier, the tier-4 basename tier, and the `line_overrides.yaml` override tier, in order; the override is keyed by normalized line name and resolves a `canonical_name` to an id **at read time**, so a renumbered `items.id` does not break it; a duplicate catalog name surfaces both candidates; an unjoinable line lands in `unjoined` and **not** in `in_stock_ids`. |
+| `tests/pantry/test_stock_math.py` (new) | **F1's per-unit price parity obligation.** The three shape cases: a `3/3` parent derives `done` and contributes nothing; a `1/2` parent with one open unit contributes exactly **one** unit price and the parent contributes zero; a `[/]` in-progress unit counts as open. Reproduces the frozen total in `tests/fixtures/pantry_stock_math_parity.json` exactly, including the contributor and excluded-parent counts. |
+| `tests/recipes/test_ingredients.py` (new) | All five shapes; `🌶️` with and without `U+FE0F`; `🍋‍🟩` as **one** three-codepoint ZWJ run and **not** three separate emoji; `"[[Mackerel]]"`; bare `空心菜`; the 6 `材料` emoji-only values and the 3 `调料` ones; `raw` preserved byte-for-byte. |
 | `tests/recipes/test_normalize.py` (new) | The strip order; `Wang Korea 有机去壳甘栗仁 60g*5 300 克` → `有机去壳甘栗仁`; `Mushroom Dried Morel Mushrooms` keeps `Mushroom` (not a lexicon brand); `柴米 蒜香蒸茄子 300 克` keeps `蒜香蒸茄子`; `#tag` and emoji date markers stripped. |
 | `tests/recipes/test_matcher.py` (new) | Each tier in isolation, plus the ordering property: a value tier 2 can resolve is never resolved by tier 7. |
-| `tests/recipes/test_must_not_match.py` (new) | **The five rows from §3**: `蒜`→72, `蒜`→110, `土豆`→62, `芝麻`→25, `芝麻`→102 all resolve to `unresolved`. And the class guard alone: `芝麻` never resolves to a category-`4` row. |
+| `tests/recipes/test_must_not_match.py` (new) | **The six live rows from D1**, each asserted **individually**: `蒜`→72, `蒜`→110, `土豆`→62, `芝麻`→25, `芝麻`→102 all resolve to `unresolved`. **Plus a negative control per guard**, because the per-row table in D1 shows the guards are asymmetrically load-bearing: with the category-family guard disabled, `芝麻`→25 and `蒜`→110 are asserted to now resolve wrongly; with the segment-boundary guard disabled, `蒜`→72, `土豆`→62, and `芝麻`→102 are asserted to now resolve wrongly. A guard with no test that fails when it is deleted is not a guard. |
 | `tests/recipes/test_golden_real_recipes.py` (new) | §10.3. |
 | `tests/mapping/test_store.py` (new) | The inverted unique constraint: three recipes may map to id 83; one recipe may not map two slots to id 83; `manual` is immutable; `set_manual` deletes + inserts; `resolve_all` skips `manual`; a stale id is detected and reset. |
 | `tests/shortlists/test_store.py` (new) | Add is idempotent; remove re-sequences; reorder rejects a membership mismatch; all three slots always present; an unknown slot is a 422; a renamed recipe renders as broken, not dropped. |
-| `tests/cooklog/test_writer.py` (new) | The exact bytes appended; the `noteRevision` CAS 409; a duplicate is a 200 with no write; two `笔记` regions fail closed; the append is **byte-identical everywhere else** (assert the pre-image minus the splice). |
-| `tests/cooklog/test_creation.py` (new) | The fake-CLI contract fixture (ported from the sibling's `tests/creation/fixtures/fake_obsidian_cli.py`): create / already-exists / replayed; the settle window; the unusable-note rollback; `idempotency_key_reused`; the timeout; `vault_unavailable` classification; and that a hostile date never reaches the argv. |
-| `tests/api/test_auth.py` (new) | The guard **order** as a table: for each pair of failing guards, the earlier one wins. Both identity modes. `read_only` rejects before Origin. The 1 MiB cap. Chunked rejection. The CSRF lifecycle. Host rules. The CSP on every response. |
+| `tests/cooklog/test_writer.py` (new) | The exact bytes appended, matching **F3**'s layout: `- [[<recipe>]]` as the first list item under `# 笔记`, with the region's `blank=True` empty-region case producing `# 笔记\n- [[…]]\n` and no extra blank line; the `noteRevision` CAS 409; a duplicate is a 200 with no write; two `笔记` regions fail closed; a note with **no** `笔记` heading is 422 and writes nothing; the append is **byte-identical everywhere else** (assert the pre-image minus the splice). |
+| `tests/cooklog/test_missing_note.py` (new) | **F4.** 404 `daily_note_missing` with `message` naming both `2026-09-27` and `日记/2026/2026-09-27.md`, plus `date`, `relativePath`, `retryable: true`; a note that appears between the first and second read yields 409 `daily_note_created_concurrently`, **not** 404; the identical request succeeds once the note exists (the retryability claim is asserted, not assumed); `GET /api/cook-logs?date=` returns the same 404 for a missing date rather than an empty `entries`; `read_only` yields 403 **before** any existence check; every other error code still emits exactly `{"requestId","code"}`; and **no file is created** in any case. |
+| `tests/api/test_auth.py` (new) | The guard **order** as a table: for each pair of failing guards, the earlier one wins. Both identity modes. `read_only` rejects before Origin and before any note-existence check. The 1 MiB cap. Chunked rejection. The CSRF lifecycle. Host rules. The CSP on every response. |
 | `tests/api/test_recipes_api.py`, `test_shortlists_api.py`, `test_cooklog_api.py` (new) | Route contracts, status codes, and envelope shapes. |
 
 ### 10.3 The golden matcher test — the CI anchor for D1
@@ -2198,9 +2884,29 @@ Secondary golden assertions, computed from the same fixtures:
 - `staples`-satisfied share of distinct `调料` values — currently **~90% with**
   `staples.yaml` and **~5% without**.
 - Exactly **3 of 16** recipes have every Ingredient resolved.
+- `variant_alias` (tier 3) resolves **nothing** — the expected result, because 3
+  of 178 catalog rows have a non-empty `variants` and two of those are just the
+  long product name. **A near-zero tier-3 count is the assertion, not a
+  regression.** Recorded so a future reader who sees 0/0 tier-3 coverage in the
+  fixture does not "fix" it by loosening the tier, by widening the synonym set
+  to compensate, or by deleting the tier. The tier exists because
+  `CONTEXT.md` defines Pantry Item Alias in terms of `variants`.
 
 These three are the D1 evidence, frozen. An implementation that cannot reach them
 is either wrong or requires a deliberate re-measurement of the evidence.
+
+**What this golden test does not cover, and must not be read as covering.** It
+exercises the **recipe→catalog** join only. It says nothing about F1's
+**Stock Join** (pantry line → catalog row), which is a different join, has a
+different and worse measured miss rate (2 in 46, not 1 in 23), and is asserted
+separately in `tests/pantry/test_stock_join.py` and
+`tests/pantry/test_stock_math.py`. Its fixture,
+`tests/fixtures/pantry_stock_math_parity.json`, is regenerated by
+`scripts/snapshot_pantry_catalog.py`, which additionally **refuses to emit it**
+when the PWA's per-unit money total and `Helper/scripts/pantry_snapshot.py`'s
+total for the same date disagree. That refusal is the mechanism that keeps the
+three implementations of the `💵` per-unit math in parity, and it is the reason
+F1's invariant is a test obligation rather than a comment.
 
 ### 10.4 JS suite — `node --test`, no dependencies
 
@@ -2240,18 +2946,25 @@ against a `tmp_path` vault and `tmp_path` `APP_DATA_DIR`, never the real ones.
 
 1. Log a cook on today's date; assert the 201 `status: "logged"` and that the
    returned `relativePath` equals `日记/<year>/<today>.md`.
-2. **Read the file from disk** and assert the exact line `[[<recipe>]]` is
-   present, that the note's `modified_at` frontmatter and the
+2. **Read the file from disk** and assert the exact line `- [[<recipe>]]` is
+   present as the **first list item under the `# 笔记` heading** (F3), that the
+   note's `modified_at` frontmatter and the
    `![[dailyModify.base|ordered-list]]` embed are byte-identical to the pre-image,
    and that the `INPUT[toggle(...)]` lines are untouched.
 3. Log the same recipe again; assert `200 {"status":"duplicate"}` and that the
    file's `sha256` is **unchanged**.
 4. Write a competing change into the note out of band, then log with a stale
    `baseRevision`; assert 409 `daily_note_changed` and that the file is unchanged.
-5. Log into a date whose daily note does not exist; assert 503
-   `daily_note_creation_unavailable` (creation unconfigured in the test env) and
-   that **no file was created** — this is the assertion that proves the PWA never
-   writes the daily-note file itself.
+5. Log into a date whose daily note does not exist; assert **404
+   `daily_note_missing`**, that the response's `message` names both the date and
+   `日记/<year>/<date>.md`, that `retryable` is `true`, and that **no file was
+   created** — under F4 this is now unconditional rather than contingent on an
+   unconfigured creation adapter, so it is the assertion that carries the whole
+   decision. Then create the note in the fixture and assert the identical
+   request now succeeds, which is what makes `retryable: true` a tested claim.
+6. Exercise the race: have the fixture create the note between the server's
+   first and second read; assert **409 `daily_note_created_concurrently`** and
+   **not** `daily_note_missing`.
 
 ### 10.6 Type and lint scope
 
@@ -2270,11 +2983,13 @@ context given only the ticket, this spec, `AGENTS.md`, and `CONTEXT.md` — neve
 the design conversation (`idea-to-ship` §4).
 
 ```
-P1  Config + auth middleware + GET /api/session          deps: —
+P1  Config + auth middleware + GET /api/session
+    + tests/js/shell_assets.test.mjs                    deps: —
 P2  SQLite schema.sql + database.py + init_db            deps: —
 P3  Vault read primitives: atomic_write, frontmatter,
     sections, daily_paths, pantry                        deps: —
-P4  PantryCatalog + PantryStockIndex                     deps: P2, P3
+P4  PantryCatalog + PantryStockIndex + the Stock Join
+    + line_overrides + the per-unit money parity test     deps: P2, P3
 P5  Ingredient parser + emoji dictionary + normalize      deps: —
 P6  Tier ladder + staples.yaml + synonyms.yaml            deps: P4, P5
 P7  IngredientMappingStore + re-resolve + manual
@@ -2282,18 +2997,46 @@ P7  IngredientMappingStore + re-resolve + manual
 P8  RecipeIndex + GET /api/recipes + /api/recipes/{name}
     + GET /api/pantry/items                              deps: P4, P7
 P9  MealShortlistStore + /api/shortlists                 deps: P2, P8
-P10 CookingLogWriter: path policy, CAS, region, dedupe,
-    POST+GET /api/cook-logs                              deps: P3, P7
-P11 Daily-note creation: obsidian_cli + idempotency      deps: P10
-P12 Frontend: router, views, components, tokens, styles,
-    the honest display, provenance toggle                deps: P8, P9
-P13 Icons + install polish + SHELL_ASSETS + drift gate   deps: P12
-P14 Offline outbox wiring + X-Client-Id ledger            deps: P9, P10
-P15 Playwright browser tests                             deps: P12, P10
-P16 Deploy: launchd bootstrap, Tailscale Serve, converge deps: all
+P10 CookingLogWriter: path policy, CAS, F3 region splice,
+    dedupe, the F4 missing-note error, POST+GET
+    /api/cook-logs                                       deps: P3, P7
+P11 Frontend: router, views, components, tokens, styles,
+    the honest display, provenance toggle, the F1
+    provenance Stock Join table                          deps: P8, P9
+P12 Icons + install polish + SHELL_ASSETS + drift gate   deps: P11
+P13 Offline outbox wiring + X-Client-Id ledger            deps: P9, P10
+P14 Playwright browser tests                             deps: P11, P10
+P15 Deploy: launchd bootstrap, Tailscale Serve, converge deps: all
 ```
 
-Critical path: **P5 → P6 → P7 → P8 → P12 → P15**. P1, P2, P3 and P5 are
+**F4 removed a phase and the list is renormalized.** The previous draft's `P11
+Daily-note creation: obsidian_cli + idempotency` existed only to build the
+Obsidian CLI / QuickAdd port, its nine `Settings` fields, the Templater settle
+window, the rollback, and the idempotency ledger — all of which F4 removes. It
+is gone, and every later phase shifts down by one: the old P12–P16 are now
+**P11–P15**. There is no gap and no duplicate number.
+
+**Two phases changed content, not just number.** `P1` gains
+`tests/js/shell_assets.test.mjs`, because the missing-`SHELL_ASSETS`-entry hole
+must be closed **before** the ~15 new frontend modules land in P11 — shipping the
+test in the same phase as the modules it protects would already be too late if
+any module were forgotten. `P4` gains the Stock Join, `line_overrides.yaml`, and
+`tests/pantry/test_stock_math.py`, because F1's state layer, its join, and its
+three-way money parity are one unit of work against one vault file; splitting
+them would put a chip class in the frontend with nothing behind it.
+
+**The dependency edges were re-checked after renormalization and remain coherent.**
+`P4 → P6` still means "the tier ladder needs both the catalog universe and the
+stock set". `P10` depends on `P3` (the write primitives) and `P7` (the mapping
+store, for the receipt insert) and on neither `P9` nor `P11`. `P14`'s Playwright
+flows need the frontend (`P11`) and the cook-log write (`P10`) and nothing else.
+`P13`'s outbox needs the shortlists (`P9`) and the cook-log endpoint (`P10`, to
+assert it is never enqueued) — that edge survives, and it is the one edge whose
+*reason* is F4-adjacent: F4 made the cook-log error path richer, but the cook log
+is still excluded from the outbox on the independent grounds in §9.18.1, which
+F4 did not revisit.
+
+Critical path: **P5 → P6 → P7 → P8 → P11 → P14**. P1, P2, P3 and P5 are
 independent and can run in any order or in parallel given isolated worktrees.
 `idea-to-ship` forbids shared-workspace parallel subagents, so the default is
 sequential execution recomputed after each ticket; the ordering above is the
@@ -2320,11 +3063,19 @@ loopback bind `127.0.0.1:8007`. 8007 is the audited app port
 carries it, along with `SoftResourceLimits NumberOfFiles 8192`.
 
 **Tailscale Serve ingress takes `:8452`** — 8443 and 8445–8451 are allocated, and
-8446 belongs to wardrobe. The rule from template §1a: never run a bare
-`tailscale serve <target>`; state port + path + backend URL explicitly, and run
-`port-manager audit --json` **before and after** the change. Validate from a
-participant identity (a phone off the host's network): the PWA port succeeds and
-unrelated HTTPS ports and SSH still fail. Only after that is
+8446 belongs to wardrobe. **No step in this section serves the app on a single
+port end-to-end**: the app listens on 8007, the phone reaches 8452, and
+Tailscale Serve proxies between them. The 2026-09-27 port audit in `.env.example`
+records exactly this pair, and §4's architecture diagram names 8007 for the bind
+only. Any diagram, smoke check, or Playwright `base_url` that assumes one port
+for both ends is wrong — Playwright drives the **loopback** 8007 directly
+(`create_app` + `TestClient`-style local server, never through Serve), while
+production validation goes through 8452 from a participant identity. The rule
+from template §1a: never run a bare `tailscale serve <target>`; state port + path
++ backend URL explicitly, and run `port-manager audit --json` **before and after**
+the change. Validate from a participant identity (a phone off the host's
+network): the PWA port succeeds and unrelated HTTPS ports and SSH still fail.
+Only after that is
 `PUBLIC_ORIGIN=https://home-macbook-air.tailcd6e49.ts.net:8452` and
 `TRUST_TAILSCALE_HEADERS=true` enabled — the `.env.example` already carries that
 production origin commented out with the same warning.
@@ -2399,15 +3150,24 @@ trailing comment to say the LaunchAgent is installed rather than a template.
    The app surfaces this as a `待 Obsidian 同步` badge driven by
    `cook_log_receipts.recipe_tracker_synced`, rather than showing a number it
    knows is stale.
-6. **`recipeTracker` counts pages, not links.** A duplicate append in one daily
-   note does not inflate `cooking_count`. Dedupe therefore protects the note's
-   readability and the audit trail, not the counter.
+6. **`recipeTracker` counts pages, not links.** `cooking.length =
+   dv.pages('"日记"').where(...)` returns one entry per daily-note page, so a
+   duplicate append inside one daily note **cannot** inflate `cooking_count` —
+   not by one, not by any amount. §9.14's dedupe and `cook_log_receipts`' unique
+   index therefore exist for **note readability and the audit trail**, *not* for
+   count correctness. They are not redundant; removing them on the theory that
+   the counter is safe leaves the user a note with four copies of the same
+   wikilink and removes the record of which copy the app wrote.
 7. **Cooking Log is online-only.** No outbox, no offline replay (§9.18.1). The
    button is disabled offline and says why. The alternative is a 409 resolve
    panel for an already-eaten meal.
 8. **The `variants` tier is nearly dead.** Only 3 of 178 catalog rows have a
-   non-empty `variants` column. It is implemented because `CONTEXT.md` defines
-   Pantry Item Alias in terms of `variants`, but it will not fire in practice.
+   non-empty `variants` column, and two of those are just the long product name.
+   It is implemented because `CONTEXT.md` defines Pantry Item Alias in terms of
+   `variants`, but it will not fire in practice. **This is why tier-3 coverage in
+   the golden fixture is near-zero, and that near-zero is the expected outcome**
+   — a future reader seeing an empty tier 3 must not loosen the tier, widen the
+   synonym set to compensate, or delete it (§10.3).
 9. **`调` coverage is an assumption, not a measurement.** `staples.yaml` marks a
    Seasoning "assumed on hand" because category `1.1c` has 1 row in 178. If the
    household is actually out of 生抽, the app cannot know.
@@ -2424,6 +3184,63 @@ trailing comment to say the LaunchAgent is installed rather than a template.
 13. **The `contains` tiers are O(catalog).** 178 rows makes every matcher pass
     trivially cheap. A catalog an order of magnitude larger would need an
     inverted index; the tier structure would not change.
+14. **F1's Stock Join is the weakest link in the app, and it is measurably weaker
+    than the recipe→ingredient join.** A `Pantry.md` line is free text; a
+    catalog row is a normalized name. The measured miss rate is **2 of 46 open
+    lines** — `禾苑 蟹粉鱼肉狮子头 冷冻 280 克` and `Sanpellegrino CIAO! Peach
+    Sparkling Water, 24-Pack` — and D1's 5-row duplicate-name set means even a
+    *successful* join can land on either of two ids. Unlike the recipe→ingredient
+    join, this one has **no tier ladder**: it is exact-normalized-name, then the
+    tier-4 basename, then the committed override. There is no synonym tier, no
+    fuzzy tier, and no re-resolution pass, because there is no materialized table
+    to re-resolve — so a line the three tiers miss is simply absent from
+    `in_stock_ids`, and any recipe depending on it renders
+    `chip--have-been-buying` when the item is in fact on the shelf. Mitigations:
+    a dedicated `unjoined` bucket surfaced in the `调试` toggle, a
+    `stockUnjoinedCount` on `GET /api/recipes`, a `stock.unjoinedLineCount` in
+    `/health`, and `app/pantry/line_overrides.yaml` as the repair path. The
+    override is **load-bearing**, not a nicety: without it, two live pantry lines
+    are permanently unexplainable and the only remaining remedy would be editing
+    the user's vault, which this app must never do.
+15. **F1 makes the whole recipe list depend on a second vault file.** If
+    `Logistics/库存/Pantry.md` is missing, unreadable, or unparseable, **every**
+    recipe loses its stock colours — not one. The decision is to fail closed with
+    503 `pantry_stock_unreadable` rather than guess, because both guesses are
+    plausible-looking wrong answers: assuming in stock silently inflates every
+    score, and assuming not-in-stock silently deflates every score to
+    `have-been-buying`. The recipe index, the note bodies, and the cooking
+    history remain readable, so the app is not wholly down — but the headline
+    feature is. This is a real, accepted availability cost bought in exchange for
+    D4's in-stock / have-been-buying distinction being true rather than
+    decorative.
+16. **The `💵` per-unit math is implemented in three places and only one is in
+    this repository.** The `existingPantryValue` dataviewjs in
+    `Logistics/库存/Pantry.md` and `Helper/scripts/pantry_snapshot.py` are
+    outside this repo's test suite, so a change to either cannot fail *our* CI.
+    The mitigation is procedural and is stated so it is not mistaken for a
+    guarantee: `scripts/snapshot_pantry_catalog.py` computes the total both ways
+    and **refuses to refresh the parity fixture** when they disagree, so a
+    divergence is caught at fixture-regeneration time by a human, deliberately —
+    the same discipline as regenerating the golden catalog snapshot. It is not
+    caught automatically, and it will not be.
+17. **F4's cost is a manual step before back-dating.** Logging a cook into a day
+    with no daily note now requires creating that note in Obsidian first. The
+    alternative — automatic creation — was rejected deliberately: it would have
+    contradicted `AGENTS.md` non-negotiable #1, added a subprocess sandbox, a
+    Templater settle window, a rollback path, a UUID idempotency ledger, and nine
+    `Settings` fields, and its fatal edge case was a half-expanded frontmatter
+    left in a daily note that poisons that date until repaired by hand. The
+    error names the date and the exact path and is retryable, so the cost is one
+    action with a clear instruction, not a wall.
+18. **The cook-log link lands above the daily note's columns fence, unlike the
+    two existing logged cooks.** `日记/2026-09-14.md` has `[[花蛤拌饭]]` after a
+    `# Event` heading and `日记/2026/2026-03-10.md` has `[[盐焗鸡]]` after the
+    `![[dailyModify.base|ordered-list]]` embed, so a note will accumulate logged
+    cooks in two different places. `recipeTracker` is position-agnostic so the
+    counts are correct either way, and the whole-note dedupe scan (§9.14 step 3)
+    covers both regions — but a human reading the note will see cooks in two
+    places. F3 chose the literal reading of D2 over consistency with two
+    hand-typed lines.
 
 ---
 
@@ -2432,18 +3249,22 @@ trailing comment to say the LaunchAgent is installed rather than a template.
 | # | Risk | Likelihood | Impact | Mitigation |
 |---|---|---|---|---|
 | R1 | A matcher change silently breaks a correct resolution (e.g. `空心菜 → 83`) | high | high | The golden test over the 16 real recipes with a frozen catalog snapshot (§10.3) makes it a CI failure, not a silent regression. `空心菜 → 83` is named in the ticket. |
-| R2 | A flavour-descriptor false positive ships (garlic in `蒜香蒸茄子`, potato in `呀!土豆 薯条`, sesame in `芝麻饼干`) | medium | high — it makes the app confidently wrong about what I have | Two independent guards (§9.7): the whole-name-segment boundary and the single-food-class rule. Both are unit-tested against all five live rows, individually, in `test_must_not_match.py`. |
+| R2 | A flavour-descriptor false positive ships (garlic in `蒜香蒸茄子` or in `乐事 …薯片蒜蓉面包味`, potato in `呀!土豆 薯条`, sesame in `芝麻饼干`) | medium | high — it makes the app confidently wrong about what I have | Two independent guards (§9.7): the whole-name-segment boundary and the single-food-class rule. `test_must_not_match.py` asserts each of the **six** live rows individually **and** carries a negative control per guard, because the per-row table in D1 shows the guards are asymmetrically load-bearing — the family guard alone stops `芝麻`→25 and `蒜`→110, and a single combined assertion would leave either guard deletable. |
 | R3 | The daily-note write corrupts a note the user cares about | low | severe | Descriptor-pinned `AtomicNoteStore` + identity CAS + backup-then-replace + post-write read-back. The write is a byte splice, never a re-dump, so `task-date-recorder`'s `INPUT[toggle]` fields and Tasks-plugin date markers survive. Asserted byte-for-byte in `test_cook_log_flow.py` step 2. |
 | R4 | A concurrent Obsidian write is silently clobbered | low | severe | 409 `daily_note_changed` on a client-supplied revision, plus the store's own `_same_file` check immediately before `os.replace`. Part 5a set semantics: the user resolves, the app never retries a stale revision forever. |
 | R5 | The app is exposed off loopback and the vault becomes readable | low | severe | Ported auth middleware (host → identity → read_only → origin → content-type → CSRF) + strict CSP + the loopback-only bind invariant, which `validate_bind_invariant` already enforces. The scaffold's `TODO` becomes a real implementation in P1. |
 | R6 | The stale-shell loop from Part 4d | low | medium | `WAIT_FOR_MESSAGE = true` with the §4d convergence invariant (wait for `installed` before `SKIP_WAITING`, no immediate navigation), Pattern D's first-install guard, and `shell_assets.test.mjs` catching an out-of-alignment. |
-| R7 | A new JS/CSS file is added and forgotten in `SHELL_ASSETS`, so the offline shell is incomplete and silent | **high without the fix** | medium | `tests/js/shell_assets.test.mjs` walks the tree and asserts completeness, closing the hole `GEMINI.md` and `README.md` both call out but neither currently detects. |
-| R8 | The Obsidian CLI path breaks (app not running, vault not open, QuickAdd macro renamed) | medium | low — only affects logging into a day with no note | Typed `VaultUnavailable` / `ObsidianUnavailable` / `CreationMisconfigured` classes; creation degrades in isolation and the existing-note path keeps working. The fatal case is a half-expanded note, which the settle window + rollback prevents. |
-| R9 | A user replays a shortlist intent for the wrong mutation | low | medium | `request_fingerprint` binding (§6d): a reused `X-Client-Id` with a different payload is a bounded 409, not a silent overwrite (§9.18.3). |
-| R10 | `recipeTracker` never fires, so the cooking frontmatter stays permanently stale | medium | low | The `待 Obsidian 同步` badge makes the lag *visible* rather than confusing, and `cook_log_receipts` records what was written independently of whether Obsidian has caught up. |
-| R11 | Shortlist drift is discovered as data loss | low | medium | A renamed recipe renders as a dimmed `⚠ 已重命名` row, never silently dropped. Nothing is auto-pruned. |
-| R12 | Scope creep into quantities / nutrition / write-back | medium | medium | §15 states the deferrals with reasons, and `nutrition-intake`'s units and nutrients are named as the future home so a quantity ticket reuses them instead of forking a converter. |
-| R13 | A dependency is added that a sibling does not use | low | low | Exactly two are proposed, each with a named sibling precedent: `aiosqlite` (pwa-wardrobe) and `playwright` (browser testing). Both are flagged (F9, F10). No ORM, no bundler, no build step. |
+| R7 | A new JS/CSS file is added and forgotten in `SHELL_ASSETS`, so the offline shell is incomplete and silent | **high without the fix** | medium | `tests/js/shell_assets.test.mjs` walks the tree and asserts completeness, closing the hole `GEMINI.md` and `README.md` both call out but neither currently detects. It ships in **P1**, before the ~15 new modules land in P11, because a test that arrives with the modules it protects has already missed its window. |
+| R8 | **`Pantry.md` is missing, renamed, or mid-edit in Obsidian, and the entire recipe list loses its stock colours** (F1) | **medium — this is the highest-likelihood new risk F1 introduces** | medium | Fail closed, deliberately: 503 `pantry_stock_unreadable`, no fallback in either direction, because both fallbacks are plausible-looking wrong answers (§13.15). `stock_cache_seconds` is 30 s so recovery is fast once the note parses. The recipe index, note bodies, and cooking history stay readable, so the app degrades to "cannot answer what can I cook" rather than "down". `/health` exposes `stock.openCount` and `stock.unjoinedLineCount` so the state is diagnosable without the UI. |
+| R9 | **F1's Stock Join silently drops a pantry line, so a held item renders `have-been-buying`** | **high — 2 of 46 lines are already known to miss** | medium | The join has no tier ladder (exact → basename → override) and no re-resolution pass, so it is strictly weaker than the recipe→ingredient join and the spec says so (§13.14). Mitigations: a dedicated `unjoined` bucket in the `调试` toggle, `stockUnjoinedCount` on `GET /api/recipes`, `stock.unjoinedLineCount` in `/health`, and `app/pantry/line_overrides.yaml` as a reviewed one-line repair per miss. The override is load-bearing: without it the only remaining fix is editing the user's vault. |
+| R10 | **The `💵` per-unit math drifts between the two vault-side implementations and this app** | medium | low — a money display, not a score | Parity is a test obligation (F1): `scripts/snapshot_pantry_catalog.py` computes the total both ways and refuses to emit `pantry_stock_math_parity.json` on disagreement, and `tests/pantry/test_stock_math.py` pins the three breaking shapes. Residual risk stated plainly: only one of the three implementations is in this repo, so a change to the other two is caught at fixture-regeneration time by a human, not automatically (§13.16). |
+| R11 | A user replays a shortlist intent for the wrong mutation | low | medium | `request_fingerprint` binding (§6d): a reused `X-Client-Id` with a different payload is a bounded 409, not a silent overwrite (§9.18.3). |
+| R12 | `recipeTracker` never fires, so the cooking frontmatter stays permanently stale | medium | low | The `待 Obsidian 同步` badge makes the lag *visible* rather than confusing, and `cook_log_receipts` records what was written independently of whether Obsidian has caught up. |
+| R13 | Shortlist drift is discovered as data loss | low | medium | A renamed recipe renders as a dimmed `⚠ 已重命名` row, never silently dropped. Nothing is auto-pruned. |
+| R14 | Scope creep into quantities / nutrition / write-back | medium | medium | §15 states the deferrals with reasons, and `nutrition-intake`'s units and nutrients are named as the future home so a quantity ticket reuses them instead of forking a converter. |
+| R15 | A dependency is added that a sibling does not use | low | low | Exactly two are proposed, each with a named sibling precedent: `aiosqlite` (pwa-wardrobe) and `playwright` (browser testing). Both are flagged (F9, F10). No ORM, no bundler, no build step. **F1 and F4 add neither** — F1 reads a vault note through the already-ported `pantry.py`, and F4 *removes* a dependency-shaped surface (a subprocess and its nine config fields) rather than adding one. |
+| R16 | **F4's manual step is read as a bug** ("the app can't log a cook") | medium | low | The 404 is the most specific error the API emits: it names the date, the exact vault-relative path, and `retryable: true`, and the UI renders the server's `message` verbatim rather than synthesizing a vaguer one. §9.15 records the removed design and the three reasons it was the wrong call, so a future reader sees a decision rather than an oversight. |
+| R17 | **The append introduces a mixed line terminator into the user's daily note** (surfaced by F3) | **medium — the live evidence says it is already 2 bytes, not 1** | low for content, **medium for trust** | `# 笔记` is 8 bytes in UTF-8 and the measured region span `4265..4275` is **10**, so the live note's terminator is two bytes. A splice that hard-codes `b"\n"` would leave one LF in a CRLF file: `git` renders that as a whole-file diff, Obsidian shows a mixed-ending file, and `task-date-recorder` re-writes on a debounced `modify` event so the noise is not transient. F3 step 5 requires the terminator to be read from the source span and reused verbatim; `test_writer.py` asserts it is byte-identical to the pre-image for both a one-byte and a two-byte terminator. The `test_cook_log_flow.py` step-2 "byte-identical everywhere else" assertion is the second line of defence. |
 
 ---
 
@@ -2472,9 +3293,11 @@ Each item names the reason, so a future ticket does not re-derive it.
 - **Multi-user.** `TAILSCALE_OWNER_LOGIN` is a single exact identity compared
   byte-for-byte. There is no per-user state, no sharing, no permissions beyond
   owner-or-nobody, and no notion of "whose shortlist is this".
-- **A Pantry view.** The app reads `Pantry.md` for the in-stock signal and does
-  not render a browsable stock list. The vault's DataviewJS overview remains
+- **A Pantry view.** The app reads `Pantry.md` for the Pantry Stock state and
+  does not render a browsable stock list. The vault's DataviewJS overview remains
   better at that job, and duplicating it would create a second, worse surface.
+  What the app does surface is the *join health* — the Stock Join table in the
+  `调试` view (F1) — which is diagnostic, not a browsing surface.
 - **A Shopping List.** Reserved in `CONTEXT.md` as a derived, read-only reorder
   suggestion. Out of scope; the `0/6` recipe rows are the seed of it without
   committing to the feature.
@@ -2483,6 +3306,20 @@ Each item names the reason, so a future ticket does not re-derive it.
 - **Stock Movement / consumption accounting.** `CONTEXT.md` defines a Stock
   Movement as a Pantry Stock change attributed to a Cooking Record or a purchase.
   This app records the cook and does not move stock. See flag F13.
+- **Automatically creating a missing daily note (F4).** The user chose the error
+  path deliberately. Logging a cook into a date with no daily note returns 404
+  `daily_note_missing`, naming the date and the exact vault-relative path, and
+  is retryable once the user creates the note in Obsidian. The alternative — an
+  Obsidian CLI / QuickAdd creation path — is out of scope because it would
+  contradict `AGENTS.md` non-negotiable #1, and because its cost is a subprocess
+  sandbox, a Templater settle window, an unusable-note rollback, a UUID
+  idempotency ledger, and nine `Settings` fields, bought for the case where the
+  user has not written that day's note — which is exactly when they should be
+  writing it. Its fatal edge case was a half-expanded frontmatter left in a daily
+  note, which poisons that date and makes every later read 409 until repaired by
+  hand. `AGENTS.md`, `README.md`, `.env.example`, and `CONTEXT.md` all remain
+  accurate as written and need no amendment. §9.15 keeps the removed design's
+  reasoning so it is not re-proposed without its costs.
 - **Pull-to-refresh on the shortlist or recipe detail views.** Enabled on the
   recipe list only (Pattern M, §2h).
 - **An OS badge.** Chromium-only and a silent no-op on the iPhone home screen
@@ -2492,22 +3329,43 @@ Each item names the reason, so a future ticket does not re-derive it.
 
 ## 16. Further Notes
 
-**A note on the `笔记` region and D2.** The most easily missed fact in this spec is
-that `parse_sections()` gives a `笔记` region containing only its heading line, so
+**A note on the `笔记` region and F3 — now resolved, and the resolution is the
+counter-intuitive one.** The most easily missed fact in this spec is that
+`parse_sections()` gives a `笔记` region containing only its heading line, so
 "insert under the `笔记` heading" and "insert at the end of the `笔记` region" are
-not the same operation. Both are legitimate; they produce visually different
-results. See F3 — this is the single decision most likely to need the user's eye.
+not the same operation. This was the single decision most likely to need the
+user's eye; it has now been answered, and the answer is the **first** of those
+two: the link goes at the region's `heading_end`, directly under `# 笔记` and
+above the columns fence. The alternative the spec previously recommended —
+inserting after the `![[dailyModify.base|ordered-list]]` embed, matching the
+`2026-03-10` precedent — is **withdrawn**. The reason it is worth stating is
+that neither placement is more *correct*: `recipeTracker` scans every outlink on
+the page and is position-agnostic, so both work. The tie was broken on
+simplicity and on the literal reading of D2, and the two existing logged cooks
+are hand-typed lines rather than a convention. F3 carries the byte-level
+algorithm, the `blank=True` empty-region handling, and the confirmation that the
+heading already exists so nothing is created.
 
 **A note on what was verified versus what was measured.** §3's numbers were
 re-derived from the live vault and the live catalog while writing this spec, and
-three of them did not match the figures the user was shown (the 26-vs-4 shapes,
-the 6-of-26 emoji-only count with `🥔` rather than `🍔`, and the 2-of-46
-Pantry.md join misses rather than 1-of-23). The direction of every figure is
-unchanged; the corrected values are the ones the golden test freezes. The
-`~27%` naive-fuzzy false-positive rate and the `5% → 90%` 调料 coverage figures
-are carried through from the research session and are re-verified by the golden
-test rather than re-derived here, because both depend on the exact fuzzy
-threshold and allowlist that only the implementation will pin down.
+several of them did not match the figures first reported. The corrected values
+are the ones the golden test freezes, and they are listed here together so a
+reader does not have to hunt across sections to find which numbers to trust:
+
+| Figure | First reported | Corrected | Where it lives |
+|---|---|---|---|
+| `材料` value shapes | 4 | **5** — the unlisted one is `X/Y` with no leading emoji (`香料/Basil`) | D1, §9.6 |
+| Emoji-only values | `🍔` and 20% | **`🥔`**, and 6 of 26 (23%) from `材料` plus 3 from `调料` | D1, §9.6 |
+| `Pantry.md` name-join misses | 1 of 23 | **2 of 46** — the second miss is `Sanpellegrino CIAO! Peach Sparkling Water, 24-Pack` | D1, F1, §9.11.3 |
+| Flavour collisions | 5 rows | **6 rows** — `蒜` hits two catalog rows (72 and 110), and the family guard independently stops 110 | D1, §9.7 |
+| Daily-note write port | 503 on a missing note | **404** — the note is absent, not the server unhealthy | F4, §9.15, §9.16 |
+| Exposed port | 8007 end-to-end | **8007 loopback bind, 8452 Tailscale Serve ingress** | §4, §12 |
+
+The direction of every figure is unchanged. The `~27%` naive-fuzzy false-positive
+rate and the `5% → 90%` 调料 coverage figures are carried through from the
+research session and are re-verified by the golden test rather than re-derived
+here, because both depend on the exact fuzzy threshold and allowlist that only
+the implementation will pin down.
 
 **A note on test seams.** There are three (§4.1), and the one that matters is the
 second. The matcher is a pure function over `str` with no I/O, so the highest
@@ -2526,32 +3384,38 @@ byte-identical-everywhere-else property directly against the file on disk.
 
 ---
 
-## 17. Decisions to confirm
+## 17. Decisions to confirm — 17 flagged
 
 Every item here is a place where I made a call the user has not explicitly
 confirmed. They are listed so they can be batched and answered in one pass
 (`idea-to-ship` §4: parked questions are presented as a batch, and each answer is
 recorded durably before re-dispatching the affected ticket).
 
+**This list was 20 items. F1, F3 and F4 have been answered by the user and now
+live in §3 as locked decisions, so they are gone from here — seventeen remain:
+F2 and F5–F20.** The `F` numbers are **stable identifiers, deliberately not
+renumbered**: they are referenced from §3, §4, §6, §9, §10, §13 and §14, and
+renumbering them would break every one of those references to buy a tidier
+sequence. The visible consequence is that the sequence has **gaps at 1, 3 and
+4** — and a gap is now the signal that a decision was resolved, not a lost
+cross-reference. Adding a new flag continues from **F21**.
+
 | # | Decision I made | My call | What changes if you disagree |
 |---|---|---|---|
-| **F1** | Where Pantry Stock comes from | `Logistics/库存/Pantry.md` open items, via the ported hardened `pantry.py`, cached 30 s, with `PANTRY_NOTE_RELATIVE` as a new Server-Owned Root | The `in-stock` / `have-been-buying` split (D4's core distinction) has no source. Without this, D4 collapses to a single colour and violates its own "Pantry Item ≠ Pantry Stock" rule. |
-| **F2** | Mapping-table key design | Slot identity `UNIQUE(recipe_note, ingredient_index)` **plus** the inverted `UNIQUE(recipe_note, pantry_item_id)`, and **no** FK on `pantry_item_id` | The user's instruction said `UNIQUE(recipe_id, pantry_item_id)`; I read `recipe_id` as the recipe (so one recipe cannot list the same SKU twice) while `空心菜 → 83` stays legal across 3 recipes. If "recipe_id" was meant as the *slot*, the composite key should be `(recipe_note, ingredient_index, pantry_item_id)` and the "one recipe, one SKU" check is lost. |
-| **F3** | Where the cook wikilink goes | Prefer immediately after the `![[dailyModify.base\|ordered-list]]` embed (matching the `2026-03-10` precedent); fall back to the end of the `笔记` region | Insert directly under the `# 笔记` heading instead. Simpler, the literal reading of D2, equally correct for `recipeTracker`, and visually above the columns fence rather than inside them. **The one decision most worth your eye.** |
-| **F4** | Creating a missing daily note | Shell out to the official Obsidian CLI + QuickAdd, mirroring `pwa-obsidian-daily`, adding 10 new `Settings` fields | This directly contradicts `AGENTS.md` non-negotiable #1. Either amend that file in the same commit (my recommendation, and the spec says so), or return 409 `daily_note_missing` and leave creation to Obsidian. The alternative is a much smaller config surface. |
-| **F5** | The cook log is offline-only-excluded from the outbox | Online-only; the button is disabled offline and says why. Reasoning in §9.18.1 | Offline cook logging needs a revision-tolerant write primitive (re-read + bounded re-apply under the lock), not the outbox. I did not pre-build it. |
+| **F2** | Mapping-table key design | Slot identity `UNIQUE(recipe_note, ingredient_index)` **plus** the inverted `UNIQUE(recipe_note, pantry_item_id)`, and **no** FK on `pantry_item_id` | The user's instruction said `UNIQUE(recipe_id, pantry_item_id)`; I read `recipe_id` as the recipe (so one recipe cannot list the same SKU twice) while `空心菜 → 83` stays legal across 3 recipes. If "recipe_id" was meant as the *slot*, the composite key should be `(recipe_note, ingredient_index, pantry_item_id)` and the "one recipe, one SKU" check is lost. **Still the highest-value open question in this list**: the failure mode it guards is a *silent* dropped resolution, which is the worst class of bug in this app. |
+| **F5** | The cook log is offline-only-excluded from the outbox | Online-only; the button is disabled offline and says why. Reasoning in §9.18.1 | Offline cook logging needs a revision-tolerant write primitive (re-read + bounded re-apply under the lock), not the outbox. I did not pre-build it. **Recommendation: confirm as-is.** F4 reinforces it — an offline cook log would now also have to decide what to do about a date whose note does not exist, and "fail with an actionable error" is not a useful thing to deliver two hours late. |
 | **F6** | `manual`-row immutability mechanism | A `BEFORE UPDATE` trigger that aborts, forcing delete + re-insert to change a hand fix | A softer rule — no trigger, just "re-resolve skips manual rows". Simpler, but a hand fix could then be clobbered by any other code path that writes a mapping. |
-| **F7** | Provenance always in the payload | Every recipe response carries tier, method, `pantry_item_id`, and candidates; the 调试 toggle is render-only | A separate `?debug=1` endpoint. Halves the normal payload but makes the toggle a round-trip and introduces a way for the two shapes to drift. |
+| **F7** | Provenance always in the payload | Every recipe response carries tier, method, `pantry_item_id`, `candidates_json`, and F1's `stockJoinState`; the 调试 toggle is render-only | A separate `?debug=1` endpoint. Halves the normal payload but makes the toggle a round-trip and introduces a way for the two shapes to drift. F1's join table is the strongest argument for keeping it in-band: the join is the app's weakest link and a toggle that needs a round-trip is a toggle the user will not reach. |
 | **F8** | `严格模式` is a query parameter | `?strict=1` (or `?strict=0`, the default), stateless | A persisted setting in SQLite, so the choice survives a restart. Costs a round-trip before first paint and a second source of truth. |
-| **F9** | `aiosqlite` as a new runtime dependency | Added to `[project].dependencies`, precedent `pwa-wardrobe/app/database.py` (the pragmas block is copied from there) | Use stdlib `sqlite3` through `asyncio.to_thread`. Zero new dependencies and fine for a single-user loopback app at ~1 write per cook, but it diverges from the sibling whose migration pattern we are copying. |
-| **F10** | `playwright` as a new `[browser]` test extra | Optional extra, not in `[test]`, so CI's `pip install ".[test,dev]"` is unchanged and the browser suite is opt-in | Running the two flows in CI. They need a browser binary in the ubuntu runner, which is a real CI cost. |
-| **F11** | Cache TTLs | catalog 300 s, stock 30 s, recipes 60 s | All three. Stock is short because you toggle tasks from Obsidian while the PWA is open; the other two are conventional. |
+| **F9** | `aiosqlite` as a new runtime dependency | Added to `[project].dependencies`, precedent `pwa-wardrobe/app/database.py` (the pragmas block is copied from there) | Use stdlib `sqlite3` through `asyncio.to_thread`. Zero new dependencies and fine for a single-user loopback app at ~1 write per cook, but it diverges from the sibling whose migration pattern we are copying. **Recommendation: add it.** The migration shape in §7.1 is lifted wholesale from wardrobe, and re-expressing that pattern over `to_thread` would mean porting the code but not the idiom — the divergence would be invisible and permanent. The async cost is one short-lived connection per request. |
+| **F10** | `playwright` as a new `[browser]` test extra | Optional extra, not in `[test]`, so CI's `pip install ".[test,dev]"` is unchanged and the browser suite is opt-in | Running the two flows in CI. They need a browser binary in the ubuntu runner, which is a real CI cost. **Recommendation: keep it opt-in.** The two flows cover what unit and API tests structurally cannot (the back-button scroll restore, the chip vocabulary actually painting), and their input is a `tmp_path` vault plus `tmp_path` `APP_DATA_DIR`, so they are deterministic. The cost of *not* having them is silent: the §2i back-button bug and a stale-paint false pass are exactly what the sibling's `test_recipe_browse_flow.py` step 4 was written to catch. |
+| **F11** | Cache TTLs | catalog 300 s, stock 30 s, recipes 60 s | All three. Stock is short because you toggle tasks from Obsidian while the PWA is open; the other two are conventional. **F1 makes 30 s load-bearing**: it is now the maximum staleness a chip colour can have, so raising it trades freshness for fewer `Pantry.md` parses. |
 | **F12** | Exactly three meal slots | `breakfast` / `lunch` / `dinner`, a closed `CHECK` constraint, no `snack` | Adding a slot is a SQLite table rebuild, so it is cheap now and expensive later. |
-| **F13** | `cook_log_receipts` and the `CONTEXT.md` Cooking Record mismatch | Ship the receipts table as a PWA-owned mirror; amend `CONTEXT.md` so Cooking Record no longer promises a Stock Movement this app does not produce | Dropping the table loses the `待 Obsidian 同步` badge and the double-submit dedupe ledger, both of which are cheap here and expensive to add after users have data. |
-| **F14** | The golden test's catalog source | A committed `pantry_items_snapshot.json` plus a deliberate `scripts/snapshot_pantry_catalog.py` regeneration | Reading the live `wholefoods-to-pantry` DB. That makes CI depend on a sibling repo's on-disk state and turns every catalog re-import into a CI failure. |
-| **F15** | Emoji-run stripping without a Unicode property escape | A hand-built range class plus `U+FE0F` / `U+200D`, longest-key-first | The `regex` module, which gives `\p{Extended_Pictographic}` but adds a dependency none of the siblings use. |
+| **F13** | `cook_log_receipts` and the `CONTEXT.md` Cooking Record mismatch | Ship the receipts table as a PWA-owned mirror; amend `CONTEXT.md` so Cooking Record no longer promises a Stock Movement this app does not produce | Dropping the table loses the `待 Obsidian 同步` badge and the double-submit dedupe ledger, both of which are cheap here and expensive to add after users have data. **Note the interaction with D2's invariant:** because `recipeTracker` counts pages rather than links, the receipt table is *not* what keeps `cooking_count` correct — the note does that. It is the audit trail, which is why F4 did not touch it. |
+| **F14** | The golden test's catalog source | A committed `pantry_items_snapshot.json` plus a deliberate `scripts/snapshot_pantry_catalog.py` regeneration | Reading the live `wholefoods-to-pantry` DB. That makes CI depend on a sibling repo's on-disk state and turns every catalog re-import into a CI failure. **F1 extends this to the `💵` parity fixture**, which is also frozen rather than live-read, for the same reason. |
+| **F15** | Emoji-run stripping without a Unicode property escape | A hand-built range class plus `U+FE0F` / `U+200D`, longest-key-first, over an **explicit key set** | The `regex` module, which gives `\p{Extended_Pictographic}` but adds a dependency none of the siblings use. **This is now stronger than it was**, because the parser must key `🍋‍🟩` as a single three-codepoint ZWJ run and a property class matches the *parts*, not the run. Even with `regex` installed, grapheme clustering would be the requirement, so the explicit key set is the answer either way. |
 | **F16** | Strict-mode semantics for staple-satisfied 调料 | They still count as **found**; only an *unresolved* Seasoning counts as missing | Every 调料 becomes missing under strict mode, which drives every score to near-zero given `1.1c` has 1 catalog row — the toggle would be useless. |
 | **F17** | The headline string and the absence of a `cookable` boolean | `n/total` from 材料 only by default; no boolean field is ever published | The D4 example text (`missing: 生抽`) lists a 调料 in a Materials-only missing list, which the rule set cannot produce. The spec uses the internally consistent form, and `CONTEXT.md`'s boolean Cookable stays defined-but-unrendered. |
-| **F18** | Variation-matrix picks not covered by D1–D4 | `cache-first` shell, `network-only` APIs, **explicit update banner** with a `canApplyUpdate` busy-guard, and **no** read-only write allowlist | Auto-takeover would risk a forced reload between tapping "做过了" and the request landing. A read-only allowlist is what obsidian-daily has for Open Items; a read-only Pantry Recipes that could still log a cook seemed like a confusing half-mode. |
+| **F18** | Variation-matrix picks not covered by D1–D4 | `cache-first` shell, `network-only` APIs, **explicit update banner** with a `canApplyUpdate` busy-guard, and **no** read-only write allowlist | Auto-takeover would risk a forced reload between tapping "做过了" and the request landing. A read-only allowlist is what obsidian-daily has for Open Items; a read-only Pantry Recipes that could still log a cook seemed like a confusing half-mode. **F4 strengthens the no-allowlist choice**: with no creation service, `read_only` is the only thing standing between a mutation and the vault, and it must cover every write. |
 | **F19** | Pull-to-refresh | Enabled on the recipe list only (Pattern M, §2h) | Template §2h calls it optional. It is a nice-to-have and the last thing to build. |
-| **F20** | No pagination on the recipe list | Unbounded, correct at 16 recipes | A limit/offset parameter. Cheap to add later; premature now. |
+| **F20** | No pagination on the recipe list | Unbounded, correct at 16 recipes | A limit/offset parameter. Cheap to add later; premature now. **F1 makes this slightly more expensive**: each response also carries per-Ingredient `stockJoinState` and the recipe list is the response that fails closed on an unreadable `Pantry.md`, so the payload and the failure blast radius both grow. Still correct at 16 notes. |
