@@ -8,6 +8,12 @@ catch-all and is #15's wiring — and the two envelope tests below are what keep
 this harness from becoming a second, divergent app: one asserts the two-key
 baseline is key-for-key identical to `_api_error`, the other asserts F4's
 extension is the *only* thing the Cooking Log adds.
+
+The last section inverts that arrangement: `harness.mount_cook_logs` puts the
+router on the **real** `create_app`, at §9.19's position, and drives it with the
+real `GET /api/session` token. A route that nothing can reach has not been
+tested, and a router built by the test itself is the weakest possible evidence
+that it will survive being mounted.
 """
 
 from __future__ import annotations
@@ -35,6 +41,7 @@ from cooklog.notes import (
 )
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from httpx import Response
 from starlette.requests import Request
 
 from app.api.cooklog import (
@@ -45,12 +52,31 @@ from app.api.cooklog import (
 from app.auth import CsrfTokenStore
 from app.config import Settings
 from app.cooklog.writer import CookingLogWriter
-from app.main import _api_error
+from app.main import _api_error, create_app
 from app.vault.atomic_write import AtomicNoteStore
 
 ORIGIN = harness.ORIGIN
 COOK = "盐焗鸡"
 DATE = "2026-09-27"
+
+#: F4's 404 body, exactly and in order (§9.15). Membership is the contract, and
+#: so is the *position*: the extension is appended after `{requestId, code}`,
+#: which is precisely what makes folding it into `app/main.py`'s `_api_error` a
+#: change with no observable effect on any response. Both 404s below are
+#: compared against this one tuple, so the write path and the read path cannot
+#: drift into two shapes.
+MISSING_NOTE_KEYS: tuple[str, ...] = (
+    "requestId",
+    "code",
+    "message",
+    "date",
+    "relativePath",
+    "retryable",
+)
+
+#: The creation conflict adds §9.14's `currentRevision` to the same six keys —
+#: one 409 resolve panel, not a second conflict UI.
+CREATED_CONCURRENTLY_KEYS: tuple[str, ...] = MISSING_NOTE_KEYS + ("currentRevision",)
 
 
 @pytest.fixture
@@ -222,14 +248,8 @@ def test_a_missing_daily_note_is_404_with_the_additive_envelope(
     status, body = _post(api_client, recipeNote=COOK, date=DATE)
 
     assert status == 404
-    assert set(body) == {
-        "requestId",
-        "code",
-        "message",
-        "date",
-        "relativePath",
-        "retryable",
-    }
+    assert set(body) == set(MISSING_NOTE_KEYS)
+    assert list(body) == list(MISSING_NOTE_KEYS), "the extension is appended, not interleaved"
     assert body["code"] == "daily_note_missing"
     assert body["date"] == DATE
     assert body["relativePath"] == DAILY_NOTE_PATH
@@ -258,6 +278,27 @@ def test_the_read_back_of_a_missing_date_is_the_same_404_not_an_empty_list(
     assert not (vault / DAILY_NOTE_PATH).exists()
 
 
+def test_both_404s_are_the_same_404_byte_for_byte(
+    api_client: TestClient,
+) -> None:
+    """The GET and the POST 404 are one error, not two that happen to agree.
+
+    Compared against the same tuple, so a `message` dropped from the read path —
+    which would still be a truthful-looking 404 — fails here rather than being
+    noticed by a user. `requestId` is per-request and therefore excluded, and
+    nothing else is.
+    """
+    written_status, written = _post(api_client, recipeNote=COOK, date=DATE)
+    read = api_client.get("/api/cook-logs", params={"date": DATE})
+
+    assert written_status == read.status_code == 404
+    read_body = read.json()
+    assert list(read_body) == list(MISSING_NOTE_KEYS)
+    assert {key: value for key, value in read_body.items() if key != "requestId"} == {
+        key: value for key, value in written.items() if key != "requestId"
+    }
+
+
 def test_a_stale_base_revision_is_409_with_the_current_revision(
     api_client: TestClient, note_factory: Callable[..., bytes]
 ) -> None:
@@ -271,6 +312,57 @@ def test_a_stale_base_revision_is_409_with_the_current_revision(
     # not one of F4's two presence codes, so it does not widen the envelope.
     assert set(body) == {"requestId", "code", "currentRevision"}
     assert body["currentRevision"].startswith("sha256:")
+
+
+def test_a_note_that_appears_mid_request_is_a_409_with_the_extension(
+    settings: Settings, vault: Path, recovery_root: Path
+) -> None:
+    """The creation conflict, as bytes on the wire rather than as an exception.
+
+    The writer-level test in `tests/cooklog/test_missing_note.py` proves the
+    classification; this proves the *envelope*, which is a separate claim: the
+    409 carries F4's four optional fields plus §9.14's `currentRevision`, and
+    carries them under a code that is emphatically not `daily_note_missing`.
+    A view that branches on the status alone would still be wrong here, so the
+    status and the code are asserted together.
+    """
+    target = vault / DAILY_NOTE_PATH
+    reads: list[str] = []
+
+    class _AppearingStore(AtomicNoteStore):
+        """Reports absence on the first read and materialises the note before the second."""
+
+        def read_existing_if_exists(
+            self, relative: str, *, max_bytes: int | None = None
+        ) -> bytes | None:
+            reads.append(relative)
+            if len(reads) > 1:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(daily_note_bytes())
+            return super().read_existing_if_exists(relative, max_bytes=max_bytes)
+
+    writer, store = harness.racing_writer(
+        settings, vault, recovery_root, store_factory=_AppearingStore
+    )
+    try:
+        with harness.client_for(harness.build_app(settings, writer=writer)) as client:
+            status, body = _post(client, recipeNote=COOK, date=DATE)
+    finally:
+        store.close()
+
+    assert status == 409
+    assert list(body) == list(CREATED_CONCURRENTLY_KEYS)
+    assert body["code"] == "daily_note_created_concurrently"
+    assert body["code"] != "daily_note_missing"
+    assert body["date"] == DATE
+    assert body["relativePath"] == DAILY_NOTE_PATH
+    assert body["retryable"] is True
+    assert str(body["currentRevision"]).startswith("sha256:")
+    # The same server-owned path was asked for on both reads — the re-check
+    # re-reads the date's note, it does not go looking for another one.
+    assert reads == [DAILY_NOTE_PATH, DAILY_NOTE_PATH]
+    # A 409 leaves the note alone: the user taps retry and the write proceeds.
+    assert "- [[盐焗鸡]]".encode() not in target.read_bytes()
 
 
 def test_a_current_base_revision_commits(
@@ -557,3 +649,128 @@ def test_the_routes_are_exactly_the_two_the_contract_names() -> None:
         for route in build_cook_log_router().routes
     ]
     assert routes == [("/api/cook-logs", ["POST"]), ("/api/cook-logs", ["GET"])]
+
+
+# --- the mounted path, on the real app --------------------------------------
+#
+# Everything above runs the router inside a purpose-built app. These four run it
+# where it will actually live: `app.main.create_app`, with the router spliced in
+# at §9.19's position. Three things can only be observed here — that the route
+# is reachable at all, that the `/api/{unmatched_path}` catch-all registered
+# before it does not shadow it, and that the real `cache_policy` and the real
+# `GET /api/session` feed the request that reaches the writer.
+
+
+@pytest.fixture
+def mounted_client(
+    settings: Settings, writer: CookingLogWriter
+) -> Iterator[TestClient]:
+    """The real app, with the Cooking Log registered where §9.19 says it goes.
+
+    `harness.mount_cook_logs` is a no-op once `app/main.py` registers the router
+    itself, so this fixture tests the shipped registration the moment it exists
+    and needs no change when it does.
+    """
+    with TestClient(
+        harness.mount_cook_logs(create_app(settings), writer), base_url=ORIGIN
+    ) as test_client:
+        yield test_client
+
+
+def _session_post(client: TestClient, **body: object) -> Response:
+    """A mutation whose CSRF token came from the real `GET /api/session`.
+
+    `_headers` reads the token off `app.state.csrf` instead, which is the same
+    bytes; this one goes through the route, so the whole boot contract —
+    session → token → guard → route — is asserted in one request rather than
+    three assertions that each assume the others.
+    """
+    token = client.get("/api/session").json()["csrfToken"]
+    return client.post(
+        "/api/cook-logs",
+        json=body,
+        headers={"Origin": ORIGIN, "X-CSRF-Token": token},
+    )
+
+
+def test_the_missing_note_404_survives_being_mounted_on_the_real_app(
+    mounted_client: TestClient, vault: Path
+) -> None:
+    """F4's one error, as the app a user actually talks to emits it.
+
+    Asserted end to end: the mounted route is reachable, the real
+    `cache_policy` put `no-store` on it, the real middleware stamped an
+    `X-Request-ID` that matches the body's `requestId`, and the response is JSON
+    rather than the static mount's HTML 404.
+    """
+    response = _session_post(mounted_client, recipeNote=COOK, date=DATE)
+
+    assert response.status_code == 404
+    assert response.headers["content-type"].startswith("application/json")
+    assert response.headers["cache-control"] == "no-store"
+    body = response.json()
+    assert list(body) == list(MISSING_NOTE_KEYS)
+    assert body["requestId"] == response.headers["x-request-id"]
+    assert body["code"] == "daily_note_missing"
+    assert body["relativePath"] == DAILY_NOTE_PATH
+    assert str(vault) not in response.text
+    assert not (vault / DAILY_NOTE_PATH).exists()
+
+
+def test_the_read_back_404_survives_being_mounted_too(
+    mounted_client: TestClient,
+) -> None:
+    """`GET /api/cook-logs?date=` is reachable and 404s, rather than 404ing `not_found`.
+
+    Both failures are a 404, so the status alone proves nothing: a route that
+    fell through to the catch-all would answer with the two-key `not_found`
+    envelope. The code and the six keys are what distinguish the two.
+    """
+    response = mounted_client.get("/api/cook-logs", params={"date": DATE})
+
+    assert response.status_code == 404
+    body = response.json()
+    assert list(body) == list(MISSING_NOTE_KEYS)
+    assert body["code"] == "daily_note_missing"
+
+
+def test_a_written_cook_log_survives_being_mounted_on_the_real_app(
+    mounted_client: TestClient, note_factory: Callable[..., bytes], vault: Path
+) -> None:
+    """The mounted 201 is the real commit: the note on disk is byte-changed.
+
+    Without this, the 404 tests above would pass against a route that is mounted
+    but wired to a writer that never commits anything.
+    """
+    note_factory(daily_note_bytes())
+    response = _session_post(mounted_client, recipeNote=COOK, date=DATE)
+
+    assert response.status_code == 201, response.text
+    assert set(response.json()) == {"status", "relativePath", "noteRevision"}
+    assert "- [[盐焗鸡]]".encode() in (vault / DAILY_NOTE_PATH).read_bytes()
+
+
+def test_mounting_the_router_leaves_the_catch_all_and_the_shell_alone(
+    mounted_client: TestClient, settings: Settings
+) -> None:
+    """The registration position is load-bearing, so both neighbours are asserted.
+
+    §9.19: the domain routers go after `/js/{path}` and before the
+    `/api/{unmatched_path}` catch-all, and the static mount is registered last.
+    Getting that wrong does not fail loudly — it returns the wrong *kind* of
+    404, or serves the HTML shell to an API client.
+    """
+    unmatched = mounted_client.get("/api/does-not-exist")
+    assert unmatched.status_code == 404
+    assert set(unmatched.json()) == {"requestId", "code"}
+    assert unmatched.json()["code"] == "not_found"
+
+    shell = mounted_client.get("/")
+    assert shell.status_code == 200
+    assert shell.headers["content-type"].startswith("text/html")
+
+    health = mounted_client.get("/health")
+    assert health.status_code == 200
+    # §9.15: the extension adds no path to any surface, and `/health` in
+    # particular keeps leaking none.
+    assert str(settings.vault_path) not in health.text

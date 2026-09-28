@@ -11,7 +11,10 @@ than described in a comment:
 3. present at both reads but gone before the replace → **409**
    `daily_note_changed`, the existing code, never `daily_note_missing`;
 4. **no file is created** in any case, and `retryable: true` is a claim that gets
-   tested by performing the retry.
+   tested by performing the retry;
+5. a missing note is a **404 and never a 503**, and none of the design F4 deleted
+   — a CLI field, a QuickAdd choice, a creation service, its 503 — is anywhere
+   in `app/`, so a helpful future contributor cannot restore it by accident.
 """
 
 from __future__ import annotations
@@ -20,6 +23,7 @@ import hashlib
 import sqlite3
 from collections.abc import Callable
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -216,3 +220,69 @@ def test_the_year_directory_is_untouched_by_a_refusal(vault: Path) -> None:
     """
     assert (vault / YEAR_DIR).is_dir()
     assert list((vault / YEAR_DIR).iterdir()) == []
+
+
+#: Every name the removed design owned, plus the 503 F4 deleted. They are named
+#: here so the assertion is one edit to extend, not a hunt through `app/`.
+_REMOVED_BY_F4: Final = (
+    "OBSIDIAN_CLI_EXECUTABLE",
+    "OBSIDIAN_CLI_VAULT_ID",
+    "DAILY_TEMPLATE_NAME",
+    "DAILY_QUICKADD_CHOICE",
+    "DAILY_REQUIRED_MARKERS",
+    "TV_SYNC_COMMAND_ID",
+    "CreationIdempotencyStore",
+    "obsidian_cli",
+    "daily_note_creation_unavailable",
+)
+
+
+def test_nothing_f4_removed_exists_anywhere_in_the_shipped_source() -> None:
+    """The removal is asserted over the tree, because that is the whole claim.
+
+    `tests/vault/test_atomic_write.py` already proves no call site reaches a
+    creation primitive and the `Settings`-field test proves no configuration
+    field came back; this is the third surface — a *name*. A reintroduced CLI
+    field, a resurrected 503, or a `subprocess` module would be caught by one of
+    the three, and the failure mode this protects against is the quiet one: a
+    future contributor who does not know the design was deleted and helpsfully
+    restores its vocabulary.
+
+    Scanned as text, so the docstrings in `app/cooklog/writer.py` that *name*
+    what was removed (there are several, on purpose) do not trip it.
+    """
+    package = Path(__file__).resolve().parents[2] / "app"
+    sources = [path for path in sorted(package.rglob("*.py")) if "__pycache__" not in path.parts]
+    assert sources, "the scan found no source at all, which is not a pass"
+    for path in sources:
+        text = path.read_text(encoding="utf-8")
+        found = [name for name in _REMOVED_BY_F4 if name in text]
+        assert found == [], f"{path.relative_to(package).as_posix()}: {found}"
+
+
+def test_a_missing_daily_note_is_a_404_and_never_a_503() -> None:
+    """"There is no 503 for this path" — a missing note is not the server being ill.
+
+    503 would tell the client the server is temporarily unhealthy and invite a
+    blind retry, when in fact the request was well-formed and the resource is
+    simply absent. The absence of a `daily_note_creation_unavailable` code is
+    the same claim from the other side: there is no creation service whose
+    availability could be reported.
+    """
+    assert DailyNoteMissing.code == "daily_note_missing"
+    assert DailyNoteMissing.status_code == 404
+    # Every refusal this path can make, so a 503 added for it is visible.
+    presence = {
+        error.code: error.status_code
+        for error in (
+            DailyNoteMissing,
+            DailyNoteCreatedConcurrently,
+            DailyNoteChanged,
+        )
+    }
+    assert presence == {
+        "daily_note_missing": 404,
+        "daily_note_created_concurrently": 409,
+        "daily_note_changed": 409,
+    }
+    assert all(status != 503 for status in presence.values())

@@ -268,6 +268,71 @@ test('refreshSession re-reads the token on demand', async () => {
   }
 });
 
+/* --- F4: the server's wording is the only wording ---------------------- */
+
+test("the error message is the server's, verbatim", async () => {
+  // Exactly the body `app/api/cooklog.py` emits for a missing daily note, so
+  // this gate is the client's half of "one source of wording": the view renders
+  // `error.message` and the sentence in the vault's language is the one the
+  // server wrote. A client that composed its own copy here would be a second
+  // wording to keep correct — and a UI that showed `daily_note_missing` where
+  // the server said 找不到 … would be showing a code as an explanation.
+  const message =
+    '找不到 2026-09-27 的日记：日记/2026/2026-09-27.md。请先在 Obsidian 中创建这一天的日记，然后重试。';
+  const stub = stubFetch((url) =>
+    url === '/api/session'
+      ? json(sessionBody(TOKEN_A))
+      : json(
+          {
+            requestId: 'r9',
+            code: 'daily_note_missing',
+            message,
+            date: '2026-09-27',
+            relativePath: '日记/2026/2026-09-27.md',
+            retryable: true,
+          },
+          404,
+        ),
+  );
+  try {
+    await initApi();
+    const error = await apiFetch('/api/cook-logs', { method: 'POST', body: {} }).then(
+      () => null,
+      (rejection) => rejection,
+    );
+    assert.ok(error instanceof ApiError);
+    assert.equal(error.message, message, 'rendered verbatim, not summarised');
+    assert.equal(error.code, 'daily_note_missing');
+    assert.equal(error.status, 404);
+    // The extension stays readable for a view that needs the path or the retry
+    // affordance, without the message having to be parsed back out of a string.
+    assert.equal(error.data.date, '2026-09-27');
+    assert.equal(error.data.relativePath, '日记/2026/2026-09-27.md');
+    assert.equal(error.data.retryable, true);
+  } finally {
+    stub.restore();
+  }
+});
+
+test('a two-key envelope still reads as its code, with no message invented', async () => {
+  // The extension is additive: every pre-existing code sends `{requestId, code}`
+  // and nothing else, so the fallback has to be the code and never a string
+  // this module made up.
+  const stub = stubFetch((url) =>
+    url === '/api/session' ? json(sessionBody(TOKEN_A)) : json({ requestId: 'r1', code: 'invalid_recipe_note' }, 422),
+  );
+  try {
+    await initApi();
+    const error = await apiFetch('/api/cook-logs', { method: 'POST', body: {} }).then(
+      () => null,
+      (rejection) => rejection,
+    );
+    assert.equal(error.message, 'invalid_recipe_note');
+  } finally {
+    stub.restore();
+  }
+});
+
 /* --- F8: the strict flag is a query parameter --------------------------- */
 
 test('strict is a query parameter and nothing else', () => {

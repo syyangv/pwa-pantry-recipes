@@ -17,6 +17,12 @@
  * status is 403 for every CSRF rejection. The refresh is keyed on the
  * `csrf_invalid` CODE, not the status, so it survives either.)
  *
+ * F4: an error carries the server's `message` VERBATIM in `error.message`, so a
+ * view renders what the server said rather than composing a vaguer sentence of
+ * its own — that is what keeps there being exactly one wording to keep right.
+ * `error.data` still holds the whole body, `date` / `relativePath` /
+ * `retryable` / `currentRevision` included.
+ *
  * F7: provenance is unconditional. There is no `?debug=1`, no second
  * response shape, and no reduced payload — the 调试 toggle is a render
  * switch in prefs.js, over the same JSON.
@@ -91,6 +97,12 @@ function toApiError(response, body) {
     status: response.status,
     code,
     requestId: (body && body.requestId) || response.headers.get('X-Request-ID'),
+    // F4 (spec 9.15): the server's `message` is the SINGLE source of wording —
+    // the UI renders `error.message` verbatim and composes no copy of its own,
+    // which is what keeps there being exactly one sentence to keep correct. Only
+    // two codes send one; every other code still sends `{requestId, code}`, and
+    // the constructor's `code` fallback then reads exactly as it did before.
+    message: (body && body.message) || '',
     data: body,
   });
 }

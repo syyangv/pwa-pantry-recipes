@@ -25,7 +25,10 @@ belongs between `/js/{path}` and the `/api/{unmatched_path}` catch-all and is
 #15's wiring — so this harness is what makes the routes reachable.
 `tests/api/test_cooklog_api.py` asserts the two-key envelope is key-for-key
 identical to `_api_error`'s and that F4's extension is the only thing added, which
-is what keeps that harness honest rather than a second, divergent app.
+is what keeps that harness honest rather than a second, divergent app. It also
+splices the same router into the **real** `create_app` at §9.19's position
+(`mount_cook_logs`), because a router that no request can reach has not been
+tested; that splice is a no-op once the wiring lands.
 """
 
 from __future__ import annotations
@@ -34,6 +37,7 @@ import asyncio
 from collections.abc import Callable
 from functools import partial
 from pathlib import Path
+from typing import Final
 
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
@@ -188,6 +192,47 @@ def make_app_factory(
     return build
 
 
+#: §9.19's registration point, named so the splice below cannot drift from the
+#: documented order: the domain routers go after `/js/{path}` and **before** the
+#: `/api/{unmatched_path:path}` catch-all, because a catch-all route shadows
+#: anything registered after it.
+CATCH_ALL_PATH: Final = "/api/{unmatched_path:path}"
+
+
+def mount_cook_logs(application: FastAPI, writer: CookingLogWriter) -> FastAPI:
+    """Put the Cooking Log routes on the **real** app, where §9.19 says they go.
+
+    `app/main.py` is not this ticket's to edit, so the two `TODO(implementation)`
+    markers are still there and `create_app` mounts no domain router. This
+    inserts the router's own routes at the documented position in the app's
+    route table, which is the part that cannot be unit-tested any other way:
+    whether the route is reachable at all, whether `/api/{unmatched_path}`
+    shadows it, whether the static mount registered last still serves `/`, and
+    whether the real `cache_policy` and `/api/session` reach the route.
+
+    It is a splice rather than `include_router` because the catch-all and the
+    static mount are already registered by then, and `include_router` appends —
+    which would be the wrong order and would produce a test that passes for the
+    wrong reason.
+
+    **Idempotent by design:** if the routes are already registered, this does
+    nothing and the test exercises the real registration. The same test
+    therefore holds before and after the wiring lands, and nothing here has to
+    be undone when it does.
+    """
+    application.state[COOK_LOG_WRITER_STATE_KEY] = writer
+    table = application.router.routes
+    if any(getattr(route, "path", None) == "/api/cook-logs" for route in table):
+        return application
+    index = next(
+        position
+        for position, route in enumerate(table)
+        if getattr(route, "path", None) == CATCH_ALL_PATH
+    )
+    table[index:index] = list(build_cook_log_router().routes)
+    return application
+
+
 def client_for(application: FastAPI) -> TestClient:
     """A `TestClient` on the public origin, which is what the host guard requires."""
     return TestClient(application, base_url=ORIGIN)
@@ -197,6 +242,7 @@ def client_for(application: FastAPI) -> TestClient:
 #: `cooklog.harness`, which is what keeps the fixture wrappers in each conftest
 #: explicit about what they depend on.
 __all__ = [
+    "CATCH_ALL_PATH",
     "DAILY_NOTE_PATH",
     "ORIGIN",
     "anyio_backend",
@@ -209,6 +255,7 @@ __all__ = [
     "make_app_factory",
     "make_recovery_root",
     "make_settings",
+    "mount_cook_logs",
     "open_store",
     "writer_for",
     "write_note",
