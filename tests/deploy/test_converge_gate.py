@@ -30,6 +30,8 @@ import json
 import os
 import re
 import subprocess
+from collections.abc import Callable
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -270,8 +272,8 @@ class World:
         self-originated request, so the correct login and a forged one get the
         same bytes. A double that honoured the header would be modelling a
         working proxy, which is the case the vantage limit must never be
-        confused with — `test_a_foreign_login_rejected_by_the_backend_is_not_a_vantage_limit`
-        covers that half separately."""
+        confused with — `test_a_foreign_login_the_backend_rejected_is_not_a_vantage_limit`
+        in `test_converge_gate_vantage.py` covers that half separately."""
         del owner_login
         return self.fetch(url)
 
@@ -604,6 +606,276 @@ def test_a_condition_left_unproven_is_never_reported_as_a_pass(world: World) -> 
     assert by_id(results, "0 listener").status == gate.UNPROVEN
     assert code == 2, "an unevaluated condition must not exit 0"
     assert "INCOMPLETE" in gate.render(results)
+
+
+# ---------------------------------------------------------------------------
+# the sweep: eleven conditions, eleven breaks, one test
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Break:
+    """One condition, the world it is falsifiable in, and the one edit that
+    falsifies it.
+
+    Held as data rather than as a closure over the test body so the sweep can
+    assert something no per-condition test can: that the set of breaks covers
+    the set of conditions. A condition added to the gate without a row here
+    fails the coverage assertion below, so it cannot look proven by having
+    inherited the module docstring's promise.
+    """
+
+    ident: str
+    #: Put the world where `ident` is `PASS`, so the break is a delta from a
+    #: coherent run. Every one of these is a precondition, not a convenience: a
+    #: check that is already failing proves nothing about whether the next thing
+    #: can make it fail.
+    prepare: Callable[[World], None]
+    #: The single thing changed. One edit per row, so "this condition can be made
+    #: to fail" and "this condition failed" are the same act rather than two.
+    break_it: Callable[[World], None]
+    #: Conditions the break is expected to move *besides* the named one. Empty
+    #: for nine of the eleven. The two exceptions are topology, not slack, and
+    #: are argued in the test body; listing them here is what keeps the list
+    #: honest, because the assertion compares it against a real run and an
+    #: unexpected neighbour would fail the test rather than pass quietly.
+    also_moves: tuple[str, ...] = ()
+    #: Conditions the break is expected to remove from the report entirely. Only
+    #: `0b`: an origin the gate cannot talk to is diagnosed once and the rest are
+    #: suppressed, which is the documented design. Asserted here so that
+    #: "suppressed" can never decay into "reported as a pass".
+    drops: tuple[str, ...] = ()
+    #: The exit code of the coherent run this break is a delta from. `0` with the
+    #: whole gate green, `3` for the vantage topology condition 9 needs. Pinned
+    #: rather than derived so that condition 9 agreeing is visibly *not* the
+    #: deployed half having been observed.
+    base_code: int = 0
+
+
+def _listening(world: World) -> None:
+    """The coherent baseline: every condition `PASS`, exit 0.
+
+    Condition 0 is proven by a *real* `port_manager.py` — a script that prints
+    the line `check_listener` reads out of a subprocess — rather than by
+    patching `gate.subprocess.run`. Patching is what the two condition-0 tests
+    above do, because they want to control the exact wording of the output; a
+    script that prints that wording is the same evidence with one fewer thing
+    standing in for the code."""
+    script = world.root / "port_manager.py"
+    script.write_text(
+        'print("8007 47250 PWA .venv/bin/python -m uvicorn app.main:create_app")\n',
+        encoding="utf-8",
+    )
+    world.option_overrides = {"expect_running": True, "port_manager": script}
+
+
+def _listening_from_behind_the_vantage(world: World) -> None:
+    """The same eleven conditions agreeing, reached the way the live topology
+    reaches them: a self-addressed deployed origin that refuses every identity,
+    so conditions 2-8 are `VANTAGE-LIMITED` and condition 9 has a pass-through
+    to prove.
+
+    Both baselines report every condition as passing. They differ in the exit
+    code — 0 against 3 — and *that* difference is the assertion: condition 9
+    agreeing is not the deployed half being observed, and this is the only row in
+    the sweep where a `PASS` arrives with a vantage limit still standing."""
+    _listening(world)
+    world.identity_absent = True
+    world.self_addressed = True
+
+
+def _dead_socket(world: World) -> None:
+    script = world.root / "port_manager_dead.py"
+    script.write_text('print("Port 8007 has no visible TCP listener.")\n', encoding="utf-8")
+    world.option_overrides["port_manager"] = script
+
+
+def _the_local_origin_will_not_talk_to_the_gate(world: World) -> None:
+    world.responses[f"{LOCAL}/api/version"] = gate.Response(
+        url="", status=401, headers={}, body=b'{"code":"identity_missing"}'
+    )
+
+
+def _the_backend_still_answers_with_the_previous_version(world: World) -> None:
+    world.responses[f"{LOCAL}/api/version"] = world._json({"version": STALE_VERSION})
+
+
+def _the_deployed_origin_still_answers_with_the_previous_version(world: World) -> None:
+    world.responses[f"{DEPLOYED}/api/version"] = world._json({"version": STALE_VERSION})
+
+
+def _a_startup_loaded_file_changed_after_the_boot(world: World) -> None:
+    os.utime(world.root / "app" / "db" / "schema.sql", (YOUNG, YOUNG))
+
+
+def _a_live_response_is_missing_a_key_the_release_added(world: World) -> None:
+    payload = json.loads(world._spec_payload("/api/recipes").body)
+    del payload["staleMappingCount"]
+    world.responses[f"{LOCAL}/api/recipes"] = world._json(payload)
+
+
+def _a_mutable_frontend_file_changed_with_no_rotation(world: World) -> None:
+    world.git_overrides["diff"] = "app/static/js/views/home.js\n"
+
+
+def _the_shell_is_pinned_to_the_previous_version(world: World) -> None:
+    world.responses[f"{LOCAL}/"] = world._text(
+        world.index_text.replace("__APP_VERSION__", STALE_VERSION)
+    )
+
+
+def _a_resume_trigger_is_gone(world: World) -> None:
+    world.update_manager = world.update_manager.replace(
+        "addEventListener('pageshow'", "addEventListener('kindaPageshow'"
+    )
+    world.responses = world._table()
+
+
+def _the_busy_guard_is_gone(world: World) -> None:
+    world.update_manager = world.update_manager.replace("canApplyUpdate", "applyWhenever")
+    world.responses = world._table()
+
+
+def _the_route_resolves_to_another_backend(world: World) -> None:
+    world.serve_config["Web"][f"recipes.test.invalid:{DEPLOYED_PORT}"]["Handlers"]["/"][
+        "Proxy"
+    ] = "http://127.0.0.1:9999"
+
+
+#: What `0b` suppresses, named rather than derived from a count: the report has
+#: to lose exactly these and nothing else, and
+#: `test_an_unreachable_origin_is_reported_once_not_ten_times` above already pins
+#: the list. Duplicated deliberately — this table is read on its own terms, and a
+#: condition added to the gate should have to be added here too.
+_SUPPRESSED_BY_ZERO_B = (
+    "1 source-version",
+    "2 deployed-version",
+    "3 backend-freshness",
+    "4 release-smoke",
+    "5 cache-rotation",
+    "6 shell-assets",
+    "7 resume-check",
+    "8 busy-guard",
+)
+
+_BREAKS = (
+    Break("0 listener", _listening, _dead_socket),
+    Break("0b identity", _listening, _the_local_origin_will_not_talk_to_the_gate,
+          drops=_SUPPRESSED_BY_ZERO_B),
+    Break("1 source-version", _listening, _the_backend_still_answers_with_the_previous_version,
+          also_moves=("2 deployed-version",)),
+    Break("2 deployed-version", _listening,
+          _the_deployed_origin_still_answers_with_the_previous_version),
+    Break("3 backend-freshness", _listening, _a_startup_loaded_file_changed_after_the_boot),
+    Break("4 release-smoke", _listening, _a_live_response_is_missing_a_key_the_release_added),
+    Break("5 cache-rotation", _listening, _a_mutable_frontend_file_changed_with_no_rotation),
+    Break("6 shell-assets", _listening, _the_shell_is_pinned_to_the_previous_version),
+    Break("7 resume-check", _listening, _a_resume_trigger_is_gone),
+    Break("8 busy-guard", _listening, _the_busy_guard_is_gone),
+    Break("9 ingress-identity", _listening_from_behind_the_vantage,
+          _the_route_resolves_to_another_backend, base_code=3),
+)
+
+
+@pytest.mark.parametrize("case", _BREAKS, ids=[case.ident for case in _BREAKS])
+def test_every_condition_is_reachable_and_individually_breakable(
+    world: World, case: Break
+) -> None:
+    """The sweep this module's docstring promises: every condition, one break
+    each, and the claim that it fails.
+
+    The per-condition tests below each prove one thing in depth. This one proves
+    the property none of them can, which is **coverage**: that no condition is
+    unfalsifiable. A check with no way to be made to fail is a check whose green
+    is indistinguishable from a check that was never wired up, and nothing else
+    in the suite would notice — a new condition would arrive with a name, a row
+    in the report and no test, and the suite would stay green.
+
+    Four things are asserted per condition, and each is a separate claim:
+
+    * **Reachable.** From a coherent world the condition is `PASS`. A break
+      applied to an already-failing check proves nothing, so the coherent
+      baseline is a precondition rather than a courtesy.
+    * **Individually breakable.** One edit moves it to `FAIL`, and the run exits
+      **1** — the real-failure code, outranking the `2` of the vantage topology,
+      which is what makes row 9's `3 -> 1` worth asserting separately.
+    * **Nothing else moved, except where it must.** The set of conditions whose
+      status changed is compared against what the row declares. Two rows are not
+      singletons and neither is slack:
+
+      - `0b` drops conditions 1-8 from the report. That is the design — one
+        diagnosis, not nine — and the alternative would be nine conditions
+        reporting the same 401, which
+        `test_an_unreachable_origin_is_reported_once_not_ten_times` exists to
+        prevent. The row asserts the suppression rather than routing around it,
+        so a future change that reports them as passes cannot pass here.
+      - `1` also moves `2`. They are two halves of one fact — does the backend
+        agree with the source, and does the deployed origin agree with the
+        backend — so a version that disagrees with the source disagrees with the
+        deployed half too. Asserting the entanglement is the point: it means a
+        change that made condition 2 fail to notice a version disagreement would
+        be caught here.
+
+    * **Unchanged identity.** The same conditions are reported, under the same
+      identifiers, before and after. A check that could be renamed out of the
+      report would keep its test; this is the one that fails.
+
+    The coverage assertion comes first and is the load-bearing half: the set of
+    rows must equal the set of conditions a run evaluates. Add a condition to
+    the gate and this fails until it has a break, which is the whole reason a
+    sweeping test exists alongside eleven focused ones.
+    """
+    case.prepare(world)
+    before, base_code = run(world)
+    statuses_before = {result.ident: result.status for result in before}
+
+    assert set(statuses_before) == {row.ident for row in _BREAKS}, (
+        "the sweep does not cover the conditions the gate evaluates. Uncovered: "
+        f"{sorted(set(statuses_before) - {row.ident for row in _BREAKS})}; rows for "
+        "conditions that no longer exist: "
+        f"{sorted({row.ident for row in _BREAKS} - set(statuses_before))}"
+    )
+    assert base_code == case.base_code, (
+        f"the coherent world for {case.ident} exits {base_code}, not {case.base_code}: "
+        f"{gate.render(before)}"
+    )
+    assert by_id(before, case.ident).status == gate.PASS, (
+        f"{case.ident} does not pass in a coherent world, so breaking it would prove nothing"
+    )
+
+    case.break_it(world)
+    after, code = run(world)
+    statuses_after = {result.ident: result.status for result in after}
+
+    broken = by_id(after, case.ident)
+    assert broken.status == gate.FAIL, (
+        f"breaking {case.ident} left it {broken.status!r}, not FAIL: {broken.detail}. A condition "
+        "that cannot be made to fail cannot be wrong, and cannot be trusted either."
+    )
+    assert code == 1, f"a failed {case.ident} must exit 1, not {code}: {gate.render(after)}"
+
+    moved = sorted(
+        ident
+        for ident in statuses_before.keys() & statuses_after.keys()
+        if statuses_before[ident] != statuses_after[ident]
+    )
+    assert moved == sorted((case.ident, *case.also_moves)), (
+        f"breaking {case.ident} moved {moved}, which is not the declared "
+        f"{sorted((case.ident, *case.also_moves))}"
+    )
+    assert sorted(statuses_before.keys() - statuses_after.keys()) == sorted(case.drops), (
+        f"breaking {case.ident} removed "
+        f"{sorted(statuses_before.keys() - statuses_after.keys())} from the report, which is not "
+        f"the declared {sorted(case.drops)}"
+    )
+    assert not statuses_after.keys() - statuses_before.keys(), (
+        f"breaking {case.ident} added {sorted(statuses_after.keys() - statuses_before.keys())} to "
+        "the report"
+    )
+
+    rendered = gate.render(after)
+    assert "FAILED" in rendered, rendered
+    assert "CONVERGED" not in rendered, rendered
 
 
 # ---------------------------------------------------------------------------

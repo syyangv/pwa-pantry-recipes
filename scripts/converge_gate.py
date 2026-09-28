@@ -66,11 +66,33 @@ The conditions, in the order §12 numbers them:
                          SW cache name
     7  resume-check      returning from background triggers a version check
     8  busy-guard        an open confirmation flow postpones the reload
+    9  ingress-identity the deployed route resolves to this same process (pid
+                         and start time): who is behind the route, not what it
+                         returned
 
 Conditions 2-8 each consult the deployed origin, so each carries a second,
 independent failure mode: the deployed half may be **unobservable** from the
 machine running the gate. That is reported as `VANTAGE-LIMITED`, never as
 `PASS` and never as `FAIL`, and it names the request that would settle it.
+
+Condition 9 is the exception, and the difference is the whole point of it: it
+consults neither origin. It reads the Serve configuration and the process table,
+resolves the route the `--deployed-origin` port names, and shows the process
+holding the local origin's port is the same one in both reads — pid *and* start
+time, because a pid on its own is not an identity. So it is additive, and it
+can never clear a `VANTAGE-LIMITED` condition: it observes no deployed
+response, so it has no evidence about one.
+
+**The one assumption condition 9 rests on** is that Tailscale Serve is a
+pass-through proxy and does not cache. It is true of Serve, but it is a fact
+about someone else's proxy rather than about this deployment, so it is spelled
+out in the output of every run (`CACHING_ASSUMPTION`) instead of living only
+here. A caching proxy would break the reasoning silently: the route would still
+resolve to this process, and still be provably this process, while serving
+bytes from somewhere else entirely. What condition 9 establishes is *who* is
+behind the route; what it does not establish is *what* the route returned, and
+conditions 2-8 stay `VANTAGE-LIMITED` on a single-node deploy whether 9 passes
+or not.
 
 Usage
 -----
