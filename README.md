@@ -19,12 +19,15 @@ note.
 > loaded and `state = running`, and a tailnet-only Tailscale Serve route proxies
 > **8452 → 127.0.0.1:8007**, so the deployed origin is
 > `https://home-macbook-air.tailcd6e49.ts.net:8452`. Two things are genuinely
-> open, and neither is cosmetic: the converge gate **exits 1** when run from the
-> serving host (Serve attributes no identity to a self-originated request, so
-> the seven deployed-origin conditions return `401 identity_missing`), and the
-> runbook's **participant-identity check is not done** — it needs a phone, and
-> so no observer has yet seen an authenticated 200 from the deployed origin.
-> Every request this deploy made over the network was refused, which is the safe
+> open, and neither is cosmetic: the converge gate **exits 3** when run from the
+> serving host (conditions 2–8 come back `VANTAGE-LIMITED`, because Serve
+> attributes no identity to a self-originated request and the deployed origin
+> therefore answers `401 identity_missing` to every identity the gate can
+> present), and the runbook's **participant-identity check has never been
+> performed** — it needs a phone, and so no observer has ever seen an
+> authenticated 200 from the deployed origin.
+> Every request this deploy made over the network was refused, so the deployed
+> origin has only ever been observed **failing closed**. That is the safe
 > direction to be wrong in. See [Deployment](#deployment) and
 > [`docs/runbook/deployment.md`](docs/runbook/deployment.md); both gaps are
 > stated in [What does not work yet](#what-does-not-work-yet).
@@ -122,8 +125,10 @@ rm -rf /tmp/wheel build pwa_pantry_recipes.egg-info
 .venv/bin/python -m pip wheel . --no-deps \
   --no-build-isolation --wheel-dir /tmp/wheel
 
-# The release gate. Exit 0 converged, 1 failed, 2 a condition could not be
-# evaluated — and 2 is NOT a pass. See docs/runbook/deployment.md § 7.
+# The release gate. Exit 0 converged, 1 a real failure, 2 a condition could not
+# be evaluated because the invocation was under-specified, 3 a condition could
+# not be evaluated because the deployed origin is not observable from this host.
+# Only 0 is a pass. See docs/runbook/deployment.md § 7.
 # --owner-login is required in the production posture (TRUST_TAILSCALE_HEADERS=
 # true), because app/auth.py guards every path. It is a Settings value, not a
 # secret: it is the login the Tailscale proxy already injects.
@@ -174,10 +179,11 @@ annotated list; the four that matter most are:
 in-session, so `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` is
 installed, `com.syang.pwa-pantry-recipes` is loaded with `state = running`, and
 `tailscale serve status` lists the ingress. What is *not* true is that the
-release gate has passed: it exits **1** when run from the serving host, and the
-participant-identity check the runbook requires has not been done. Both are
-stated precisely in [What does not work yet](#what-does-not-work-yet); read them
-before claiming the deploy is verified.
+release gate has passed: run from the serving host it exits **3**, with
+conditions 2–8 `VANTAGE-LIMITED`, and the participant-identity check the runbook
+requires **has never been performed**. Both are stated precisely in
+[What does not work yet](#what-does-not-work-yet); read them before claiming the
+deploy is verified.
 
 Two ports, never one end-to-end: the app binds loopback **8007**, the phone
 reaches **8452**, and Tailscale Serve proxies between them. Never `:443`; 8000
@@ -222,7 +228,7 @@ the port is listening.
 |---|---|
 | `scripts/pwa-pantry-recipes.example.plist` | The template, now actually rendered and installed. `__UPPER_CASE__` placeholders, loopback bind on 8007, `SoftResourceLimits NumberOfFiles 8192`, `ThrottleInterval 2`, `KeepAlive`, `--timeout-graceful-shutdown 5`, and the full `EnvironmentVariables` contract. `tests/deploy/test_launchagent_template.py` asserts each of those against the file and against `app/config.py`. |
 | `scripts/install_launchagent.sh` | Three stages: render + `plutil -lint` (no side effects), `--apply` (creates `APP_DATA_DIR` 0700 and the log directory, copies the plist, **starts nothing**), `--bootstrap` (bootout + bootstrap; run 2026-09-28). Plus `--teardown` for the rollback. |
-| `scripts/converge_gate.py` | The release gate: nine conditions, stdlib-only, exit 0 / 1 / 2. |
+| `scripts/converge_gate.py` | The release gate: nine conditions, stdlib-only, exit `0` converged / `1` a real failure / `2` under-specified invocation / `3` vantage-limited. Only `0` is a pass. |
 | `scripts/converge-smoke.json` | The release-specific half of condition 4. **Edit it in every release.** |
 | [`docs/runbook/deployment.md`](docs/runbook/deployment.md) | The operational form: the Serve commands with the audit before and after, the install stages, the restart rules, and the participant-identity validation. |
 
@@ -296,38 +302,57 @@ readers to trust this section, so every bullet below is stated as something you
 can check against the tree, not as a claim about intent.
 
 - **The converge gate has never exited 0, and cannot be made to from the serving
-  host.** As deployed it exits **1**, identically before and after a
-  `launchctl kickstart -k`. Conditions 0, 0b and 1 pass; the seven
-  deployed-origin conditions all fail with `401 identity_missing`. The cause is
-  diagnosed and is not a defect in the deploy: **Tailscale Serve injects no
-  identity header for a request originating from the node doing the serving.** It
-  strips the client's `Tailscale-User-Login` (so a spoofed header is discarded
-  rather than trusted) and has no remote peer to attribute the request to. The
-  gate's fetcher presents `Tailscale-User-Login` on *both* origins, so over the
-  proxy that header is thrown away and the backend answers `identity_missing`.
-  Proven, not inferred: the same header against loopback returns `200`, and a
-  request through the proxy returns `401` for no header, a forged header, and
-  the *correct owner* header alike. This is a **vantage-point** limit, so the
-  fix is to run the gate from a host that is not the serving node. What must not
-  happen is what was available and was refused: passing `--baseline`, or editing
-  a condition to agree. The gate's exit 2 is gone — conditions 2/3/4 now have a
-  second origin and are *evaluated and failing*, which is a stronger statement
-  than "unevaluated".
-- **The participant-identity check is NOT DONE — this is the real remaining
-  gap.** `docs/runbook/deployment.md` §8 requires a phone off the host's own
-  network: the PWA port succeeds, unrelated HTTPS ports fail, SSH fails. The
-  deploy session had no phone reachable from it, so this was not performed and
-  is recorded as not done rather than approximated. Consequently **no observer
-  has yet seen an authenticated 200 from the deployed origin**, and the whole
-  identity chain past the proxy is unexercised. A loopback check does not
-  substitute: it shares the host's tailnet position and its loopback, which is
-  the exact thing §8 rules out. The tailnet does contain online phones
+  host.** Run from the serving host it exits **3**, identically before and after
+  a `launchctl kickstart -k`. Conditions 0, 0b and 1 pass; conditions 2–8 report
+  **`VANTAGE-LIMITED`**, a fourth outcome that means *the deployed half of this
+  comparison is not observable from this machine*. The cause is diagnosed and is
+  not a defect in the deploy: **Tailscale Serve injects no identity header for a
+  request originating from the node doing the serving.** It strips the client's
+  `Tailscale-User-Login` (so a spoofed header is discarded rather than trusted)
+  and has no remote peer to attribute the request to. The gate's fetcher
+  presents `Tailscale-User-Login` on *both* origins, so over the proxy that
+  header is thrown away and the backend answers `identity_missing`. Proven, not
+  inferred: the same header against loopback returns `200`, and a request
+  through the proxy returns `401` for no header, a forged header, and the
+  *correct owner* header alike.
+
+  The gate does not take that on trust. `classify_vantage` requires **two**
+  positive observations before it will use the soft outcome: that the deployed
+  origin refuses *every* identity the gate can present with the identical
+  `identity_missing` envelope (a header that arrived and was rejected would say
+  `identity_denied`, so this reads `app/auth.py`'s own vocabulary rather than
+  assuming anything about Tailscale), **and** that the deployed origin's address
+  is an address of this machine, measured by asking the routing table rather than
+  by matching a hostname. Either alone stays `FAIL` — in particular, a deployed
+  origin on *another* node refusing every identity is a real, reportable defect
+  and is still `FAIL`. The reclassification is then applied only to a response
+  that is exactly `401 identity_missing`, and only after each condition's real
+  problems have been tested for, so a version mismatch, a stale
+  `X-PWA-Backend-Started-At`, a missing response key or an un-rotated
+  `CACHE_VERSION` still fails and still exits `1`.
+  `tests/deploy/test_converge_gate_vantage.py` asserts each of those four
+  failures *inside* an already-vantage-limited world, which is the only way a
+  regression that widened the soft branch could be caught.
+
+  The fix is to run the gate from a host that is not the serving node. What must
+  not happen is what was available and was refused: passing `--baseline`, or
+  editing a condition to agree.
+- **The participant-identity check has NEVER been performed — this is the real
+  remaining gap.** `docs/runbook/deployment.md` §8 requires a phone off the
+  host's own network: the PWA port succeeds, unrelated HTTPS ports fail, SSH
+  fails. The deploy session had no phone reachable from it, so this was not done
+  and is recorded as not done rather than approximated. Consequently **no
+  observer has ever seen an authenticated 200 from the deployed origin**, and
+  the whole identity chain past the proxy is unexercised. A loopback check does
+  not substitute: it shares the host's tailnet position and its loopback, which
+  is the exact thing §8 rules out. The tailnet does contain online phones
   (`mieiphone`, `100.99.212.85`, logged in as `syyangv@`), so this is finishable
   in one step by the user from a phone — it was not finishable from a shell.
 - **The deployed service has only ever been observed failing closed.** Every
   request this deploy made over the network was refused, which is the safe
   direction, but it means the success path — a participant opening the PWA and
-  getting data — is unverified. Loopback with the owner login does return `200`
+  getting data — is unverified. A `VANTAGE-LIMITED` run is a statement about
+  the *observer*, never a statement that the deploy is fine. Loopback with the owner login does return `200`
   with a full `/health` payload (vault readable, `pantry_items.db` 178 rows, 16
   recipes), so the app is healthy; it is the *exposed* surface that is unproven.
 - **`scripts/converge-smoke.json` is a one-release artifact.** It is populated for

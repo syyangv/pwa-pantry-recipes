@@ -13,12 +13,42 @@ Exit status is the whole design:
     0  every condition is PASS — the release converged
     1  at least one condition FAILED — do not reinstall the PWA
     2  at least one condition could not be evaluated (UNPROVEN)
+    3  no condition FAILED, but at least one is VANTAGE-LIMITED
 
 **2 is not a soft 0.** The gate may not report "converged" while a condition it
 was told to check was skipped because the argument was missing, because a file
 was unreadable, or because the working tree is not a git repository. An
 unevaluated condition is the exact state a stale backend is in, and collapsing
 it into a pass is how a release ships against a backend that never reloaded.
+
+**3 is not a soft 0 either, and it is a different statement from 2.** Exit 2
+means *this invocation* was under-specified — a missing flag, an unreadable
+file, a working tree that is not a repository — and the operator can fix that
+from the same shell in five seconds. Exit 3 means the invocation was complete,
+every condition ran, and the deployed origin's answer is **not observable from
+where the gate is standing**: Tailscale Serve attributes an identity to a remote
+peer, and a request from the serving node has no remote peer to attribute.
+Getting from 3 to 0 requires a different machine (a phone on the tailnet), not
+a different argument. Collapsing 3 into 0 would assert a convergence nobody
+observed; collapsing it into 2 would file an unfixable-from-here problem under
+the one exit code whose documented remedy is "pass the flag".
+
+Precedence, and why: **1 > 2 > 3 > 0**. A real failure is the most urgent fact
+and outranks everything. Between 2 and 3, an under-specified invocation outranks
+a vantage limit because it is the operator's to fix immediately *and* because it
+can be masking whether the vantage limit even applies; a run with both still
+prints every condition's own status, so nothing is lost by the ordering.
+
+**The single property this gate must never lose: a real failure still fails.**
+`VANTAGE-LIMITED` is reachable only for a deployed response that is *byte-for-byte
+the identity-absence refusal* — HTTP 401 with `code: identity_missing` — and
+only when `classify_vantage` has **proven** two things (see its docstring): the
+deployed origin refuses every identity this gate can present, and the deployed
+origin's address is an address of this machine. A version mismatch, a stale
+`X-PWA-Backend-Started-At`, a missing response key, a rotated-away
+`CACHE_VERSION` and a wrong shell pin are all observations about a **200 body**,
+so none of them can reach that branch: they are `FAIL` and exit 1, from the
+serving node exactly as from anywhere else.
 
 The conditions, in the order §12 numbers them:
 
@@ -37,6 +67,11 @@ The conditions, in the order §12 numbers them:
     7  resume-check      returning from background triggers a version check
     8  busy-guard        an open confirmation flow postpones the reload
 
+Conditions 2-8 each consult the deployed origin, so each carries a second,
+independent failure mode: the deployed half may be **unobservable** from the
+machine running the gate. That is reported as `VANTAGE-LIMITED`, never as
+`PASS` and never as `FAIL`, and it names the request that would settle it.
+
 Usage
 -----
 
@@ -53,6 +88,14 @@ Exit 2 above is **expected and correct** before `tailscale serve` is configured:
 conditions 2, 3's deployed half and the deployed halves of 4/5/6 have no second
 origin to compare against. The gate says so instead of passing.
 
+**Run from the serving node, against a live Serve route, the gate exits 3.**
+That is the honest answer and it is not a pass: Tailscale Serve injects no
+identity for a request that originates from the node doing the serving, so the
+deployed origin refuses the correct owner login exactly as it refuses a forged
+one, and conditions 2-8 report `VANTAGE-LIMITED` with the request that would
+settle them. The deploy's success path has still never been observed; see
+`docs/runbook/deployment.md` §8.
+
 `--no-listener-check` exists for a pre-`kickstart` run, where the honest answer
 is "the new code is not running yet", not "the listener is missing".
 """
@@ -60,9 +103,11 @@ is "the new code is not running yet", not "the listener is missing".
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
 import urllib.error
@@ -72,6 +117,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Final
+from urllib.parse import urlsplit
 
 #: Pattern A's single source (docs/pwa-template.md 3a). The same literal the
 #: vendored `app/pwa_version.py` regexes out, pinned here so the gate reads the
@@ -142,8 +188,45 @@ BUSY_GUARD_MARKERS: Final = (
 PASS: Final = "pass"
 FAIL: Final = "fail"
 UNPROVEN: Final = "unproven"
+#: The fourth outcome, added 2026-09-28. It is **not** a softer `FAIL`, and **not**
+#: a `PASS` with a footnote: it says the condition's deployed half is not
+#: observable from the machine running the gate. `PASS` means "checked, agreed".
+#: `FAIL` means "checked, disagreed". `VANTAGE-LIMITED` means "not checkable
+#: here", and it is the only one of the three whose remedy is a different
+#: computer rather than a different argument. Named so it cannot be misread as
+#: success at a glance, in a log, or in a CI summary: no substring of it is
+#: `PASS`, and `VANTAGE` is a word about the observer, not about the release.
+VANTAGE: Final = "vantage_limited"
 
-_ICON = {PASS: "PASS", FAIL: "FAIL", UNPROVEN: "UNPROVEN"}
+_ICON = {PASS: "PASS", FAIL: "FAIL", UNPROVEN: "UNPROVEN", VANTAGE: "VANTAGE"}
+
+#: The trusted-proxy identity header. Named once, because the probe that
+#: classifies the vantage and the fetcher that runs the conditions must present
+#: the same one — a gate diagnosing the wrong header is diagnosing nothing.
+IDENTITY_HEADER: Final = "Tailscale-User-Login"
+
+#: A syntactically valid login belonging to nobody, and the load-bearing half of
+#: the probe. `app/auth.py` answers a header it *received and rejected* with
+#: `identity_denied`, and a header it never received with `identity_missing`. A
+#: foreign login answered `identity_missing` therefore proves the header did not
+#: arrive — a statement about the path, not about the identity. Deliberately
+#: not a real address: it must never be a login anyone holds.
+PROBE_FOREIGN_LOGIN: Final = "converge-gate-probe@invalid.invalid"
+
+#: The refusal `app/auth.py` returns in the trusted-header posture when no
+#: identity arrived. This exact shape is the only thing the vantage
+#: classification is permitted to reclassify.
+IDENTITY_MISSING: Final = "identity_missing"
+
+#: The remedy, printed on every `VANTAGE-LIMITED` condition and again in the
+#: result banner. A gate that says "unevaluable" without saying "here is the
+#: request that would evaluate it" has only moved the confusion from the exit
+#: code to the reader.
+VANTAGE_REMEDY: Final = (
+    "what would satisfy it is the same request from a host that is NOT the serving node — in "
+    "practice the user's phone on the tailnet, where Tailscale Serve has a remote peer to "
+    "attribute the request to"
+)
 
 
 @dataclass(frozen=True)
@@ -173,6 +256,227 @@ class Response:
 
 
 Fetcher = Callable[[str], Response]
+#: A probe is `fetch` with the identity header under the gate's control, so the
+#: same seam can present *no* login, a foreign one, and the configured owner one
+#: without the header being baked into a closure.
+Probe = Callable[[str, str | None], Response]
+
+
+def error_code(response: Response) -> str | None:
+    """The `code` field of an error envelope, or `None`.
+
+    `app/auth.py` wraps every rejection as `{"requestId", "code"}`, so `code` is
+    the one field that distinguishes *why* a request was refused. Reading it is
+    what lets the gate tell a refused identity from an absent one, and therefore
+    what stops it from calling a working-but-unreachable origin "unreachable
+    because of where I stand".
+    """
+    try:
+        payload = json.loads(response.text())
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return None
+    if not isinstance(payload, dict):
+        return None
+    code = payload.get("code")
+    return code if isinstance(code, str) else None
+
+
+def identity_probe(url: str, owner_login: str | None) -> Response:
+    """One GET with the identity header set (or deliberately not set).
+
+    `owner_login=None` means *present no header at all*, which is a different
+    question from "present an empty one" and has a different answer from
+    `app/auth.py` (`identity_missing` vs `identity_invalid`).
+    """
+    headers = {"Accept": "*/*"}
+    if owner_login is not None:
+        headers[IDENTITY_HEADER] = owner_login
+    return http_get(url, headers=headers)
+
+
+def _same_address(left: str, right: str) -> bool:
+    """Address equality that tolerates IPv6 scope ids and v4-mapped forms."""
+    try:
+        first = ipaddress.ip_address(left.split("%", 1)[0])
+        second = ipaddress.ip_address(right.split("%", 1)[0])
+    except ValueError:
+        return False
+    # `ipv4_mapped` exists only on IPv6Address, so a plain `127.0.0.1` has to go
+    # through the same normalisation as a `::ffff:127.0.0.1` or the two would
+    # compare unequal for a reason that has nothing to do with the addresses.
+    return (getattr(first, "ipv4_mapped", None) or first) == (
+        getattr(second, "ipv4_mapped", None) or second
+    )
+
+
+def is_self_addressed(origin: str) -> bool:
+    """Does `origin`'s host name resolve only to addresses of *this* machine?
+
+    **The question is "where does the packet go", not "what is the host called".**
+    A hostname is a label an operator chose; MagicDNS names, `localhost`, a
+    raw tailnet IP and a CNAME all reach the same node, and a name that *looks*
+    like a peer (`pwa-deals.test.ts.net`) can be an alias for this host. So this
+    asks the kernel instead: resolve the name, then `connect()` an unconnected
+    `SOCK_DGRAM` socket to each address and read back `getsockname()`. A `connect()`
+    on a datagram socket sends nothing — it only asks the routing table which
+    source address would be used. If the source the kernel picks *is* the
+    destination, the destination is a local address and the connection cannot
+    have come from, or gone to, a remote peer.
+
+    Returns `False` on any inability to decide (DNS failure, no route, an
+    unparseable origin). That direction is deliberate: an undecided question must
+    leave the condition `FAIL`, because `FAIL` is the answer that cannot be
+    wrong in the dangerous direction.
+    """
+    parts = urlsplit(origin)
+    host = parts.hostname
+    if not host:
+        return False
+    try:
+        port = parts.port or (443 if parts.scheme.lower() == "https" else 80)
+    except ValueError:
+        return False
+    try:
+        candidates = socket.getaddrinfo(host, port, type=socket.SOCK_DGRAM)
+    except (OSError, UnicodeError):
+        return False
+    if not candidates:
+        return False
+    for family, _type, _proto, _canon, sockaddr in candidates:
+        address = sockaddr[0]
+        try:
+            with socket.socket(family, socket.SOCK_DGRAM) as probe:
+                probe.connect((address, port))
+                source = probe.getsockname()[0]
+        except OSError:
+            return False
+        if not _same_address(source, str(address)):
+            return False
+    return True
+
+
+@dataclass(frozen=True)
+class VantageVerdict:
+    """What the gate could learn about the deployed origin before comparing it.
+
+    `state` is one of:
+
+    * `identity-present` — the deployed origin answered at least one identity
+      probe with 200. It is observable; compare it normally.
+    * `identity-absent` — the deployed origin refused *every* identity this
+      gate can present, with the identical `identity_missing` envelope.
+    * `undecided` — anything else, including a probe that could not run.
+
+    `unobservable` is the only field a condition consults, and it is `True` for
+    `identity-absent` **and** `self_addressed` **and** nothing else. Both
+    conjuncts are positive observations, not inferences:
+
+    * the uniform-refusal half comes from the application's own vocabulary. A
+      proxy that injected an identity and had it *rejected* answers
+      `identity_denied`; a proxy that injected nothing answers
+      `identity_missing`. Only the second is the vantage limit, and the gate can
+      tell them apart without knowing anything about Tailscale.
+    * the self-addressed half is what makes the first half mean what it says. A
+      uniformly-refusing deployed origin on *another* node is a real,
+      reportable defect — a Serve route pointed at a backend whose trusted-header
+      posture is broken would refuse every real user too — and it must stay
+      `FAIL`. Requiring proof that the traffic never left the machine is what
+      keeps that case out of the soft branch.
+
+    `evidence` is the sentence the report prints, so the classification is
+    auditable from the output rather than taken on the gate's word.
+    """
+
+    state: str
+    self_addressed: bool
+    evidence: str
+
+    @property
+    def unobservable(self) -> bool:
+        return self.state == "identity-absent" and self.self_addressed
+
+
+def classify_vantage(
+    origin: str | None,
+    probe: Probe,
+    self_addressed: Callable[[str], bool],
+    owner_login: str | None,
+) -> VantageVerdict:
+    """Decide whether the deployed origin is observable from here, and say why.
+
+    Read this before changing it: the value of this function is entirely in the
+    cases where it answers "no, it is observable", because those are the cases
+    where a real defect must survive as a `FAIL`. It is a pure function of its
+    four arguments precisely so a test can drive every one of them.
+    """
+    if not origin:
+        return VantageVerdict(
+            "identity-present",
+            False,
+            "no --deployed-origin, so there is no second origin whose vantage could matter",
+        )
+
+    local = self_addressed(origin)
+    local_evidence = (
+        f"{urlsplit(origin).hostname} resolves only to addresses of this machine, so a request "
+        "to it cannot have been proxied from a remote peer"
+        if local
+        else f"{urlsplit(origin).hostname} does not resolve to an address of this machine, so a "
+        "refusal from it is a property of that deployment rather than of this vantage point"
+    )
+
+    answered = False
+    refusals: list[str] = []
+    codes: set[str] = set()
+    for label, login in (
+        ("no identity header", None),
+        (f"a foreign identity ({PROBE_FOREIGN_LOGIN})", PROBE_FOREIGN_LOGIN),
+        (f"the configured owner identity ({owner_login!r})", owner_login),
+    ):
+        if login is None and label.startswith("the configured owner"):
+            continue
+        try:
+            response = probe(f"{origin}/api/version", login)
+        except OSError as error:
+            # `http_get` does not raise, so this is belt-and-braces. The point
+            # is the direction: a probe that cannot run is a probe that did not
+            # observe anything, so the answer is `undecided` and the conditions
+            # keep their `FAIL` — never a traceback, and never the soft branch.
+            return VantageVerdict(
+                "undecided",
+                local,
+                f"the identity probe against {origin} could not run ({error}), so the deployed "
+                f"origin's observability was not established and its refusals are treated as real "
+                f"failures ({local_evidence})",
+            )
+        if response.status == 200:
+            answered = True
+            break
+        code = error_code(response)
+        codes.add(f"{response.status}/{code}")
+        refusals.append(f"{label} -> HTTP {response.status} {code or 'with no code'}")
+    if answered:
+        return VantageVerdict(
+            "identity-present",
+            local,
+            f"{origin} answered 200 to an identity probe, so it presents an identity to this "
+            f"client and every comparison against it is evaluable ({local_evidence})",
+        )
+    if codes != {f"401/{IDENTITY_MISSING}"}:
+        return VantageVerdict(
+            "undecided",
+            local,
+            f"{origin} refused the identity probes with differing answers ({'; '.join(refusals)}), "
+            "so it is not the uniform identity-absence refusal and the refusal is treated as a "
+            f"real failure ({local_evidence})",
+        )
+    return VantageVerdict(
+        "identity-absent",
+        local,
+        f"{origin} answered HTTP 401 {IDENTITY_MISSING} to every identity this gate can present — "
+        f"{'; '.join(refusals)} — so the request carries no identity to compare, and {local_evidence}",
+    )
+
 
 
 def _run_git(*args: str, cwd: Path | None = None) -> str:
@@ -273,9 +577,69 @@ class Options:
     fetch: Fetcher = http_get
     git: Callable[..., str] = _run_git
     results: list[CheckResult] = field(default_factory=list)
+    #: The two seams `classify_vantage` needs, injectable so a test can drive
+    #: every branch of it. The defaults are the real probes: a test that does not
+    #: set them is testing against this machine's actual routing table and its
+    #: actual sockets, which is the point.
+    probe: Probe = identity_probe
+    self_addressed: Callable[[str], bool] = is_self_addressed
+    #: Computed once by `run_gate` and shared, so the classification cannot
+    #: differ between two conditions that consulted the same deployed origin.
+    vantage: VantageVerdict | None = None
 
     def add(self, ident: str, title: str, status: str, detail: str) -> None:
         self.results.append(CheckResult(ident, title, status, detail))
+
+
+def deployed_vantage(options: Options) -> VantageVerdict:
+    """The run's single vantage verdict, computed on first use and cached.
+
+    Cached rather than recomputed because a per-condition verdict is a worse
+    answer than a shared one: two conditions that consulted the same deployed
+    origin and reached different conclusions about whether it was observable
+    would mean the gate does not know what it is talking about.
+    """
+    if options.vantage is None:
+        options.vantage = classify_vantage(
+            options.deployed_origin,
+            options.probe,
+            options.self_addressed,
+            options.owner_login,
+        )
+    return options.vantage
+
+
+def vantage_note(options: Options, evaluated: str) -> str:
+    """The detail text for a `VANTAGE-LIMITED` condition.
+
+    Three things every one of these must carry, or it is not honest output: what
+    *was* evaluated (so a reader knows the local half was not skipped), the
+    evidence for the classification, and the request that would settle it.
+    """
+    verdict = deployed_vantage(options)
+    return (
+        f"{evaluated}. The deployed half of this condition was NOT evaluated: "
+        f"{verdict.evidence}. Nothing about the deployed origin's version, freshness or response "
+        f"shape has been observed, so this is NOT a pass; {VANTAGE_REMEDY}"
+    )
+
+
+def is_unobservable(options: Options, response: Response) -> bool:
+    """Is this specific deployed response the identity-absence refusal?
+
+    The conjunction matters and is deliberately narrow. `verdict.unobservable`
+    alone would reclassify *any* deployed response once the vantage was
+    established — including a 500, a 404 from a route pointing at the wrong
+    backend, or a 200. So the response itself has to be the refusal:
+    `401 identity_missing` and nothing else. Every real failure this gate exists
+    to catch is an observation about a 200 body or a non-401 status, and so
+    cannot reach this branch.
+    """
+    return (
+        deployed_vantage(options).unobservable
+        and response.status == 401
+        and error_code(response) == IDENTITY_MISSING
+    )
 
 
 # --------------------------------------------------------------------------
@@ -423,7 +787,7 @@ def check_identity(options: Options) -> bool:
     can say "the later conditions will be noise" once, rather than eight times.
     """
     response = options.fetch(f"{options.local_origin}/api/version")
-    if response.status == 401 and '"identity_missing"' in response.text():
+    if response.status == 401 and error_code(response) == IDENTITY_MISSING:
         options.add(
             "0b identity",
             "the local origin answers the gate",
@@ -493,7 +857,14 @@ def check_source_version(options: Options) -> str | None:
 
 
 def check_deployed_version(options: Options) -> str | None:
-    """2 — the local and deployed origins report the same version."""
+    """2 — the local and deployed origins report the same version.
+
+    The one condition whose entire subject is the deployed origin, so when that
+    origin is unobservable this condition is unobservable in full. That is
+    `VANTAGE-LIMITED` and not `UNPROVEN`: `UNPROVEN` is what this condition
+    reports when nobody named a deployed origin at all, and the two need
+    different remedies — supply the argument, versus move to another machine.
+    """
     if not options.deployed_origin:
         options.add(
             "2 deployed-version",
@@ -503,17 +874,35 @@ def check_deployed_version(options: Options) -> str | None:
         )
         return None
     local = options.fetch(f"{options.local_origin}/api/version")
+    if local.status != 200:
+        options.add(
+            "2 deployed-version",
+            "local /api/version == deployed /api/version",
+            FAIL,
+            f"local {local.url} returned HTTP {local.status}",
+        )
+        return None
+    local_version = (local.json() or {}).get("version")
     deployed = options.fetch(f"{options.deployed_origin}/api/version")
-    for label, response in (("local", local), ("deployed", deployed)):
-        if response.status != 200:
+    if deployed.status != 200:
+        if is_unobservable(options, deployed):
             options.add(
                 "2 deployed-version",
                 "local /api/version == deployed /api/version",
-                FAIL,
-                f"{label} {response.url} returned HTTP {response.status}",
+                VANTAGE,
+                vantage_note(
+                    options, f"the local half was evaluated and reports version {local_version!r}"
+                )
+                + " (not evaluated: deployed /api/version, and therefore the version comparison)",
             )
-            return None
-    local_version = (local.json() or {}).get("version")
+            return local_version
+        options.add(
+            "2 deployed-version",
+            "local /api/version == deployed /api/version",
+            FAIL,
+            f"deployed {deployed.url} returned HTTP {deployed.status}",
+        )
+        return None
     deployed_version = (deployed.json() or {}).get("version")
     if local_version != deployed_version:
         options.add(
@@ -566,23 +955,32 @@ def check_backend_freshness(options: Options) -> None:
         )
         return
 
-    # Two lists, never one. A single list whose entries are distinguished by a
+    # Three lists, never one. A single list whose entries are distinguished by a
     # "(unproven" string prefix is a classification bug waiting to happen: a
     # reworded message silently turns an unknown into a failure, or a failure
-    # into an unknown.
+    # into an unknown. `vantage` is a third list for the same reason: "the
+    # deployed origin could not be observed" is neither a problem nor an unknown,
+    # and folding it into either one loses the distinction the whole report
+    # exists to make.
     problems: list[str] = []
     unproven: list[str] = []
+    vantage: list[str] = []
 
     if options.deployed_origin:
         deployed = options.fetch(f"{options.deployed_origin}/api/version")
-        deployed_header = deployed.header("X-PWA-Backend-Started-At")
-        if deployed_header is None:
-            problems.append("the deployed /api/version response carries no X-PWA-Backend-Started-At header")
-        elif deployed_header != local_header:
-            problems.append(
-                f"local started at {local_header!r} but the deployed origin reports {deployed_header!r} "
-                "— two different processes, so at least one was not restarted"
-            )
+        if is_unobservable(options, deployed):
+            vantage.append("the deployed origin's start timestamp was not compared")
+        else:
+            deployed_header = deployed.header("X-PWA-Backend-Started-At")
+            if deployed_header is None:
+                problems.append(
+                    "the deployed /api/version response carries no X-PWA-Backend-Started-At header"
+                )
+            elif deployed_header != local_header:
+                problems.append(
+                    f"local started at {local_header!r} but the deployed origin reports "
+                    f"{deployed_header!r} — two different processes, so at least one was not restarted"
+                )
     else:
         unproven.append(
             "no --deployed-origin, so the deployed origin's start timestamp was NOT compared "
@@ -603,6 +1001,27 @@ def check_backend_freshness(options: Options) -> None:
             "X-PWA-Backend-Started-At newer than every changed startup-loaded file",
             FAIL,
             "; ".join(problems + unproven),
+        )
+        return
+    if vantage:
+        # The local half was fully evaluated above — header present, parseable,
+        # and newer than every named startup-loaded file — and that result is
+        # reported rather than discarded. Only the cross-process comparison
+        # could not be made. The unproven notes ride along: a condition that is
+        # both vantage-limited and under-specified is still under-specified, and
+        # dropping the second because the first won would be the same
+        # collapse-this-change-exists-to-avoid, one level down.
+        options.add(
+            "3 backend-freshness",
+            "X-PWA-Backend-Started-At newer than every changed startup-loaded file",
+            VANTAGE,
+            vantage_note(
+                options,
+                f"the local half was evaluated and the backend started at {local_header}, newer than "
+                f"every named startup-loaded file",
+            )
+            + f" (not evaluated: {'; '.join(vantage)})"
+            + (f"; still unproven: {'; '.join(unproven)}" if unproven else ""),
         )
         return
     if unproven:
@@ -725,16 +1144,35 @@ def check_release_smoke(options: Options) -> None:
         return
 
     problems: list[str] = []
+    vantage: list[str] = []
+    verified = 0
     for origin_label, origin in origins:
         for endpoint in endpoints:
             path = endpoint["path"]
             response = options.fetch(f"{origin}{path}")
             if response.status != 200:
+                if origin_label == "deployed" and is_unobservable(options, response):
+                    vantage.append(f"deployed {path}")
+                    continue
                 problems.append(f"{origin_label} {path} returned HTTP {response.status}")
                 continue
             problems.extend(_missing_keys(origin_label, path, response.json(), endpoint))
+            verified += len(endpoint.get("top_level_keys", []))
     if problems:
         options.add("4 release-smoke", "release-specific live API smoke check", FAIL, "; ".join(problems))
+        return
+    if vantage:
+        options.add(
+            "4 release-smoke",
+            "release-specific live API smoke check",
+            VANTAGE,
+            vantage_note(
+                options,
+                f"{verified} declared key(s) were verified present on the local origin across "
+                f"{len(endpoints)} endpoint(s)",
+            )
+            + f" (not evaluated: {'; '.join(vantage)})",
+        )
         return
     checked = sum(len(e.get("top_level_keys", [])) for e in endpoints) * len(origins)
     options.add(
@@ -797,12 +1235,18 @@ def check_cache_rotation(options: Options, version: str | None) -> None:
     """
     problems: list[str] = []
     unproven: list[str] = []
+    vantage: list[str] = []
+    served_on: list[str] = []
 
     for label, origin in _origins(options):
         response = options.fetch(f"{origin}/sw.js")
         if response.status != 200:
+            if label == "deployed" and is_unobservable(options, response):
+                vantage.append("deployed /sw.js")
+                continue
             problems.append(f"{label} /sw.js returned HTTP {response.status}")
             continue
+        served_on.append(label)
         served = CACHE_VERSION_RE.search(response.text())
         if served is None:
             problems.append(f"{label} /sw.js carries no CACHE_VERSION constant")
@@ -823,6 +1267,24 @@ def check_cache_rotation(options: Options, version: str | None) -> None:
 
     if problems:
         options.add("5 cache-rotation", "CACHE_VERSION rotated and served identically", FAIL, "; ".join(problems))
+        return
+    if vantage:
+        # The rotation half of this condition is a fact about the *repository*,
+        # not about the network, so it stays evaluable and stays authoritative
+        # here: an un-rotated CACHE_VERSION is a FAIL even while the deployed
+        # half is unobservable. That ordering is the point — the soft branch is
+        # only ever reached when every hard check has already passed.
+        options.add(
+            "5 cache-rotation",
+            "CACHE_VERSION rotated and served identically",
+            VANTAGE,
+            vantage_note(
+                options,
+                f"the served worker was compared on {', '.join(served_on) or 'no origin'} and "
+                f"CACHE_VERSION {version} is rotated since the last mutable frontend change",
+            )
+            + f" (not evaluated: {'; '.join(vantage)})",
+        )
         return
     if unproven:
         options.add(
@@ -935,11 +1397,17 @@ def check_shell_assets(options: Options, version: str | None) -> None:
         options.add("6 shell-assets", "HTML versioned assets == SHELL_ASSETS", UNPROVEN, str(error))
         return
     problems: list[str] = []
+    vantage: list[str] = []
+    verified: list[str] = []
     for label, origin in _origins(options):
         response = options.fetch(f"{origin}/")
         if response.status != 200:
+            if label == "deployed" and is_unobservable(options, response):
+                vantage.append("deployed /")
+                continue
             problems.append(f"{label} / returned HTTP {response.status}")
             continue
+        verified.append(label)
         refs = shell_versioned_refs(response.text())
         if not refs:
             problems.append(f"{label} / references no ?v= versioned asset at all")
@@ -954,6 +1422,19 @@ def check_shell_assets(options: Options, version: str | None) -> None:
                 problems.append(f"{label} / references {ref}, which is not in sw.js SHELL_ASSETS")
     if problems:
         options.add("6 shell-assets", "HTML versioned assets == SHELL_ASSETS", FAIL, "; ".join(problems))
+        return
+    if vantage:
+        options.add(
+            "6 shell-assets",
+            "HTML versioned assets == SHELL_ASSETS",
+            VANTAGE,
+            vantage_note(
+                options,
+                f"every ?v= reference on {', '.join(verified)} is pinned to {version} and present in "
+                "SHELL_ASSETS",
+            )
+            + f" (not evaluated: {'; '.join(vantage)})",
+        )
         return
     options.add(
         "6 shell-assets",
@@ -974,17 +1455,36 @@ def check_resume_version_check(options: Options, version: str | None) -> None:
         options.add("7 resume-check", "resume triggers a version check", UNPROVEN, "no source version")
         return
     problems: list[str] = []
+    vantage: list[str] = []
+    verified: list[str] = []
     for label, origin in _origins(options):
         response = options.fetch(f"{origin}/js/pwa/update-manager.js?v={version}")
         if response.status != 200:
+            if label == "deployed" and is_unobservable(options, response):
+                vantage.append("deployed update-manager.js")
+                continue
             problems.append(f"{label} update-manager.js returned HTTP {response.status}")
             continue
+        verified.append(label)
         body = response.text()
         for marker in RESUME_MARKERS:
             if marker not in body:
                 problems.append(f"{label} update-manager.js never registers {marker!r}")
     if problems:
         options.add("7 resume-check", "resume triggers a version check", FAIL, "; ".join(problems))
+        return
+    if vantage:
+        options.add(
+            "7 resume-check",
+            "resume triggers a version check",
+            VANTAGE,
+            vantage_note(
+                options,
+                f"the served update manager on {', '.join(verified)} re-checks on pageshow, "
+                "visibilitychange, focus and registration",
+            )
+            + f" (not evaluated: {'; '.join(vantage)})",
+        )
         return
     options.add(
         "7 resume-check",
@@ -1007,6 +1507,8 @@ def check_busy_guard(options: Options, version: str | None) -> None:
         options.add("8 busy-guard", "an open confirmation flow postpones the reload", UNPROVEN, str(error))
         return
     problems: list[str] = []
+    vantage: list[str] = []
+    verified: list[str] = []
     if config.get("WAIT_FOR_MESSAGE") != "true":
         problems.append(
             f"sw.js CONFIG has WAIT_FOR_MESSAGE={config.get('WAIT_FOR_MESSAGE')!r}, not true; with "
@@ -1015,14 +1517,31 @@ def check_busy_guard(options: Options, version: str | None) -> None:
     for label, origin in _origins(options):
         response = options.fetch(f"{origin}/js/pwa/update-manager.js?v={version}")
         if response.status != 200:
+            if label == "deployed" and is_unobservable(options, response):
+                vantage.append("deployed update-manager.js")
+                continue
             problems.append(f"{label} update-manager.js returned HTTP {response.status}")
             continue
+        verified.append(label)
         body = response.text()
         for marker in BUSY_GUARD_MARKERS:
             if marker not in body:
                 problems.append(f"{label} update-manager.js does not expose {marker!r}")
     if problems:
         options.add("8 busy-guard", "an open confirmation flow postpones the reload", FAIL, "; ".join(problems))
+        return
+    if vantage:
+        options.add(
+            "8 busy-guard",
+            "an open confirmation flow postpones the reload",
+            VANTAGE,
+            vantage_note(
+                options,
+                f"WAIT_FOR_MESSAGE is true and the served update manager on {', '.join(verified)} "
+                "exposes canApplyUpdate/requestUpdateReload",
+            )
+            + f" (not evaluated: {'; '.join(vantage)})",
+        )
         return
     options.add(
         "8 busy-guard",
@@ -1050,6 +1569,12 @@ def _default_port_manager() -> Path | None:
 
 
 def run_gate(options: Options) -> list[CheckResult]:
+    # Classify the vantage once, up front, and before any condition that would
+    # consume it. Doing it here rather than lazily means the evidence appears in
+    # the report even on a run where the local origin is unreachable, and it
+    # makes the ordering explicit: the classification is an input to the
+    # conditions, not something a condition talked itself into.
+    deployed_vantage(options)
     check_listener(options)
     reachable = check_identity(options)
     version = check_source_version(options) if reachable else None
@@ -1067,11 +1592,12 @@ def run_gate(options: Options) -> list[CheckResult]:
 def render(results: Sequence[CheckResult]) -> str:
     lines = ["converge gate — pwa-pantry-recipes", "=" * 72]
     for result in results:
-        lines.append(f"[{_ICON[result.status]:7}] {result.ident:<17} {result.title}")
+        lines.append(f"[{_ICON[result.status]:8}] {result.ident:<17} {result.title}")
         for chunk in _wrap(result.detail, 68):
-            lines.append(f"{'':9}{chunk}")
+            lines.append(f"{'':10}{chunk}")
     failed = [result for result in results if result.status == FAIL]
     unproven = [result for result in results if result.status == UNPROVEN]
+    vantage = [result for result in results if result.status == VANTAGE]
     lines.append("=" * 72)
     if failed:
         lines.append(f"RESULT: FAILED — {len(failed)} condition(s) failed. Do not reinstall the PWA.")
@@ -1080,9 +1606,24 @@ def render(results: Sequence[CheckResult]) -> str:
             f"RESULT: INCOMPLETE — {len(unproven)} condition(s) could not be evaluated. "
             "This is NOT a pass: an unevaluated condition is exactly the state a stale backend is in."
         )
+    elif vantage:
+        lines.append(
+            f"RESULT: VANTAGE-LIMITED — {len(vantage)} condition(s) could not be evaluated from this "
+            "host. This is NOT a pass: no version, timestamp, key or asset on the deployed origin has "
+            "been observed, and this exit code asserts no convergence at all."
+        )
     else:
         lines.append(
             "RESULT: CONVERGED — every condition passed. Only now may the Home Screen PWA be reinstalled."
+        )
+    if vantage:
+        # Printed unconditionally, including under FAILED and INCOMPLETE. A run
+        # can hold a real failure *and* a vantage limit, and a banner that only
+        # mentioned the vantage when it won would hide it in exactly the run
+        # where a reader most needs to know both things are true.
+        lines.append(
+            f"{len(vantage)} condition(s) are VANTAGE-LIMITED: {VANTAGE_REMEDY}. Until one of them "
+            "has been observed, the deployed origin has only ever been seen failing closed."
         )
     lines.append(
         "Reminder: a displayed PWA version proves frontend/static freshness only. It is never "
@@ -1108,10 +1649,30 @@ def _wrap(text: str, width: int) -> list[str]:
 
 
 def exit_code(results: Sequence[CheckResult]) -> int:
+    """0 converged · 1 a real failure · 2 under-specified invocation · 3 vantage.
+
+    The ordering is 1 > 2 > 3 > 0 and every step of it is a claim about urgency:
+
+    * **1** — something was checked and it was wrong. Nothing outranks that; a
+      release with a real defect is not made safer by also being unevaluable.
+    * **2** — the gate was not asked enough. `UNPROVEN` is the gate's own input
+      deficiency: a missing flag, an unreadable file, a working tree that is not
+      a repository. It outranks 3 because the operator can clear it from the same
+      shell in seconds, and because it can be *masking* whether the vantage limit
+      applies at all — a run missing `--deployed-origin` has not established
+      that there is a second origin to be limited by.
+    * **3** — the invocation was complete, every condition ran, and the deployed
+      origin's answer is not observable from this machine. Lowest urgency
+      precisely because nothing about the release has been shown to be wrong;
+      but still non-zero, because nothing about it has been shown to be right
+      either, and an exit code of 0 here would be a claim nobody made.
+    """
     if any(result.status == FAIL for result in results):
         return 1
     if any(result.status == UNPROVEN for result in results):
         return 2
+    if any(result.status == VANTAGE for result in results):
+        return 3
     return 0
 
 
@@ -1120,7 +1681,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="converge_gate.py",
         description=(
             "The release gate: nine numbered conditions (0-8) plus the 0b identity "
-            "precondition, each one able to fail."
+            "precondition, each one able to fail. Exit 0 converged, 1 a real failure, "
+            "2 a condition could not be evaluated because the invocation was "
+            "under-specified, 3 a condition could not be evaluated because the "
+            "deployed origin is not observable from this host. Only 0 is a pass."
         ),
     )
     parser.add_argument("--local-origin", default="http://127.0.0.1:8007")
@@ -1128,7 +1692,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--deployed-origin",
         default=None,
         help="the Tailscale Serve origin, e.g. https://home-macbook-air.tailcd6e49.ts.net:8452. "
-        "Omit it and conditions 2/3/4/5/6 are reported UNPROVEN, never PASS.",
+        "Omit it and conditions 2/3/4/5/6 are reported UNPROVEN, never PASS. Name it and run "
+        "the gate from the serving node and those conditions report VANTAGE-LIMITED (exit 3), "
+        "because Tailscale Serve attributes an identity to a remote peer and a self-originated "
+        "request has none — never PASS, and never FAIL for a reason that is not the deploy's.",
     )
     parser.add_argument("--repo-root", default=str(Path(__file__).resolve().parents[1]))
     parser.add_argument("--port", type=int, default=8007, help="the app's loopback bind port")

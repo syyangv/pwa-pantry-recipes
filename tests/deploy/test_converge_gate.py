@@ -109,6 +109,21 @@ def rewrite_cache_version(sw_text: str, version: str) -> str:
 class World:
     """A coherent release, plus the table a test breaks one cell of."""
 
+    #: Whether this world's deployed origin is *this* machine. `False` is the
+    #: honest default rather than a convenience: `recipes.test.invalid` is
+    #: nowhere near whatever host runs the suite, so a refusal from it is a
+    #: property of that origin, not of the observer — and a test that wants the
+    #: soft branch has to say so by flipping this.
+    self_addressed: bool = False
+    #: When true, **every** deployed-origin response is the identity-absence
+    #: refusal — HTTP 401 `identity_missing`, the envelope `app/auth.py` returns
+    #: in the trusted-header posture when no identity arrived. This reproduces
+    #: the real Serve route's behaviour for a self-originated request rather
+    #: than modelling it: the vantage probe and conditions 2-8 read the same
+    #: bytes through the same seam, so a test cannot accidentally give the probe
+    #: a friendlier world than the conditions get.
+    identity_absent: bool = False
+
     def __init__(self, root: Path) -> None:
         self.root = root
         static = self.root / "app" / "static"
@@ -148,6 +163,8 @@ class World:
             path.write_text(f"# {relative}\n", encoding="utf-8")
             os.utime(path, (OLD, OLD))
         self.responses = self._table()
+        #: Applied by `options()` under any per-call override. See there.
+        self.option_overrides: dict[str, Any] = {}
 
     # -- one knob per condition -------------------------------------------
 
@@ -193,12 +210,36 @@ class World:
     # -- the two seams ----------------------------------------------------
 
     def fetch(self, url: str) -> gate.Response:
+        if self.identity_absent and url.startswith(DEPLOYED):
+            return gate.Response(
+                url=url,
+                status=401,
+                headers={},
+                body=b'{"requestId":"probe","code":"identity_missing"}',
+            )
         response = self.responses.get(url)
         if response is None:
             return gate.Response(url=url, status=0, headers={}, body=b"not in the world")
         return gate.Response(
             url=url, status=response.status, headers=response.headers, body=response.body
         )
+
+    def probe(self, url: str, owner_login: str | None) -> gate.Response:
+        """The identity probe, which presents the header under the gate's control.
+
+        It answers from the same table as `fetch`, and deliberately ignores
+        `owner_login`: a real Tailscale Serve route *strips* the header for a
+        self-originated request, so the correct login and a forged one get the
+        same bytes. A double that honoured the header would be modelling a
+        working proxy, which is the case the vantage limit must never be
+        confused with — `test_a_foreign_login_rejected_by_the_backend_is_not_a_vantage_limit`
+        covers that half separately."""
+        del owner_login
+        return self.fetch(url)
+
+    def self_addressed_for(self, origin: str) -> bool:
+        del origin
+        return self.self_addressed
 
     def git(self, *args: str, cwd: Path | None = None) -> str:
         self.git_calls.append(args)
@@ -230,7 +271,15 @@ class World:
             "daily_notes_root": "日记",
             "fetch": self.fetch,
             "git": self.git,
+            "probe": self.probe,
+            "self_addressed": self.self_addressed_for,
         }
+        # World-level defaults, applied *under* the call's overrides so a test
+        # can still contradict the world. Exists so a fixture can change how
+        # every `run()` in a test behaves — proving the listener, say — without
+        # that fact having to be repeated at each call site, where one forgotten
+        # copy would silently produce a different exit code.
+        defaults.update(self.option_overrides)
         defaults.update(overrides)
         return gate.Options(**defaults)
 

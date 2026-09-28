@@ -4,10 +4,17 @@
 > `install_launchagent.sh --apply --bootstrap` has been run and
 > `com.syang.pwa-pantry-recipes` is `state = running`; the Serve route on `:8452`
 > exists and proxies to `127.0.0.1:8007`. Two things are still open and are not
-> cosmetic: the converge gate **exits 1** when run from the serving host (§7b),
-> and the participant-identity validation in §8 is **not done**. Read both before
-> describing this deploy as verified. Rollback is unchanged and is at the end of
-> each section.
+> cosmetic: the converge gate **exits 3** when run from the serving host (§7b),
+> and the participant-identity validation in §8 is **not done** — it has **never
+> been performed**. Read both before describing this deploy as verified.
+> Rollback is unchanged and is at the end of each section.
+>
+> **Exit 3 is not a pass and does not mean the deploy is broken.** It is the
+> gate's new, separate answer for "this condition could not be evaluated from
+> the machine I am standing on". Every request this deploy has ever made over
+> the network was **refused**: the deployed origin has so far only ever been
+> observed *failing closed*, and no observer has seen an authenticated 200
+> through the proxy.
 
 The plan itself is `docs/spec/2026-09-27-pantry-recipes.md` §12 and
 `~/projects/pwa-template/docs/pwa-template.md` §1a, §1c, §1d, §3e. This runbook
@@ -20,7 +27,7 @@ create a half-deployed state, and the reason each one is where it is.
 |---|---|
 | `scripts/pwa-pantry-recipes.example.plist` | A template, and the source of the installed plist. Renders, lints, and is asserted against `app/config.py` by `tests/deploy/test_launchagent_template.py`. Rendered by the installer, not installed by hand. |
 | `scripts/install_launchagent.sh` | Three stages. **All three have been run** (2026-09-28), the third under explicit in-session authorization. |
-| `scripts/converge_gate.py` | The release gate. Runs against a live service; verified in full against a loopback dev server and proved able to fail on all nine conditions. **Exits 1 against the deployed pair — see §7b.** |
+| `scripts/converge_gate.py` | The release gate. Runs against a live service; verified in full against a loopback dev server and proved able to fail on all nine conditions. **Exits 3 against the deployed pair from the serving host — see §7b.** |
 | `scripts/converge-smoke.json` | The release-specific half of gate condition 4. Edited every release. |
 | `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` | **Installed** 2026-09-28. |
 | `com.syang.pwa-pantry-recipes` in `launchctl` | **Loaded**, `state = running`. |
@@ -61,11 +68,14 @@ tailscale serve status
 ```
 
 Note: `port-manager audit --json` classifies a route by
-`~/.agent/skills/port-manager/references/port-allocations.json`, and **that file
-has no `pwa-pantry-recipes` entry.** After the route on 8452 is created the audit
-will report it as an `unmanaged_extra` rather than `ok`. That file is owned by the
-`port-manager` skill, not by this repo, so it is reported here rather than edited;
-adding the entry is a follow-up ticket.
+`~/.agent/skills/port-manager/references/port-allocations.json`. That file now
+carries a `pantry-recipes` entry — loopback bind `8007`, Serve ingress `8452` —
+added 2026-09-28 in the port-manager repo (`ebb7291`), so the audit reports
+`8452` as `ok`. That file is owned by the `port-manager` skill, not by this
+repo; the entry was made there rather than mirrored here. The two facts it
+cannot hold — the launchd label `com.syang.pwa-pantry-recipes` and the
+`launchd` deploy posture — are recorded in that skill's `known-ports.md`, which
+is where 8004/8005/8006 carry the same pair.
 
 ## 3. The Tailscale Serve plan — executed 2026-09-28
 
@@ -84,8 +94,7 @@ tailscale serve status --json  > ~/Library/Logs/pantry-serve-status-$(date +%Y%m
 # 3. the change — port, path and backend URL all explicit
 tailscale serve --bg --https=8452 http://127.0.0.1:8007
 
-# 4. AFTER — the same audit, and the result must be unchanged apart from the
-#    expected `unmanaged_extra` for 8452 (see §2)
+# 4. AFTER — the same audit; 8452 must now read `ok`
 python3 ~/.agent/skills/port-manager/scripts/port_manager.py audit --json
 tailscale serve status
 
@@ -242,13 +251,41 @@ the person deciding whether to bootstrap the agent.
 | 7 `resume-check` | 6 | the **served** `update-manager.js` re-checks on `pageshow`, `visibilitychange` and `focus`. |
 | 8 `busy-guard` | 7 | `WAIT_FOR_MESSAGE` is `true` and the served update manager exposes `canApplyUpdate` / `requestUpdateReload`. |
 
-**Exit codes are the design.** `0` every condition passed. `1` at least one
-failed — do not reinstall the PWA. `2` at least one could not be evaluated.
-Exit 2 is not a soft 0: before a Serve route exists, conditions 2, 3 and 4 have no
-second origin to compare against, and the gate says so rather than passing on
-the local half alone. **As deployed the gate exits `1`, not `2` and not `0`** —
-it has a second origin now and evaluates it, and the deployed half fails.
-See §9b for the diagnosis and §8 for the check that would resolve it.
+**Exit codes are the design.** Four states, and **only `0` is a pass**:
+
+| Code | Meaning | Your move |
+|---:|---|---|
+| `0` | every condition passed | the release converged; only now reinstall the PWA |
+| `1` | at least one condition **failed** | something is wrong with the release or the deploy. Do not reinstall. |
+| `2` | at least one condition is `UNPROVEN` | *this invocation* was under-specified — a missing flag, an unreadable file, a working tree that is not a repository. Supply the argument. |
+| `3` | at least one condition is `VANTAGE-LIMITED` | the invocation was complete, every condition ran, and the **deployed origin is not observable from this host**. Move to a host that is not the serving node. |
+
+Precedence is **1 > 2 > 3 > 0**, and each step is a claim about urgency. `1`
+outranks everything: a release with a real defect is not made safer by also being
+unevaluable. `2` outranks `3` because it is fixable from the same shell in
+seconds and because it can be *masking* whether the vantage limit applies at all —
+a run with no `--deployed-origin` has not established that there is a second
+origin to be limited by. `3` is lowest because nothing has been shown to be
+wrong; but it is still non-zero, because nothing has been shown to be right
+either.
+
+**`2` and `3` are both "not a pass", and they are deliberately different
+codes.** Before a Serve route exists, conditions 2, 3 and 4 have no second
+origin to compare against and the gate exits `2`. As deployed, from the serving
+host, it exits **`3`**: the second origin exists, it was queried, and it answered
+`401 identity_missing` to every identity the gate can present. Folding `3` into
+`2` would file a problem whose remedy is "get a phone" under the one code whose
+documented remedy is "pass the flag" — and an operator who has been told to add
+a flag that is already there will go looking for something else to change.
+Folding `3` into `0` would assert a convergence nobody observed.
+
+**What a `VANTAGE-LIMITED` condition does and does not mean.** It means the
+deployed half of that comparison could not be made from here. It does **not**
+mean the deployed origin is fine — the gate has not observed it, and says so.
+Each one names the request that would settle it. As deployed, 2–8 are all
+`VANTAGE-LIMITED`; their **local** halves were evaluated and are reported as
+evaluated, and any real problem in a local half is still `FAIL` and still the
+exit code. See §9b for the detection and §8 for the check that resolves it.
 
 Condition 5's second half is the one with a recorded incident behind it: a deploy
 can be internally consistent — clean tree, matching versions, correct shell
@@ -286,14 +323,22 @@ to the release that carries those changes, and that is what `a303d4a` is:
 `fb2577e`, not `a303d4a`. Both rotations are history; the live value is
 `v0.7.1`.)
 
-## 8. Validation from a participant identity — **NOT DONE**
+## 8. Validation from a participant identity — the closing step, **NEVER DONE**
 
-**This check was not performed and is not satisfied.** The 2026-09-28 deploy ran
-from a shell on the serving host; no phone was reachable from it. It is recorded
-here as outstanding rather than approximated, and **no loopback or desktop check
-was substituted for it** — §8 exists precisely because the host's own browser is
-not a participant identity: it shares the host's tailnet position and its
-loopback.
+**This check has never been performed. It is not done, not deferred, and not
+approximated.** Nothing in this repository should be read as evidence that an
+authenticated request through the Tailscale Serve proxy has ever succeeded,
+because no such request has ever succeeded here. Every network request the
+2026-09-28 deploy made was **refused** — the deployed origin has only ever been
+observed *failing closed*.
+
+It is the last step of the release sequence and it is the only one that
+exercises the identity chain past the proxy. Conditions 0–1 and the local halves
+of 2–8 run from a shell on the serving host; §7b's `VANTAGE-LIMITED` result is
+what remains when the rest of the sequence is done from the wrong vantage point.
+This section is the only thing that can clear it, and **no loopback or desktop
+check substitutes for it**: the host's own browser shares the host's tailnet
+position and its loopback, which is exactly what §8 rules out.
 
 What remains to be done, from a phone off the host's network:
 
@@ -302,15 +347,17 @@ What remains to be done, from a phone off the host's network:
 - unrelated HTTPS ports (8443, 8445–8451) **fail**;
 - SSH **fails**.
 
+Then, and only then, re-run the gate from that host so conditions 2–8 are
+evaluated rather than `VANTAGE-LIMITED`, and record the exit code here.
+
 The tailnet has online phones logged in as `syyangv@` (`mieiphone`,
 `100.99.212.85`), which is the identity the deployed `TAILSCALE_OWNER_LOGIN`
-expects, so the check is finishable by the user in one step from a phone. Until
-it is done, **no observer has seen an authenticated 200 from the deployed
-origin**, and the deploy is unverified on its success path.
+expects, so the check is finishable by the user in one step from a phone. It was
+not finishable from a shell on the serving host, and it was not done.
 
-The runbook's original ordering put this check *before* the LaunchAgent exists,
-with a foreground loopback dev server. That ordering was not followed, and the
-consequence is §7b.
+**Recorded state: NOT PERFORMED.** Until it is, the deploy is unverified on its
+success path, and `VANTAGE-LIMITED` in a gate run is a statement about the
+observer rather than a statement about the deploy.
 
 ## 9. Where the auth posture stops
 
@@ -334,23 +381,23 @@ mismatched one with `401 identity_denied`. With
 is deliberately **no write allowlist** (F18): with F4 removing the note-creation
 service, that flag is the only gate between a mutation and the vault.
 
-**The gate now has two origins, and it fails.** Exit 2 is gone: conditions 2, 3
-and 4 are evaluated and *failing*, not unevaluated. See §7b for the diagnosis.
+**The gate has two origins, and the deployed one is not observable from here.**
+Conditions 2–8 are `VANTAGE-LIMITED` and the run exits 3: they were evaluated,
+and the deployed origin refused every identity the gate can present. See §7b for
+the detection and §9b for the evidence.
 
-## 9b. Why the gate exits 1 from the serving host
+## 9b. Why the gate exits 3 from the serving host
 
-The deploy ran the gate from the same machine that serves `:8452`, and it exits
-**1**, identically before and after `launchctl kickstart -k`:
+The deploy ran the gate from the same machine that serves `:8452`. It reports
+conditions 2–8 as `VANTAGE-LIMITED` and exits **3**, identically before and after
+`launchctl kickstart -k`:
 
 ```
-[PASS] 0 listener      [PASS] 0b identity     [PASS] 1 source-version
-[FAIL] 2 deployed-version  [FAIL] 3 backend-freshness  [FAIL] 4 release-smoke
-[FAIL] 5 cache-rotation   [FAIL] 6 shell-assets
-[FAIL] 7 resume-check     [FAIL] 8 busy-guard
+[PASS] 0 listener  [PASS] 0b identity  [PASS] 1 source-version
+[VANTAGE] 2 deployed-version  [VANTAGE] 3 backend-freshness
+[VANTAGE] 4 release-smoke     [VANTAGE] 5 cache-rotation
+[VANTAGE] 6 shell-assets      [VANTAGE] 7 resume-check  [VANTAGE] 8 busy-guard
 ```
-
-Every failure is the same one: the deployed origin answers `401
-identity_missing`.
 
 **Cause.** Tailscale Serve injects no identity header for a request that
 originates from the node doing the serving. It *strips* the client's
@@ -361,7 +408,8 @@ that presents `Tailscale-User-Login: <owner-login>` for *both* origins (that is
 what makes condition 0b pass on loopback), so over the proxy that header is
 thrown away and the backend correctly answers `identity_missing`.
 
-This is a **vantage-point** limit, not a deploy defect. Evidence, all observed:
+This is a **vantage-point** limit, not a deploy defect. Evidence, all observed
+against the live service:
 
 | Request | Origin | Result |
 |---|---|---|
@@ -379,10 +427,88 @@ DNS or curl artifact. And the same behaviour was observed on the pre-existing
 sibling route `:8447` before this app was deployed, so it is a property of Serve
 on this node, not of this app.
 
+### How the gate tells that apart from a real failure
+
+This is the part that matters, because a gate which reports `FAIL` for an
+environmental reason trains its operator to go looking for a way to make the
+number go away — and the ways available are `--baseline`, a weakened comparison,
+and a skipped condition. The gate's author refused `--baseline` once, correctly,
+and the classification below exists so that refusal does not have to be repeated
+under pressure.
+
+`classify_vantage` in `scripts/converge_gate.py` decides this from **two
+positive observations, both required**. Neither is a hostname match and neither
+is a flag.
+
+**1. The refusal is uniform over every identity the gate can present.** It sends
+three requests to the deployed `/api/version`: no `Tailscale-User-Login`, a
+forged one, and the configured owner one. `app/auth.py` has a distinct code for
+each situation, and that vocabulary is the whole basis of the test:
+
+| The deployed origin… | answers | means |
+|---|---|---|
+| received no header | `401 identity_missing` | no identity arrived |
+| received a header and rejected it | `401 identity_denied` | an identity arrived and was wrong |
+| received a duplicated/empty/oversized header | `401 identity_invalid` | an identity arrived, malformed |
+| received the right header | `200` | the identity path works |
+
+Only the first row can produce three identical answers. A live proxy injecting
+*some* identity would answer `200` or `identity_denied` for at least one of the
+three, and the gate then classifies the origin as **observable** and evaluates
+it normally. The classification reads `app/auth.py`'s own codes, so it needs to
+know nothing about Tailscale.
+
+**2. The deployed origin's address is an address of this machine.** The gate
+resolves the deployed host and then asks the kernel: a `SOCK_DGRAM` socket is
+`connect()`ed to each resolved address (which sends nothing — it only consults the
+routing table) and `getsockname()` is read back. If the source address the
+kernel picks *is* the destination, the destination is local, and a connection to
+it cannot have been proxied from a remote peer. For `:8452` that resolves to
+`100.87.56.102`, which is this node's own tailnet address.
+
+Observation 2 is what stops observation 1 from being a loophole. A deployed
+origin on **another** node that refuses every identity would refuse every real
+user too — a Serve route pointed at a backend whose trusted-header posture is
+broken looks exactly like this from here — and calling that a vantage limit
+would be the gate deciding a broken deployment is fine. Without proof that the
+traffic never left the machine, that case stays `FAIL`.
+
+Any inability to decide — DNS failure, no route, an unparseable origin, a probe
+that errors — resolves to **not** vantage-limited, so the condition stays `FAIL`.
+The uncertainty is always resolved toward the answer that cannot be wrong in the
+dangerous direction.
+
+Finally, the reclassification is applied **per response, and only to the exact
+refusal shape**: `401` with `code: identity_missing`, and nothing else. Every
+real failure this gate exists to catch is an observation about a **200 body** or
+a non-401 status — a version mismatch, a stale `X-PWA-Backend-Started-At`, a
+missing response key, a rotated-away `CACHE_VERSION`, a wrong shell pin — so
+none of them can reach the soft branch. Each condition's real problems are
+collected and tested for `FAIL` *before* the vantage branch is considered, so a
+vantage limit can never absorb a defect the gate did find.
+`tests/deploy/test_converge_gate_vantage.py` asserts each of those four
+failures inside an already-vantage-limited world, which is the only arrangement
+in which a regression that widened the soft branch would be caught.
+
 **The fix is to run the gate from a host that is not the serving node** — a
 participant on the tailnet. **The fix is not** `--baseline`, and not editing a
 condition; both were available and were refused, because the only defensible way
 to change a failing condition is to fix the cause.
+
+### One real failure this section is not about
+
+The same run also reports condition 3 as `FAIL`, which is exit 1 and outranks
+the vantage limit:
+
+> `daily_notes_root:日记/2026/2026-09-28.md was modified at
+> 2026-09-28T15:50:51, AFTER the backend started at 2026-09-28T15:29:37 —
+> the process is running pre-change bytes`
+
+That is a **genuine finding about the local half**, not a vantage artefact: the
+user edited today's daily note after the backend booted. It is reported rather
+than hidden, and it is the clearest available demonstration that adding a fourth
+outcome did not soften the gate. Resolving it means restarting the backend, which
+§5 covers.
 
 ## 9c. Guard order, and where the auth posture actually stops
 
@@ -418,5 +544,13 @@ running. What was authorized and done: `bootstrap` started the service and
 observed **failing closed** — every request made over the network in the deploy
 session was refused. That is the safe direction to be wrong in, and it is still
 being wrong in it. The decision that remains the user's is whether to complete
-§8 from a phone, which is the only thing left that would let the gate exit 0
-with a real second origin.
+§8 from a phone, which is the only thing left that would let conditions 2–8 be
+evaluated against a real second origin, and which is the only thing that could
+turn a `VANTAGE-LIMITED` run into a `CONVERGED` one.
+
+Two ledger facts changed in the port-manager repo on 2026-09-28 (`ebb7291`) and
+are recorded here so this runbook is not the only place they are written down:
+`port-allocations.json` now declares `pantry-recipes` (bind 8007, ingress 8452),
+so `port-manager audit` classifies 8452 as `ok` rather than `unmanaged_extra`; and
+the launchd label and deploy posture went into that skill's `known-ports.md`,
+because the JSON schema has no field for either.

@@ -12,20 +12,27 @@ Serve route proxies **8452 → 127.0.0.1:8007**. The deployed origin is
 
 Two caveats, both load-bearing, both in `README.md` § *What does not work yet*:
 
-1. **The converge gate exits 1 when it is run from the serving host**, not 0.
-   All nine local-side conditions pass; the seven deployed-origin conditions all
-   return `401 identity_missing`, because **Tailscale Serve injects no identity
-   header for a request that originates from the node doing the serving** — it
-   strips the client's `Tailscale-User-Login` (so spoofing fails too) and has no
-   remote peer to attribute. The gate's fetcher presents `Tailscale-User-Login`
-   on both origins, so over the proxy that header is discarded. This was
-   diagnosed, not worked around: no `--baseline`, no relaxed check, no claim of
-   a pass that was not observed.
-2. **The participant-identity validation is NOT DONE.** `docs/runbook/
-   deployment.md` §8 requires a phone off the host's network, and no phone was
-   reachable from the deploy session. No observer has yet seen an authenticated
-   200 from the deployed origin. Loopback with the owner login returns 200 on
-   everything, which proves the app, not the exposed surface.
+1. **The converge gate exits 3 when it is run from the serving host**, not 0.
+   Conditions 0, 0b and 1 pass; conditions 2–8 report **`VANTAGE-LIMITED`**, the
+   gate's fourth outcome, meaning *the deployed half of this comparison is not
+   observable from this host*. The cause is that **Tailscale Serve injects no
+   identity header for a request that originates from the node doing the
+   serving** — it strips the client's `Tailscale-User-Login` (so spoofing fails
+   too) and has no remote peer to attribute. The gate's fetcher presents
+   `Tailscale-User-Login` on both origins, so over the proxy that header is
+   discarded and the backend answers `401 identity_missing` to *every* identity.
+   The gate proves this rather than assuming it — see the detection note below —
+   and it was diagnosed, not worked around: no `--baseline`, no relaxed check,
+   no claim of a pass that was not observed. `VANTAGE-LIMITED` is **not** a pass
+   and its exit code is **3**, not 0.
+2. **The participant-identity validation has NEVER been performed.**
+   `docs/runbook/deployment.md` §8 requires a phone off the host's network, and
+   no phone was reachable from the deploy session. **No observer has ever seen
+   an authenticated 200 from the deployed origin**; every network request the
+   deploy made was refused, so the service has only ever been observed *failing
+   closed*. Loopback with the owner login returns 200 on everything, which proves
+   the app, not the exposed surface. Nothing in this repository may be read as
+   evidence that the authenticated path works.
 
 Do not describe the gate as passing, and do not substitute a loopback or
 desktop check for the participant check. `docs/runbook/deployment.md` is the
@@ -183,9 +190,11 @@ or `--bootstrap` is idempotent:
 # code-only change: the job is already loaded, so this is the correct restart.
 launchctl kickstart -k gui/$(id -u)/com.syang.pwa-pantry-recipes
 
-# the release gate. MUST be run from a host that is not the serving node, or
-# the seven deployed-origin conditions return 401 identity_missing and it
-# exits 1. Never make it pass by passing --baseline.
+# the release gate. Run from the serving host it exits 3 with conditions 2-8
+# VANTAGE-LIMITED: the deployed origin refuses every identity the gate can
+# present, so those comparisons cannot be made from here. To get a real
+# answer, run it from a host that is NOT the serving node. Never make it pass
+# by passing --baseline, and never by editing a condition to agree.
 .venv/bin/python scripts/converge_gate.py \
   --local-origin http://127.0.0.1:8007 \
   --deployed-origin https://home-macbook-air.tailcd6e49.ts.net:8452 \
@@ -229,9 +238,9 @@ introduces the code that implements it, not later.
 
 ### Deploy
 
-**Deployed 2026-09-28, with the gate at exit 1 and the participant-identity check
-not done — see the state header at the top of this file and `README.md` § *What
-does not work yet*.** Concretely: the plist is installed at
+**Deployed 2026-09-28, with the gate at exit 3 (`VANTAGE-LIMITED`) and the
+participant-identity check never performed — see the state header at the top of
+this file and `README.md` § *What does not work yet`.** Concretely: the plist is installed at
 `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist`, the label
 `com.syang.pwa-pantry-recipes` is loaded and `state = running`, and
 `tailscale serve status` lists `8452 → http://127.0.0.1:8007`. Do not re-bootstrap
@@ -243,11 +252,15 @@ reaches **8452**; Tailscale Serve proxies between them. Never `:443`, and never
 a bare `tailscale serve <target>` — state the port, the path and the backend URL
 explicitly, and run `port-manager audit --json` **before and after**. The
 2026-09-27 port audit is recorded in `.env.example`; verify it against live
-`lsof` and `tailscale serve status` rather than trusting the file. As shipped,
-`port-manager audit --json` reports 8452 as an `unmanaged_extra`, because
-`~/.agent/skills/port-manager/references/port-allocations.json` has no
-`pwa-pantry-recipes` entry; that file is the port-manager skill's, not this
-repo's, so it is reported rather than edited.
+`lsof` and `tailscale serve status` rather than trusting the file.
+`port-manager audit --json` classifies 8452 as `ok`, because
+`~/.agent/skills/port-manager/references/port-allocations.json` now declares it
+(entry `pantry-recipes`, bind `8007`, ingress `8452`, added 2026-09-28 in the
+port-manager repo, commit `ebb7291`). That file is the port-manager skill's, not
+this repo's; the launchd label `com.syang.pwa-pantry-recipes` and the `launchd`
+deploy posture went into that skill's `known-ports.md`, because the JSON schema
+has no field for either and inventing one in a shared ledger would be worse than
+the gap.
 
 **The deployed identity is `TAILSCALE_OWNER_LOGIN=syyangv@github`, and it is not
 a guess**: it is the value the sibling `com.syang.pwa-obsidian-daily` plist
@@ -257,11 +270,27 @@ behind a tailnet-only Serve route), and the tailnet's own peers are logged in as
 port, no path, no trailing slash — because the Origin guard compares it exactly.
 `OBSIDIAN_READ_ONLY=true` as installed, so every mutation is `403 read_only`.
 
-**Run the gate from a host that is not the serving node, or expect exit 1.** From
-the serving host the deployed-origin conditions are `401 identity_missing`,
+**Run the gate from a host that is not the serving node, or expect exit 3.**
+From the serving host the deployed-origin conditions are `VANTAGE-LIMITED`,
 because Serve attributes no identity to a self-originated request. That is a
 property of the vantage point, not of the deploy, and it must not be taught away
 by passing `--baseline` or weakening a condition.
+
+The gate distinguishes that from a real failure by **detecting** it, not by
+guessing: `classify_vantage` requires (1) the deployed origin to refuse *every*
+identity the gate can present with the identical `401 identity_missing`
+envelope — a header that arrived and was rejected answers `identity_denied`, so
+this reads `app/auth.py`'s own vocabulary — **and** (2) the deployed origin's
+resolved address to be an address of this machine, measured by `connect()`ing a
+`SOCK_DGRAM` socket and reading `getsockname()`, never by matching a hostname or
+taking a flag. Either observation alone leaves the condition `FAIL`, so a deployed
+origin on another node that refuses every identity is still reported as the real
+defect it is. The soft outcome is then applied only to a response that is exactly
+`401 identity_missing`, and only after that condition's real problems have been
+tested for: a version mismatch, a stale `X-PWA-Backend-Started-At`, a missing
+response key and an un-rotated `CACHE_VERSION` all still `FAIL` and still exit
+`1`. `tests/deploy/test_converge_gate_vantage.py` asserts those four inside an
+already-vantage-limited world.
 
 **The release sequence is:** bump `CACHE_VERSION` → add new static files to
 `SHELL_ASSETS` → **edit `scripts/converge-smoke.json`** → commit → push →
@@ -278,9 +307,17 @@ settings running and reports success. After any restart, prove the listener with
 proves a process is alive, not that the socket is listening.
 
 **The converge gate is `scripts/converge_gate.py`, and it is the release check,
-not a checklist.** Nine conditions, stdlib-only, exit `0` converged / `1` failed
-/ `2` a condition could not be evaluated. Exit 2 is deliberately not a soft 0: an
-unevaluated condition is exactly the state a stale backend is in. It checks the
+not a checklist.** Nine conditions, stdlib-only, and four exit codes of which
+**only `0` is a pass**: `0` converged · `1` a real failure · `2` a condition
+could not be evaluated because the invocation was under-specified (a missing
+flag, an unreadable file) · `3` a condition could not be evaluated because the
+deployed origin is not observable from this host. Precedence is `1 > 2 > 3 > 0`.
+Neither `2` nor `3` is a soft 0: an unevaluated condition is exactly the state a
+stale backend is in, and `3` in particular asserts no convergence at all — it
+says the gate could not look, not that what it would have found was fine. `2`
+and `3` are separate codes on purpose, because their remedies are different in
+kind: `2` is fixed by adding an argument in this shell, `3` only by moving to a
+different computer. It checks the
 **served** `/sw.js` cache version *and* that `CACHE_VERSION` was rotated since
 the last mutable frontend change, because a deploy can be internally consistent
 — clean tree, matching versions, correct shell assets — while re-using the
