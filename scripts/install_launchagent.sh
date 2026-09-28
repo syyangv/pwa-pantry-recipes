@@ -223,13 +223,21 @@ case "$mode" in
     render)
         echo "==> render only. Nothing was installed, started, or exposed."
         echo "    rendered plist kept at: $rendered"
-        # Unquoted so $rendered expands: the operator needs the path this run
-        # produced, and a literal `$rendered` in a "next steps" block is a
-        # papercut that sends them looking for a file that was never named.
-        cat <<NEXT
-
-  Next steps, each requiring its own decision:
-    1. Review the rendered plist:  less $rendered
+        # The delimiter is QUOTED, so the block below is literal text: a backtick,
+        # a `$(...)` or a `\` in operator-facing prose is printed, never executed.
+        # An unquoted `<<NEXT` made this block run `port-manager audit --json` as
+        # a command, so every render printed "port-manager: command not found" to
+        # stderr and silently swallowed the sentence naming the audit — the
+        # rendered line read "Always with  BEFORE and AFTER", with the audit
+        # deleted from the instructions it was part of.
+        #
+        # The one value that must expand is passed to printf as an ARGUMENT.
+        # A variable in an argument position is not re-scanned for backticks, so
+        # this keeps the path (the operator needs the file this run produced)
+        # without reopening the hole the quoted delimiter just closed.
+        printf '\n  Next steps, each requiring its own decision:\n'
+        printf '    1. Review the rendered plist:  less %s\n' "$rendered"
+        cat <<'NEXT'
     2. Configure Tailscale Serve ingress (docs/runbook/deployment.md § 2):
          tailscale serve --bg --https=8452 http://127.0.0.1:8007
        Always with `port-manager audit --json` BEFORE and AFTER, and never as a
@@ -280,16 +288,25 @@ NEXT
             python3 "$PORT_MANAGER" inspect "$APP_PORT" | head -n 3
         fi
         launchctl print "gui/$(id -u)/$LABEL" | grep -A2 "resource limits" || true
-        cat <<NEXT
-
-  The service is up on loopback $APP_PORT. It is NOT reachable from off this
-  machine unless a Tailscale Serve route already proxies :$SERVE_PORT to it.
+        # Quoted delimiter for the same reason as the render stage above, and it
+        # was the second instance of the same latent bug: nothing in an
+        # operator-facing block is allowed to be able to run a command. The five
+        # values that must expand go through printf as arguments, and the two
+        # `\\` line-continuations are printf escapes, so they render as the
+        # single backslashes a copy-pasteable shell continuation needs.
+        printf '\n  The service is up on loopback %s. It is NOT reachable from off this\n' \
+            "$APP_PORT"
+        printf '  machine unless a Tailscale Serve route already proxies :%s to it.\n' \
+            "$SERVE_PORT"
+        cat <<'NEXT'
 
   Now run the gate. It will not exit 0 until every condition is proven:
-    .venv/bin/python scripts/converge_gate.py \\
-      --local-origin http://127.0.0.1:$APP_PORT \\
-      --deployed-origin $PUBLIC_ORIGIN \\
-      --vault $OBSIDIAN_VAULT_PATH
+NEXT
+        printf '    .venv/bin/python scripts/converge_gate.py \\\n'
+        printf '      --local-origin http://127.0.0.1:%s \\\n' "$APP_PORT"
+        printf '      --deployed-origin %s \\\n' "$PUBLIC_ORIGIN"
+        printf '      --vault %s\n' "$OBSIDIAN_VAULT_PATH"
+        cat <<'NEXT'
 
   Only after it exits 0 may the Home Screen PWA be reinstalled. iOS caches
   manifest metadata longer than page content, so an icon change may need
