@@ -472,15 +472,59 @@ def test_the_window_is_bounded_and_the_oldest_tokens_are_evicted(
     store = application.state.csrf
     issued = [store.issue() for _ in range(CSRF_MAX_TOKENS + 4)]
     # The store is bounded, so the window cannot grow with session refreshes.
-    # It retains CSRF_MAX_TOKENS + 1, not CSRF_MAX_TOKENS: `issue` prunes
-    # *before* inserting, so the count overshoots by one on every issue past
-    # the window. Reported rather than fixed — it is a documented-value
-    # mismatch, not an exploitable hole.
-    assert len(store._tokens) <= CSRF_MAX_TOKENS + 1
+    # The invariant is on the way *out* of issue(): at most CSRF_MAX_TOKENS
+    # live tokens. This used to allow CSRF_MAX_TOKENS + 1, which pinned the
+    # prune-before-insert overshoot described in docs/spec §9.17 as expected
+    # behaviour; the code now prunes after inserting, so the documented number
+    # is the one asserted.
+    assert len(store._tokens) <= CSRF_MAX_TOKENS
     assert store.verify(issued[0]) is False
     assert store.verify(issued[3]) is False
     for token in issued[4:]:
         assert store.verify(token) is True
+
+
+def test_the_token_just_issued_survives_eviction(dev_settings: Settings) -> None:
+    # A prune that runs after the insert is only correct if it evicts the
+    # *oldest* entry. Invert the comparison in `_prune` (evict the newest) and
+    # the window still holds CSRF_MAX_TOKENS tokens, so only this test notices:
+    # the newest token is the one the caller just handed to the client, and
+    # losing it turns a successful /api/session into a guaranteed 403.
+    application = create_app(dev_settings)
+    store = application.state.csrf
+    issued = [store.issue() for _ in range(CSRF_MAX_TOKENS + 1)]
+    assert len(store._tokens) == CSRF_MAX_TOKENS
+    newest = issued[-1]
+    assert store.verify(newest) is True
+    assert newest in store._tokens
+    assert store._tokens[newest] == max(store._tokens.values())
+    assert store.verify(issued[0]) is False
+
+
+def test_verify_and_prune_agree_at_the_ttl_boundary(dev_settings: Settings) -> None:
+    # `_prune` drops on `now - created > self._ttl` while `verify` accepts on
+    # `now - created <= self._ttl`, so the two agree at the boundary: TTL
+    # exactly is still live, one step past it is dead and gone from the dict.
+    # Pinned because moving the prune to after the insert makes the store's
+    # contents depend on when `_prune` runs, and a boundary the two halves
+    # disagreed on would silently shorten the window.
+    application = create_app(dev_settings)
+    store = application.state.csrf
+    token = store.issue()
+    created = store._tokens[token]
+    # Offsets are taken from `created`, not from a second `time.monotonic()`:
+    # `created` is stamped a few microseconds *after* the clock read that a
+    # separate reference would use, which is enough to land inside the TTL.
+    # The 1 ms step past the boundary keeps the assertion off the knife-edge.
+    past = created - CSRF_TTL_SECONDS - 0.001
+    assert time.monotonic() - past > CSRF_TTL_SECONDS
+    store._tokens[token] = past
+    assert store.verify(token) is False
+    # Back inside the window: same token, same code path, still valid.
+    inside = created - CSRF_TTL_SECONDS + 1.0
+    assert time.monotonic() - inside <= CSRF_TTL_SECONDS
+    store._tokens[token] = inside
+    assert store.verify(token) is True
 
 
 def test_an_expired_token_is_rejected(dev_settings: Settings) -> None:

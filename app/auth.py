@@ -169,8 +169,15 @@ class CsrfTokenStore:
     def issue(self) -> str:
         token = secrets.token_urlsafe(32)
         now = time.monotonic()
-        self._prune(now)
+        # Prune *after* inserting, so the bound is an invariant on the way out
+        # of issue(): `_prune` trims with `while len(self._tokens) >
+        # self._max_tokens`, so pruning first runs one insert behind and the
+        # store settles at `_max_tokens + 1` live tokens and stays there.
+        # Pruning after the insert evicts the *oldest* entry, never the one just
+        # added: the new token carries the largest `created`, and `min` over a
+        # timestamp tie falls to the earliest-inserted key.
         self._tokens[token] = now
+        self._prune(now)
         return token
 
     def verify(self, token: str) -> bool:
