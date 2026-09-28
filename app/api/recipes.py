@@ -623,11 +623,20 @@ class _Context:
 
 
 def _is_missing(slot: dict[str, Any], strict: bool) -> bool:
-    """`chip-class.js`'s five branches, in order, as one predicate."""
+    """`chip-class.js`'s five branches, in order, as one predicate.
+
+    **The stock branch is `not inStock`, not "resolved".** This predicate and
+    `app/static/js/logic/chip-class.js` are the same five-branch rule kept in
+    two languages on purpose (see `_score`), and they have to move together: the
+    server publishes `found` / `total` — the sort key, and the `data-found` the
+    list carries — while the client renders the headline string from the same
+    slots. A resolved Pantry Item with no open line is **missing** in both, or a
+    row sorts by a number its own headline contradicts.
+    """
     if slot["matchMethod"] in FOUND_WITHOUT_STOCK:
         return False
     if slot["pantryItemId"] is not None:
-        return False
+        return not slot["inStock"]
     # A Seasoning outside strict mode is *ignored*, not missing — which is what
     # keeps the default view's missing list Materials-only (F17).
     return not (slot["isSeasoning"] and not strict)

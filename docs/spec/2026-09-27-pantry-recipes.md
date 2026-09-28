@@ -348,7 +348,7 @@ Chip colour classes and their exact meaning (§9.13.2):
 | Class | Meaning |
 |---|---|
 | `chip--in-stock` | Resolved to a Pantry Item that is an **open line in `Pantry.md`** — i.e. Pantry Stock, per `CONTEXT.md` |
-| `chip--have-been-buying` | Resolved to a Pantry Item in the catalog but **not** currently open stock (bought before, not held now) |
+| `chip--have-been-buying` | Resolved to a Pantry Item in the catalog but **not** currently open stock (bought before, not held now). **Counted as missing in the headline** — see the stock-score amendment in §9.13.2 |
 | `chip--in-stock chip--manual` / `chip--have-been-buying chip--manual` | Resolved via `match_method='manual'` — same colour, distinct outline, so a hand fix is visibly different from a machine match |
 | `chip--assumed-staple` | Resolved by `staples.yaml`. Assumed on hand. **Excluded from the headline score** in the default view |
 | `chip--missing` | Unresolved Ingredient, or (strict view only) an unresolved Seasoning |
@@ -2975,6 +2975,14 @@ Rules, precisely:
 
 - Numerator and denominator count **`材料` (Ingredients) only** in the default
   view. **Locked as F17.**
+- **The numerator counts open Pantry Stock, not resolutions.** A `材料` that
+  resolved to a Pantry Item with no open line in `Pantry.md` is **missing**: it
+  is in the denominator and named in the missing list, and its chip is
+  `chip--have-been-buying` (bought before, not held now). See the stock-score
+  amendment in **§9.13.2** — F1 built the two stock tiers, and this is where they
+  reach the number. A `manual` slot is exempt: the ladder answers a hand fix
+  before it consults stock, so a mapped ingredient counts as found whether or not
+  anything is on the shelf.
 - In `严格模式（含调料）` both numerator and denominator additionally count
   `调料` (Seasonings). A Seasoning satisfied by `staples.yaml` **still counts
   as found**; only an *unresolved* Seasoning counts as missing. **Locked as
@@ -3012,24 +3020,66 @@ second data path.
 
 ```js
 // Decision-dense: the five buckets of D4, in resolution order.
+// `missing: !inStock` on the catalog branch and the `outOfStock` flag are the
+// **stock-score amendment**; see the note under the code block.
 export function chipClass({ matchMethod, pantryItemId, inStock, isSeasoning, strict }) {
   if (matchMethod === 'manual')
     return {
       className: inStock ? 'chip--in-stock chip--manual' : 'chip--have-been-buying chip--manual',
-      missing: false, assumed: false,
+      missing: false, assumed: false, outOfStock: false,
     };
   if (matchMethod === 'staples')
-    return { className: 'chip--assumed-staple', missing: false, assumed: true };
+    return { className: 'chip--assumed-staple', missing: false, assumed: true, outOfStock: false };
   if (pantryItemId !== null && pantryItemId !== undefined)
     return {
       className: inStock ? 'chip--in-stock' : 'chip--have-been-buying',
-      missing: false, assumed: false,
+      missing: !inStock, assumed: false, outOfStock: !inStock,
     };
   if (isSeasoning && !strict)
-    return { className: 'chip--ignored-seasoning', missing: false, assumed: true };
-  return { className: 'chip--missing', missing: true, assumed: false };
+    return { className: 'chip--ignored-seasoning', missing: false, assumed: true, outOfStock: false };
+  return { className: 'chip--missing', missing: true, assumed: false, outOfStock: false };
 }
 ```
+
+**The stock-score amendment: a catalog match with no open line is `missing`.**
+The block above is the ladder as first specified, and the one line that has since
+changed is the catalog branch's `missing`, from `false` to `!inStock`. D4's
+`have-been-buying` tier was drawn as a **colour** while the headline counted
+**resolutions**, and those are different facts: the Pantry Item catalog is an
+immutable record of what was *bought*, so a `茼蒿` row in `pantry_items.db` says
+the household once bought it and nothing at all about the shelf. The result was a
+list that published `2/2 ingredients found` for `煮菜菜` above a purple `茼蒿`
+chip — a recipe the app called cookable while displaying the evidence that it is
+not, on the one surface whose whole job is to answer "can I cook this tonight".
+
+This is not a relaxation of F1, it is F1 reaching the score: §5.1 defines
+Cookable as matching every Ingredient against **available Pantry Stock**, and
+`CONTEXT.md` is explicit that Pantry Item ≠ Pantry Stock. F1 built the two stock
+tiers so the distinction would be *real*; this is where the distinction arrives in
+the number. Four consequences, all deliberate:
+
+* **`manual` is exempt, and must stay so.** A hand fix answers before the stock
+  tiers are consulted, so a mapped-but-unheld ingredient still counts as found. A
+  catalog match is evidence; a hand fix is a decision, and the app does not
+  overrule the user with a shopping list.
+* **`staples` is untouched.** An assumed staple is assumed on hand in both modes,
+  which is F16's whole argument for keeping the 严格模式 toggle useful.
+* **Under `严格模式` an unheld Seasoning is missing too.** The 调料 rule decides
+  *which slots are counted*; it does not make an absent jar present.
+* **The server's `_is_missing` moved with it.** `app/api/recipes.py` publishes
+  `found` / `total` and the client renders the string from the same slots, so the
+  two implementations of this five-branch rule had to change together. The browser
+  flow is what proves they did: it compares the painted `data-found` against the
+  missing names in the headline, and a server that had been left behind would have
+  published `3/4` above `missing: 蒸鱼豉油, 面条`.
+
+`outOfStock` is new and is **not** a sixth bucket. It is the reason, kept beside
+the verdict, so a consumer can tell "a Pantry Item exists and nothing is on the
+shelf" (`chip--have-been-buying`, `outOfStock: true`) from "nothing was ever
+resolved" (`chip--missing`). Both are `missing: true`; only the first carries the
+flag, and it rides on the chip as `data-out-of-stock` for §9.13.4's provenance
+view. The five colour buckets, the ladder's branch order, and the `manual` /
+`staples` precedence are all unchanged.
 
 #### 9.13.3 Sort order
 

@@ -18,9 +18,12 @@
  * frozen forms of §9.13.1 as an *independent* cross-check, and the regeneration
  * script refuses to write when this renderer and that cross-check disagree.
  *
- * `inStock` is not in the request and is passed as `false`: this corpus
- * exercises the recipe→catalog join, which never consults Pantry Stock, and
- * `inStock` selects a chip's class and never its `missing` flag.
+ * `inStock` comes from the request: the headline counts Pantry Stock, so a
+ * corpus that omitted it would render every resolved Pantry Item as missing and
+ * call that a headline. `tests/recipes/corpus.py` declares the open-stock set as
+ * a fixture constant (`OPEN_STOCK_IDS`) rather than reading a vault, and an
+ * absent `inStock` falls back to `false` — the conservative reading, never a
+ * silent `true`.
  */
 
 import { chipClass } from '../app/static/js/logic/chip-class.js';
@@ -33,7 +36,10 @@ const readStdin = async () => {
 };
 
 const scored = (slots, strict) =>
-  slots.map((slot) => ({ ...slot, inStock: false, ...chipClass({ ...slot, strict }) }));
+  slots.map((slot) => {
+    const inStock = slot.inStock === true;
+    return { ...slot, inStock, ...chipClass({ ...slot, inStock, strict }) };
+  });
 
 const request = JSON.parse(await readStdin());
 const out = {};

@@ -75,7 +75,11 @@ export function provenanceText(slot) {
  * `strict` is passed through only so a caller can classify a raw slot itself.
  */
 export function chip(slot, { strict = false, debug = false } = {}) {
-  const verdict = slot.className ? { className: slot.className } : classifySlot(slot, strict);
+  // An already-scored slot IS the classifier's answer, spread on by
+  // `scoredSlots` — so its flags are read, not recomputed. Only an unscored slot
+  // needs a second call, and rebuilding the verdict from `className` alone would
+  // drop `outOfStock` on every pre-scored chip.
+  const verdict = slot.className ? slot : classifySlot(slot, strict);
   const node = el('span', {
     class: `chip ${verdict.className}`,
     dataset: {
@@ -86,8 +90,12 @@ export function chip(slot, { strict = false, debug = false } = {}) {
       seasoning: slot.isSeasoning ? 'true' : 'false',
       // The classifier's own verdict, as data rather than as a class name, so
       // the 调试 view can read WHICH bucket a chip landed in without
-      // re-deriving it from the five inputs.
+      // re-deriving it from the five inputs. `outOfStock` separates "a Pantry
+      // Item exists but nothing is on the shelf" from "nothing was ever
+      // resolved" — two chips that are both `chip--missing` for the score but
+      // not for the same reason.
       bucket: verdict.className,
+      outOfStock: verdict.outOfStock ? 'true' : 'false',
     },
     text: slotLabel(slot),
   });

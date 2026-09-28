@@ -181,6 +181,30 @@ test('a staples-satisfied 材料 counts as found in the default view', () => {
   assert.equal(line(slots), '2/2 ingredients found');
 });
 
+/* A Pantry Item in the catalog is a record of what was BOUGHT; only an open line
+ * in Pantry.md is Pantry Stock. The numerator counts the second, so a
+ * catalog-only match is missing — otherwise `煮菜菜` published `2/2` above a
+ * purple `茼蒿` chip. `boughtNotHeld` is that shape: id resolved, nothing in
+ * stock, which is what `新鲜小叶茼蒿 1 磅` (id 70) is today. */
+const boughtNotHeld = (name, overrides = {}) =>
+  inStock(name, { inStock: false, pantryItemId: 70, ...overrides });
+
+test('a Pantry Item with no open stock line is missing, not found', () => {
+  const slots = [inStock('空心菜'), boughtNotHeld('茼蒿')];
+  assert.equal(line(slots), '1/2 ingredients found — missing: 茼蒿');
+});
+
+test('a bought-before Seasoning is missing under 严格模式 and ignored outside it', () => {
+  const slots = [inStock('空心菜'), seasoning('黑胡椒', { matchMethod: 'exact', pantryItemId: 12 })];
+  assert.equal(line(slots), '1/1 ingredients found', 'the 调料 rule excludes it from the default view');
+  assert.equal(line(slots, true), '1/2 ingredients found   (严格模式（含调料）: 黑胡椒)');
+});
+
+test('a manual fix outranks the stock tier, so a mapped but unheld 材料 stays found', () => {
+  const slots = [inStock('空心菜'), boughtNotHeld('茼蒿', { matchMethod: 'manual' })];
+  assert.equal(line(slots), '2/2 ingredients found');
+});
+
 test('the headline is deterministic and leaves its input alone', () => {
   const snapshot = structuredClone(FOUR_PLUS_SEASONING);
   const first = line(FOUR_PLUS_SEASONING, true);

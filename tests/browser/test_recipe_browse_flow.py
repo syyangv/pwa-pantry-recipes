@@ -227,7 +227,7 @@ def missing_names(headline: str) -> list[str]:
 
 # --- The synthetic world. Deterministic, committed, and under `tmp_path`. ----
 
-#: Eight catalog rows, so every one of the five buckets is reachable. The last
+#: Nine catalog rows, so every one of the five buckets is reachable. The last
 #: row carries an `area` and the reader excludes it, which exercises the filter
 #: with the same fixture rather than a second one. `空心菜`, `香菇` and `娃娃菜`
 #: are deliberately ABSENT: the frozen `0/3` and `4/6` forms are about names that
@@ -242,14 +242,23 @@ CATALOG_ROWS: tuple[tuple[int, str, str, str, str | None], ...] = (
     (6, "茼蒿", "1.1", "[]", None),
     (7, "李锦记 蒸鱼豉油 14 盎司", "1.1c", "[]", None),
     (8, "Shampoo", "3.1", "[]", "Shampoo"),
+    (9, "黄瓜", "1.1", "[]", None),
 )
 
-#: Four open lines (so four products are `chip--in-stock`), one catalog product
-#: with no line at all (`chip--have-been-buying`), and one line nothing in the
-#: catalog explains — the `stockUnjoinedCount` of 1, so the header's
-#: 库存行没对上 counter is exercised by the same fixture. The "bought and
-#: finished" `[x]` case is NOT here: `tests/api/test_recipes_api.py` owns it, and
-#: mixing the two would make this fixture's expected headlines harder to read.
+#: Seven open lines (so seven products are `chip--in-stock`), **one** catalog
+#: product with no line at all — `蒸鱼豉油`, which is what makes this fixture able
+#: to prove the stock rule end to end — and one line nothing in the catalog
+#: explains, the `stockUnjoinedCount` of 1, so the header's 库存行没对上 counter
+#: is exercised by the same fixture. The "bought and finished" `[x]` case is NOT
+#: here: `tests/api/test_recipes_api.py` owns it, and mixing the two would make
+#: this fixture's expected headlines harder to read.
+#:
+#: `豆腐`, `茼蒿` and `黄瓜` are stocked rather than left catalog-only **on
+#: purpose**. Every recipe but one is fully stocked on purpose too, so that the
+#: four frozen strings are still producible byte for byte; the single exception
+#: is `蒸鱼豉油拌面`, and it is where the rule is asserted (see
+#: `PINNED_HEADLINES`). Stocking everything else is what keeps that one row the
+#: only place the reader has to think.
 PANTRY_NOTE_BYTES = (
     "---\n"
     "modified_at: 2026-09-27\n"
@@ -258,6 +267,9 @@ PANTRY_NOTE_BYTES = (
     "- [ ] 番茄\n"
     "- [ ] 鸡蛋\n"
     "- [ ] 蒜苗\n"
+    "- [ ] 豆腐\n"
+    "- [ ] 茼蒿\n"
+    "- [ ] 黄瓜\n"
     "\n"
     "# 2 干货\n"
     "- [ ] 花生米\n"
@@ -280,7 +292,7 @@ PANTRY_NOTE_BYTES = (
 #: `localeCompare` — and asserted as a whole sequence below.
 RECIPES: dict[str, tuple[list[str], list[str], str | None]] = {
     "六味俱全": (
-        ["番茄", "鸡蛋", "蒜苗", "花生米", "豆腐", "茼蒿"],
+        ["番茄", "鸡蛋", "蒜苗", "花生米", "豆腐", "黄瓜"],
         ["生抽", "味精"],
         "2026-09-25",
     ),
@@ -305,18 +317,23 @@ RECIPES: dict[str, tuple[list[str], list[str], str | None]] = {
 #: `foundRatio` desc, then `lastCooked` desc (absent last), then `noteName` by
 #: code point. Asserted whole, so a change in the comparator — or in one recipe's
 #: score — is a named diff rather than a vague "the order looks wrong".
+#: `蒸鱼豉油拌面` reads `2/4`, not `3/4`, and it is the one row in this fixture
+#: whose score the stock rule moved: its `蒸鱼豉油` resolves to a Pantry Item with
+#: no open line, so it is missing. That drops the row from the `0.75` band to the
+#: `0.50` band, which is why it now sits below `清炒茼蒿` and `花生糖` rather than
+#: above `香菇合炒` — the sort is over the same numbers the headline prints.
 EXPECTED_ROWS: tuple[tuple[str, int, int], ...] = (
     ("六味俱全", 6, 6),
     ("鸡蛋羹", 1, 1),
     ("拌空心菜", 3, 4),
     ("豆腐羹", 3, 4),
-    ("蒸鱼豉油拌面", 3, 4),
     ("香菇合炒", 4, 6),
     ("番茄炒蛋", 2, 3),
     ("蒜苗小炒", 2, 3),
     ("豆腐蒸蛋", 2, 3),
     ("清炒茼蒿", 1, 2),
     ("花生糖", 1, 2),
+    ("蒸鱼豉油拌面", 2, 4),
     ("三缺其二", 1, 3),
     ("干拌花生", 1, 3),
     ("空心三缺", 0, 3),
@@ -345,6 +362,13 @@ PINNED_HEADLINES: dict[str, str] = {
     "香菇合炒": "4/6 ingredients found — missing: 香菇, 娃娃菜",
     "空心三缺": "0/3 ingredients found — missing: 空心菜, 香菇, 娃娃菜",
     ZERO_SIX_ROW: ZERO_SIX_HEADLINE,
+    # The stock rule, pinned in a real browser. `蒸鱼豉油` resolves to catalog row
+    # 7 and has NO open line, so its chip is `chip--have-been-buying` — bought
+    # before, not on the shelf — and it is **missing** here, counted in the
+    # denominator and named in the list beside the never-resolved `面条`. Under
+    # the old ladder the same chip was scored as found and this row read `3/4`.
+    # This is the string that would have caught `煮菜菜`'s `2/2`.
+    "蒸鱼豉油拌面": "2/4 ingredients found — missing: 蒸鱼豉油, 面条",
 }
 
 #: The recipe step 4 enters and leaves, and the offset it is measured at. The
@@ -726,7 +750,15 @@ def test_step_3_the_order_is_non_increasing_and_the_zero_row_is_visible(
     for note, expected in PINNED_HEADLINES.items():
         row = next(row for row in rows if row["note"] == note)
         assert row["headline"] == expected
-    assert set(PINNED_HEADLINES.values()) <= FROZEN_HEADLINES | {ZERO_SIX_HEADLINE}
+    assert set(PINNED_HEADLINES.values()) <= FROZEN_HEADLINES | {
+        ZERO_SIX_HEADLINE,
+        # `蒸鱼豉油拌面` is the fifth pinned line and is deliberately NOT one of
+        # §9.13.1's four literals: it is the spec's RULE over a slot that
+        # resolved to a Pantry Item with nothing on the shelf, which the four
+        # examples do not contain. A rule that cannot render a line outside its
+        # own examples has not been tested.
+        "2/4 ingredients found — missing: 蒸鱼豉油, 面条",
+    }
 
     zero = next(row for row in rows if row["note"] == ZERO_SIX_ROW)
     assert (zero["found"], zero["total"]) == (0, 6)

@@ -76,7 +76,7 @@ from app.recipes.matcher import (
 )
 from app.recipes.reader import IngredientEntry, RecipeNote
 
-from .corpus import committed_catalog, real_notes
+from .corpus import OPEN_STOCK_IDS, committed_catalog, real_notes
 
 #: The ladder's whole tier range, tier 0 through tier 8, and the matcher's own
 #: `MatchMethod` vocabulary in tier order. Reused rather than re-listed so a
@@ -187,7 +187,7 @@ def frozen_headline(
     classifier is F16's contract in `app/static/js/logic/chip-class.js`; the four
     sentences above are §9.13.1's, and choosing between them and filling in the
     numbers is all that is left once the missing lists are known. The lists
-    themselves are computed by `is_missing()` below, from the same three
+    themselves are computed by `is_missing()` below, from the same four
     conditions `chipClass()` uses.
     """
     if missing_materials and missing_seasonings:
@@ -207,20 +207,25 @@ def frozen_headline(
 
 
 def is_missing(slot: dict[str, Any], *, is_seasoning: bool, strict: bool) -> bool:
-    """`chipClass()`'s `missing` flag, restated as the three conditions it uses.
+    """`chipClass()`'s `missing` flag, restated as the four conditions it uses.
 
     A hand fix and a staples assumption answer before the stock tiers are
-    consulted, so neither is ever missing; an unresolved Seasoning outside
-    严格模式 is excluded rather than missing, which is F16's gap. This is the
-    classifier's rule in six lines, and it is the **only** place this file
-    decides what is missing — `render_headlines()` runs the real classifier for
-    the committed strings, and `check_headlines()` fails if the two answers ever
-    differ.
+    consulted, so neither is ever missing; a **resolved Pantry Item with no open
+    line is missing**, because the headline counts Pantry Stock and the catalog
+    only records what was bought; and an unresolved Seasoning outside 严格模式 is
+    excluded rather than missing, which is F16's gap. This is the classifier's
+    rule in seven lines, and it is the **only** place this file decides what is
+    missing — `render_headlines()` runs the real classifier for the committed
+    strings, and `check_headlines()` fails if the two answers ever differ.
+
+    The stock fact comes from `corpus.OPEN_STOCK_IDS`, the same declared set the
+    renderer's `inStock` is computed from, so this restatement and the browser
+    cannot drift on different shelves.
     """
     if slot["matchMethod"] in {"manual", "staples"}:
         return False
     if slot["pantryItemId"] is not None:
-        return False
+        return slot["pantryItemId"] not in OPEN_STOCK_IDS
     return not (is_seasoning and not strict)
 
 
@@ -364,6 +369,13 @@ def _recipe_payload(
     every recipe today, which is the fact §10.3 asks the fixture to record. A
     recipe that listed the same Pantry Item twice would show the id here, and
     `ResolveReport.duplicate_slot_conflicts` would be non-zero.
+
+    **`allMaterialsResolved` is an identity fact, not a headline fact**: it is
+    true when every `材料` resolved to a Pantry Item, whether or not any of them
+    is on the shelf. The stock-scoped pair beside it is `materialsFound` /
+    `materialsTotal`, which is what the headline renders, so a recipe can be
+    fully resolved and still read `1/2` — and that is the whole distinction
+    between Pantry Item and Pantry Stock.
     """
     found_ids = [slot["pantryItemId"] for slot in materials if slot["pantryItemId"] is not None]
     duplicated = sorted({item for item in found_ids if found_ids.count(item) > 1})
@@ -379,7 +391,9 @@ def _recipe_payload(
         "seasoningsTotal": len(seasonings),
         "missingMaterials": missing_materials,
         "missingSeasonings": missing_seasonings,
-        "allMaterialsResolved": not missing_materials,
+        "allMaterialsResolved": all(
+            slot["pantryItemId"] is not None for slot in materials
+        ),
         "duplicateMaterialItemIds": duplicated,
     }
 
@@ -450,14 +464,28 @@ def _summary(
     return {
         "recipeCount": len(recipes),
         "materialSlotCount": sum(len(r["materials"]) for r in recipes.values()),
-        "materialResolvedSlots": sum(r["materialsFound"] for r in recipes.values()),
+        # The three identity figures are counted from `pantryItemId`, NOT from
+        # the missing list: a slot that resolved to a Pantry Item is resolved
+        # whether or not anything is on the shelf. Scoring them from
+        # `materialsFound` instead would quietly relabel "bought before, not
+        # held" as "never matched" and hide the very distinction the headline now
+        # turns on. The stock-scoped numbers are the per-recipe
+        # `materialsFound`/`materialsTotal` pairs and the headline strings.
+        "materialResolvedSlots": sum(
+            1
+            for r in recipes.values()
+            for slot in r["materials"]
+            if slot["pantryItemId"] is not None
+        ),
         "materialUnresolvedSlots": sum(
-            len(r["materials"]) - r["materialsFound"] for r in recipes.values()
+            1 for r in recipes.values() for slot in r["materials"] if slot["pantryItemId"] is None
         ),
         "seasoningSlotCount": sum(len(r["seasonings"]) for r in recipes.values()),
         "seasoningFoundSlotsStrict": sum(r["seasoningsFound"] for r in recipes.values()),
         "allMaterialsResolvedRecipes": sum(
-            1 for r in recipes.values() if r["allMaterialsResolved"]
+            1
+            for r in recipes.values()
+            if r["materials"] and all(slot["pantryItemId"] is not None for slot in r["materials"])
         ),
         "duplicateSlotConflicts": report_summary["duplicate_slot_conflicts"],
         "staleResets": report_summary["stale_reset"],
@@ -557,9 +585,11 @@ def headline_requests(payload: dict[str, Any]) -> dict[str, Any]:
     """The `format.js` input for one payload: slots only, no counts.
 
     Exactly the four fields `chipClass()` reads plus the names the missing list
-    falls back to. `inStock` is not among them and is not invented: this corpus
-    exercises the recipe→catalog join, which never consults Pantry Stock, and
-    `inStock` changes a chip's class and never its `missing` flag.
+    falls back to. `inStock` is the fifth, and it is **declared** by
+    `corpus.OPEN_STOCK_IDS` rather than omitted: the headline counts Pantry
+    Stock, so a corpus that never said which items are on the shelf would
+    measure the recipe→catalog join and call the result a headline. The corpus
+    still reads no vault — the set is a fixture constant.
     """
     return {
         "recipes": {
@@ -570,6 +600,7 @@ def headline_requests(payload: dict[str, Any]) -> dict[str, Any]:
                         "parsedName": slot["parsedName"],
                         "matchMethod": slot["matchMethod"],
                         "pantryItemId": slot["pantryItemId"],
+                        "inStock": slot["pantryItemId"] in OPEN_STOCK_IDS,
                     }
                     for slot in recipe[group]
                 ]

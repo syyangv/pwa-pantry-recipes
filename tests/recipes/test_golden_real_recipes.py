@@ -80,6 +80,7 @@ from app.recipes.matcher import (
 from . import golden
 from .corpus import (
     CATALOG_SNAPSHOT,
+    OPEN_STOCK_IDS,
     REAL_RECIPES,
     committed_catalog,
     real_notes,
@@ -659,9 +660,15 @@ def test_five_of_sixteen_notes_have_every_material_resolved(committed: dict[str,
 
     D1's 3 of 16 was measured over a three-tier join; the shipped eight-tier
     ladder reaches 5. Frozen as measured. The five are all one- and two-slot
-    notes, which is worth stating: no six-slot note in this corpus is fully
-    cookable, and `Paradiso三明治` (0 of 6) is what a shopping-list-shaped note
-    does to the ceiling.
+    notes, which is worth stating: no six-slot note in this corpus resolves
+    every `材料`, and `Paradiso三明治` (0 of 6) is what a shopping-list-shaped
+    note does to the ceiling.
+
+    **"Resolved" is an identity claim, not a cookable one.** Two of the five
+    (`煮菜菜`, `炒红苋菜`) have every `材料` resolved to a Pantry Item and still
+    read below full marks, because the resolved item has no open line in the
+    corpus's declared stock. That gap is the fixture's whole point: the catalog
+    says what was bought and the headline answers what is on the shelf.
     """
     fully = tuple(
         name
@@ -672,15 +679,22 @@ def test_five_of_sixteen_notes_have_every_material_resolved(committed: dict[str,
     assert len(fully) == 5
     sandwich = committed["recipes"]["Paradiso三明治"]
     assert (sandwich["materialsFound"], sandwich["materialsTotal"]) == (0, 6)
-    # F17's `n/total` denominator is the `材料` slot count and nothing else, and
-    # the numerator is the resolved count — no `调料` and no staples assumption.
+    # F17's `n/total` denominator is the `材料` slot count and nothing else. The
+    # numerator counts **open stock**, not resolutions: a `材料` that resolved to
+    # a Pantry Item with no open line is missing, because the headline answers
+    # "can I cook this" and the catalog only records what was bought. This is
+    # the assertion that would have caught the `2/2` over a purple `茼蒿` chip.
+    # `allMaterialsResolved` stays the identity fact it is named for, so the two
+    # deliberately disagree for `煮菜菜` and `炒红苋菜`.
     for recipe in committed["recipes"].values():
         assert recipe["materialsTotal"] == len(recipe["materials"])
         assert recipe["materialsFound"] == sum(
-            1 for slot in recipe["materials"] if slot["pantryItemId"] is not None
+            1
+            for slot in recipe["materials"]
+            if slot["pantryItemId"] is not None and slot["pantryItemId"] in OPEN_STOCK_IDS
         )
-        assert recipe["allMaterialsResolved"] == (
-            recipe["materialsFound"] == recipe["materialsTotal"]
+        assert recipe["allMaterialsResolved"] == all(
+            slot["pantryItemId"] is not None for slot in recipe["materials"]
         )
 
 
@@ -925,10 +939,13 @@ def test_perturbing_the_catalog_makes_this_fixture_wrong(
         assert moved[0]["pantryItemId"] == 900
         assert moved[0]["matchMethod"] == "exact_name"
         assert moved[0]["matchTier"] == 2
-    # The headline count does not move — the slot was resolved either way — which
-    # is the honest shape of this perturbation and the reason the fixture records
-    # the tier as well as the id.
-    assert perturbed["recipes"]["拌空心菜"]["materialsFound"] == 1
+    # The headline count **does** move, and that is the point of the stock rule:
+    # re-pointing `空心菜` at a Pantry Item with no open line takes it out of the
+    # numerator, so the same perturbation that was previously invisible to the
+    # headline is now visible in it. The identity figure is unmoved, which is why
+    # the fixture records the tier and the id as well.
+    assert perturbed["recipes"]["拌空心菜"]["materialsFound"] == 0
+    assert perturbed["recipes"]["拌空心菜"]["allMaterialsResolved"] is True
     assert perturbed["summary"]["materialResolvedSlots"] == 9
 
 
@@ -1110,10 +1127,14 @@ def test_every_recipe_headline_is_its_own_counts_in_one_of_the_four_forms(
         # F17: the Materials-only clause never names a 调料, in either mode, and
         # the missing lists keep slot order.
         assert not set(recipe["missingMaterials"]) & set(recipe["missingSeasonings"]), name
+        # A `材料` is missing when nothing resolved OR when what resolved has no
+        # open line — the second case is `Kale → 56` and `空心菜 → 83` in
+        # `煮菜菜`, and it is the case a `pantryItemId is None` test cannot see.
         assert recipe["missingMaterials"] == [
             str(slot["parsedName"] or slot["rawValue"])
             for slot in recipe["materials"]
             if slot["pantryItemId"] is None
+            or slot["pantryItemId"] not in OPEN_STOCK_IDS
         ], name
 
 
@@ -1122,25 +1143,33 @@ def test_the_corpus_reproduces_the_frozen_lines_it_should(
 ) -> None:
     """The shapes #19 froze, over the real corpus rather than over synthetic slots.
 
-    Three of the four forms occur here, and each occurrence is a line this file
-    freezes:
+    All four forms occur here, and each occurrence is a line this file freezes:
 
-    * the fully-found form — five notes, `1/1`, `1/1`, `1/1`, `1/1`, `2/2`. No
-      six-slot note is fully found, so the literal `6/6 ingredients found` is
-      *not* produced by this corpus; it is #19's, and the shape is asserted above.
-    * the Materials-only list — `微波菜菜` reads `1/3 ingredients found — missing:
-      香菇, 娃娃菜`, which is #19's `4/6` line with the same two missing names and
-      this corpus's own numerator and denominator. Same shape, same two names, and
-      `Kale → 56` is the one slot that resolves.
-    * the strict addendum — `拌空心菜` reads `5/6 ingredients found   (严格模式（含调
-      料）: 芝麻)`, which is #19's third form: a fully-found Recipe under 严格模式
-      with one unresolved Seasoning named and no Materials clause at all.
+    * the fully-found form — three notes, `拌空心菜` `1/1`, `烤鲭鱼` `1/1`,
+      `烤鸡翅` `1/1`. No six-slot note is fully found, so the literal
+      `6/6 ingredients found` is *not* produced by this corpus; it is #19's, and
+      the shape is asserted above.
+    * the Materials-only list — `煮菜菜` reads `1/2 ingredients found — missing:
+      茼蒿`, which is #19's `4/6` line with one missing name and this corpus's
+      own numerator and denominator.
+    * the strict addendum alone — `拌空心菜` reads
+      `5/6 ingredients found   (严格模式（含调料）: 芝麻)`, a fully-found Recipe
+      under 严格模式 with one unresolved Seasoning named and no Materials clause.
+    * both clauses — `花蛤拌饭` reads
+      `6/10 ingredients found — missing: Clam, 香菇, Shishito   (严格模式（含调料）: 芝麻)`.
 
-    The `0/3` form is also produced: `0/1` and `0/2` lines exist on four notes, so
-    the zero-numerator shape is here even though the exact `0/3` line is not.
+    **The zero-numerator form is the common one here, and that is the change.**
+    Ten of the sixteen notes read `0/n` because the corpus declares only three
+    Pantry Items as open stock (`corpus.OPEN_STOCK_IDS`): `西兰花` (14) and
+    `Kale` (56) resolve to a Pantry Item and are not on the shelf, so
+    `微波菜菜` reads `0/3 — missing: Kale, 香菇, 娃娃菜` and `Easy Fragrant Fried
+    Rice` names `西兰花` alongside its three unresolved names. Before that rule
+    those two read `1/3` and `1/4`; the honest count of a catalog match with no
+    open line is zero.
     """
     lines = {name: recipe["headline"] for name, recipe in committed["recipes"].items()}
-    assert lines["微波菜菜"] == "1/3 ingredients found — missing: 香菇, 娃娃菜"
+    assert lines["微波菜菜"] == "0/3 ingredients found — missing: Kale, 香菇, 娃娃菜"
+    assert lines["煮菜菜"] == "1/2 ingredients found — missing: 茼蒿"
     assert lines["拌空心菜"] == "1/1 ingredients found"
     assert (
         committed["recipes"]["拌空心菜"]["headlineStrict"]
@@ -1155,7 +1184,7 @@ def test_the_corpus_reproduces_the_frozen_lines_it_should(
         == "6/10 ingredients found — missing: Clam, 香菇, Shishito   (严格模式（含调料）: 芝麻)"
     ), "both clauses, separated by exactly three spaces"
     fully_found = [line for line in lines.values() if " — missing: " not in line]
-    assert len(fully_found) == 5
+    assert len(fully_found) == 3, "only the three notes whose every 材料 is in stock"
     assert not any(line.startswith("6/6") for line in lines.values()), (
         "no six-slot note is fully cookable in this corpus; do not quote 6/6 as its output"
     )

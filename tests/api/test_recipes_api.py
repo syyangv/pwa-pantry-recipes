@@ -327,9 +327,13 @@ def test_the_order_is_vault_enumeration_order_and_is_not_sorted(
         body = client.get("/api/recipes").json()
 
     assert _names(body) == [MAIN_RECIPE, DUPLICATE_RECIPE]
-    # A `0/2` recipe is a first-class row. D4 forbids a threshold, a collapse and
+    # A `1/2` recipe is a first-class row. D4 forbids a threshold, a collapse and
     # a "show more", and the only way to assert that is to show the worse one.
-    assert [r["found"] / r["total"] for r in body["recipes"]] == [0.75, 0.5]
+    # `MAIN_RECIPE` scores `2/4` because `空心菜` is bought-and-finished and
+    # `🐟 不存在的鱼` resolved to nothing; `DUPLICATE_RECIPE` scores `1/2` because
+    # F2's duplicate-slot catch downgrades its second `番茄` and the pantry holds
+    # that one open. Neither row is hidden or collapsed.
+    assert [r["found"] / r["total"] for r in body["recipes"]] == [0.5, 0.5]
 
 
 def test_no_response_in_any_mode_publishes_a_cookable_boolean(client: TestClient) -> None:
@@ -367,17 +371,29 @@ def _assert_no_boolean_summary(payload: object, *, where: str) -> None:
 
 
 def test_the_default_headline_counts_materials_only(client: TestClient) -> None:
-    """`3/4`, and the denominator is four slots, not a free literal (§9.13.1).
+    """`2/4`, and the denominator is four slots, not a free literal (§9.13.1).
 
-    The three that count are resolved: `番茄` and `鸡蛋` on the exact-name tier
-    and `空心菜` through the synonym tier. `🐟 不存在的鱼` matches nothing and is
-    the one missing Material. The two Seasonings are present in the payload and
-    deliberately **not** in the arithmetic — that is F17, and it is the reason a
-    `调料` name can never appear in the default missing list.
+    **The numerator counts open stock, not resolutions, and this fixture is the
+    case that proves it.** `空心菜` resolves through the synonym tier to
+    `空心菜嫩苗` (3) and that product is a **`[x]` finished line** in
+    `Pantry.md`, so it publishes `inStock: false` and is missing: a product the
+    household bought once and finished is not on the shelf. Only `番茄` and
+    `鸡蛋` count. `🐟 不存在的鱼` matches nothing at all, so the two missing
+    Materials fail for two different reasons that the payload keeps apart
+    (`pantryItemId` null versus an id with `inStock: false`).
+
+    The two Seasonings are present in the payload and deliberately **not** in the
+    arithmetic — that is F17, and it is the reason a `调料` name can never appear
+    in the default missing list.
     """
     recipe = client.get("/api/recipes").json()["recipes"][0]
 
-    assert (recipe["found"], recipe["total"]) == (3, 4)
+    assert (recipe["found"], recipe["total"]) == (2, 4)
+    空心菜 = _by_value(recipe, "空心菜")
+    assert (空心菜["pantryItemId"], 空心菜["inStock"]) == (
+        3,
+        False,
+    ), "resolved, bought, finished — and still missing"
     assert [s["rawValue"] for s in recipe["ingredients"] if s["isSeasoning"]] == ["生抽", "盐"]
     assert _by_value(recipe, "生抽")["matchMethod"] == "staples"
     assert _by_value(recipe, "生抽")["matchTier"] == 7
@@ -386,7 +402,7 @@ def test_the_default_headline_counts_materials_only(client: TestClient) -> None:
 def test_strict_adds_the_seasonings_and_a_staple_satisfied_one_still_counts(
     client: TestClient,
 ) -> None:
-    """F16: `5/6`. Only an *unresolved* Seasoning is missing, and the staples
+    """F16: `4/6`. Only an *unresolved* Seasoning is missing, and the staples
     tier is why this toggle is not useless.
 
     Pantry Category `1.1c` has one row in 178, so a Seasoning could almost never
@@ -396,7 +412,7 @@ def test_strict_adds_the_seasonings_and_a_staple_satisfied_one_still_counts(
     """
     recipe = client.get("/api/recipes", params={"strict": 1}).json()["recipes"][0]
 
-    assert (recipe["found"], recipe["total"]) == (5, 6)
+    assert (recipe["found"], recipe["total"]) == (4, 6)
     assert not any(
         _is_missing(slot, strict=True) for slot in recipe["ingredients"] if slot["isSeasoning"]
     )
@@ -447,7 +463,9 @@ def _is_missing(slot: dict[str, Any], *, strict: bool) -> bool:
     if slot["matchMethod"] in {"manual", "staples"}:
         return False
     if slot["pantryItemId"] is not None:
-        return False
+        # Resolved is not the same as held: a Pantry Item with no open line is
+        # missing, which is the whole of the stock rule this oracle restates.
+        return not slot["inStock"]
     return not (slot["isSeasoning"] and not strict)
 
 
@@ -465,7 +483,7 @@ def test_strict_is_a_stateless_query_parameter(client: TestClient) -> None:
 
     assert (first["strict"], second["strict"]) == (1, 0)
     assert third == first
-    assert (first["recipes"][0]["found"], second["recipes"][0]["found"]) == (5, 3)
+    assert (first["recipes"][0]["found"], second["recipes"][0]["found"]) == (4, 2)
 
 
 @pytest.mark.parametrize("value", ["2", "-1", "yes", "true", ""])
@@ -604,10 +622,12 @@ def test_a_readable_but_empty_pantry_is_a_200_with_real_recipes(
     assert _by_value(recipe, "番茄")["pantryItemId"] == 1
     assert _by_value(recipe, "番茄")["inStock"] is False
     assert _by_value(recipe, "番茄")["stockJoinState"] == "unresolved"
-    # Nothing is in stock, so nothing is claimed to be. This is the one shape that
-    # is *both* a 200 and every chip downgraded — and it is honest, because the
-    # note said so.
-    assert recipe["found"] == 3
+    # Nothing is in stock, so nothing is counted as found — the headline follows
+    # the shelf, not the catalog, so an empty pantry reads `0/4` rather than
+    # `3/4`. This is the one shape that is *both* a 200 and every chip
+    # downgraded, and it is honest, because the note said so.
+    assert recipe["found"] == 0
+    assert recipe["total"] == 4
 
 
 def test_the_503_leaks_no_absolute_path(settings: Settings, note: Path, vault: Path) -> None:
@@ -1193,7 +1213,7 @@ def test_resolve_reports_the_five_numbers_and_the_duplicate_slot_conflict(
         assert _slot(recipes[DUPLICATE_RECIPE], 1)["candidatesJson"][0]["reason"] == (
             "duplicate_slot_conflict"
         )
-        assert (recipes[MAIN_RECIPE]["found"], recipes[MAIN_RECIPE]["total"]) == (3, 4)
+        assert (recipes[MAIN_RECIPE]["found"], recipes[MAIN_RECIPE]["total"]) == (2, 4)
 
 
 def test_a_second_resolve_is_idempotent(client: TestClient) -> None:
@@ -1277,14 +1297,23 @@ def test_put_mapping_returns_the_row_and_reached_it_through_set_manual(
     assert mapping["rawValue"] == "🐟 不存在的鱼"
     assert mapping["parsedName"] == "不存在的鱼"
     # And the read path agrees, which is what a hand fix is for: the headline
-    # moves from 3/4 to 4/4 because the user said they have it.
+    # moves from 2/4 to 3/4 because the user said they have it.
+    #
+    # **A hand fix outranks the stock tier, and this is where that is worth
+    # saying.** `FREE_ITEM_ID` has no line in `Pantry.md`, so `inStock` is false
+    # and the same slot would be missing on the machine's own reading of the
+    # shelf. It counts anyway: the ladder answers `manual` before it consults
+    # stock, so a mapped ingredient is the user's own statement and the app does
+    # not overrule it. A catalog match is evidence; a hand fix is a decision.
+    # The 3 is not 4 because the *other* missing slot, `空心菜`, is not hand-fixed
+    # and its `[x]` line is still the truth about that product.
     after = _by_value(
         client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"], "🐟 不存在的鱼"
     )
     assert after["matchMethod"] == "manual"
     assert after["pantryItemId"] == FREE_ITEM_ID
     assert after["inStock"] is False
-    assert client.get("/api/recipes").json()["recipes"][0]["found"] == 4
+    assert client.get("/api/recipes").json()["recipes"][0]["found"] == 3
 
 
 def test_delete_mapping_clears_the_hand_fix_and_is_idempotent(client: TestClient) -> None:

@@ -47,6 +47,24 @@ PARSED_MATERIAL_NAMES: Final = 25
 #: 19 distinct `调料` values, all single-token after the parse.
 SEASONING_NAMES: Final = 19
 
+#: The Pantry Items this corpus treats as **open Pantry Stock**, by id.
+#:
+#: **Declared here, not read from a vault.** The corpus freezes the
+#: recipe→catalog join, and it has no `Pantry.md` to read — a fixture that
+#: reached into the live vault would pass on one machine and assert nothing on
+#: every other. But the headline is scored from stock, not from the catalog
+#: (`app/static/js/logic/chip-class.js` counts a catalog match with no open line
+#: as missing), so the corpus cannot leave `inStock` invented: it has to say
+#: which items are on the shelf.
+#:
+#: These three are the ones the vault had open for these 16 recipes when the
+#: corpus was frozen — `Mackerel` (22), `空心菜嫩苗` (83) and `鸡翅` (166).
+#: `茼蒿` (70), `红苋菜苗` (139), `Kale` (56) and `西兰花` (14) resolve to a
+#: Pantry Item and are deliberately **not** here, because a bought-before line
+#: that is not open is not stock. Changing this set is a fixture change and moves
+#: the golden headlines with it; it is never a way to make a drift disappear.
+OPEN_STOCK_IDS: Final = frozenset({22, 83, 166})
+
 
 def catalog_records() -> list[list[object]]:
     """The committed 178 `items` rows, exactly as the producer wrote them."""

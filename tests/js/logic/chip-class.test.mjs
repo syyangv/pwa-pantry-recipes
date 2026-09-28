@@ -18,6 +18,7 @@ test('a manual fix that resolves to open stock is in-stock with the manual outli
     className: 'chip--in-stock chip--manual',
     missing: false,
     assumed: false,
+    outOfStock: false,
   });
 });
 
@@ -26,6 +27,7 @@ test('a manual fix that resolves to a closed line keeps the outline and says bou
     className: 'chip--have-been-buying chip--manual',
     missing: false,
     assumed: false,
+    outOfStock: false,
   });
 });
 
@@ -39,14 +41,14 @@ test('the manual outline wins over the stock tiers it is combined with', () => {
 test('a resolved Pantry Item is in-stock when the line is open', () => {
   assert.deepEqual(
     chipClass({ matchMethod: 'exact', pantryItemId: 34, inStock: true, isSeasoning: false, strict: false }),
-    { className: 'chip--in-stock', missing: false, assumed: false },
+    { className: 'chip--in-stock', missing: false, assumed: false, outOfStock: false },
   );
 });
 
 test('a resolved Pantry Item whose line is not open is have-been-buying, not in-stock', () => {
   assert.deepEqual(
     chipClass({ matchMethod: 'alias', pantryItemId: 34, inStock: false, isSeasoning: false, strict: false }),
-    { className: 'chip--have-been-buying', missing: false, assumed: false },
+    { className: 'chip--have-been-buying', missing: true, assumed: false, outOfStock: true },
   );
 });
 
@@ -56,7 +58,7 @@ test('a staples match is assumed on hand and never missing, even for a Seasoning
   for (const strict of [false, true]) {
     assert.deepEqual(
       chipClass({ matchMethod: 'staples', pantryItemId: null, inStock: false, isSeasoning: true, strict }),
-      { className: 'chip--assumed-staple', missing: false, assumed: true },
+      { className: 'chip--assumed-staple', missing: false, assumed: true, outOfStock: false },
     );
   }
 });
@@ -67,11 +69,13 @@ test('an unresolved Seasoning is ignored in the default view and missing under ä
     className: 'chip--ignored-seasoning',
     missing: false,
     assumed: true,
+    outOfStock: false,
   });
   assert.deepEqual(chipClass({ ...unresolved, strict: true }), {
     className: 'chip--missing',
     missing: true,
     assumed: false,
+    outOfStock: false,
   });
 });
 
@@ -79,7 +83,7 @@ test('an unresolved Ingredient is missing in both modes', () => {
   for (const strict of [false, true]) {
     assert.deepEqual(
       chipClass({ matchMethod: 'unresolved', pantryItemId: null, inStock: false, isSeasoning: false, strict }),
-      { className: 'chip--missing', missing: true, assumed: false },
+      { className: 'chip--missing', missing: true, assumed: false, outOfStock: false },
     );
   }
 });
