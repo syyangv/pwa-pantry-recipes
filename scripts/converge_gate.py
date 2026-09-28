@@ -160,12 +160,35 @@ STARTUP_LOADED_GLOBS: Final = (
 )
 
 #: §12.3's "recipe/pantry index inputs", vault-relative. These are read lazily
-#: behind a TTL rather than at boot, so they are checked against the same
-#: timestamp: a recipe note edited *after* the backend started is a legitimate
-#: state the user created, and the gate reports it rather than failing on it —
-#: the note is re-read on the next index refresh. The important part is that they
-#: are named, so a report never says "startup inputs OK" while quietly omitting
-#: the two files the user actually edits.
+#: behind a TTL rather than at boot, so they are compared against the same boot
+#: timestamp as `STARTUP_LOADED_GLOBS` — and, like it, a file newer than the boot
+#: is a **FAIL**, not a note in a report. See the "do not soften this" paragraph
+#: below; that paragraph is the reason the constant is spelled out here.
+#:
+#: The TTL is a real fact and it is *not* a reason to downgrade the verdict. It
+#: means the next index refresh will pick the edit up — it does not mean the
+#: running process is currently serving the index you are looking at. A user who
+#: edits a recipe note and reloads against a process that booted before the edit
+#: is talking to a backend whose answer is derived from the pre-edit bytes, and
+#: that is precisely the stale-backend state this gate exists to catch. The fix
+#: is `launchctl kickstart -k` on the label in `scripts/pwa-pantry-recipes
+#: .example.plist`; the file is the operator's, and re-reading it is one command.
+#:
+#: **Do not soften this to a report.** The gate's value to the operator is that
+#: it cannot be argued with: every condition either agreed, disagreed, or could
+#: not be evaluated here, and there is no fourth bucket for a finding that seems
+#: probably fine. A docstring that says these are "reported" invites a
+#: maintainer to make the code match it, and that edit silently disables the
+#: check on the two files the user actually edits — in the very file the
+#: operator is told to trust. `tests/deploy/test_converge_gate.py`
+#: ::`test_the_vault_index_inputs_are_checked_when_a_vault_is_named` pins `FAIL`,
+#: and the user-facing message for the hit is
+#: "<label>:<path> was modified at <t>, AFTER the backend started at <boot> —
+#: the process is running pre-change bytes", which is failure language, because
+#: it is a failure.
+#:
+#: The important part is that all three are named, so a report never says
+#: "startup inputs OK" while quietly omitting them.
 VAULT_INPUT_ROOTS: Final = ("recipes_root", "pantry_note", "daily_notes_root")
 
 #: §3e conditions 6 and 7 read the **served** update manager, not the file on
