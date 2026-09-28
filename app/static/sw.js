@@ -21,7 +21,7 @@
  * the version injected into the HTML shell all derive from this constant, so
  * the served cache name and every reported version cannot drift. Bump on every
  * deploy. */
-const CACHE_VERSION = 'v0.1.0';
+const CACHE_VERSION = 'v0.2.0';
 const CACHE_NAME = `pwa-shell-${CACHE_VERSION}`;
 const API_CACHE_NAME = `pwa-api-${CACHE_VERSION}`;
 const OUTBOX_SYNC_TAG = 'outbox';
@@ -45,6 +45,12 @@ const SHELL_ASSETS = [
   '/css/styles.css?v=' + CACHE_VERSION,
   '/css/pull-refresh.css?v=' + CACHE_VERSION,
   '/js/main.js?v=' + CACHE_VERSION,
+  // Pure client-side logic modules. Not imported by main.js yet, so they are
+  // named here rather than pulled in by the boot graph; without the entries a
+  // cold offline start would resolve them from the network and fail.
+  '/js/logic/chip-class.js?v=' + CACHE_VERSION,
+  '/js/logic/format.js?v=' + CACHE_VERSION,
+  '/js/logic/sort.js?v=' + CACHE_VERSION,
   // Vendored pwa-infra modules imported by /js/main.js. They are part of the
   // boot graph, so a cold offline start needs them in the shell cache.
   '/js/pwa/update-manager.js?v=' + CACHE_VERSION,

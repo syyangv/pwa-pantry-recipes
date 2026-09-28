@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "test": "node --test tests/js/*.test.mjs",
+    "test": "node --test 'tests/js/**/*.test.mjs'",
     "check": "node --check app/static/js/main.js && node --check app/static/sw.js"
   }
 }

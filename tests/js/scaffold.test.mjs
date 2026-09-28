@@ -13,6 +13,8 @@
  *  - ES-module imports carry the same token, so the /js/{path} route's
  *    content injection version-pins the whole graph.
  *  - sw.js SHELL_ASSETS stays aligned with the files that actually exist.
+ *  - `npm test` still collects the nested test files. A test file the runner
+ *    never starts is not coverage, it is a file that reads like coverage.
  */
 
 import assert from 'node:assert/strict';
@@ -20,6 +22,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
 import { fileURLToPath } from 'node:url';
+
+import { EXPECTED_TESTS, collectedTestFiles, isProbeRun } from './collection-probe.mjs';
 
 const STATIC_DIR = join(dirname(fileURLToPath(import.meta.url)), '..', '..', 'app', 'static');
 const read = (relative) => readFileSync(join(STATIC_DIR, relative), 'utf8');
@@ -120,3 +124,17 @@ test('sw.js never caches the API or health routes', () => {
   assert.match(block[1], /'\/api\/'/);
   assert.match(sw, /const NETWORK_ONLY_EXACT = \[[^\]]*'\/health'/);
 });
+
+/* The mirror of the gate in tests/js/logic/sort.test.mjs, and it lives here for
+ * the same reason inverted: a one-level `tests/js/*.test.mjs` glob collects this
+ * file and drops the whole logic/ directory, so only a gate up here can see that
+ * narrowing. Neither gate can see the other's, which is why there are two. */
+test(
+  'npm test collects the nested test files as well as this one',
+  { skip: isProbeRun() ? 'this is the probe run' : false },
+  () => {
+    const collected = collectedTestFiles();
+    assert.deepEqual(collected, EXPECTED_TESTS, `collected: ${collected.join(', ')}`);
+    assert.equal(collected.length, EXPECTED_TESTS.length);
+  },
+);
