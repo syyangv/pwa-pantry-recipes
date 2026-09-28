@@ -83,6 +83,12 @@ def settings(runtime_root: Path) -> Settings:
 
 @pytest.fixture
 def client(settings: Settings) -> Iterator[TestClient]:
-    """A TestClient with the lifespan running, so /health sees real state."""
-    with TestClient(create_app(settings)) as test_client:
+    """A TestClient with the lifespan running, so /health sees real state.
+
+    The base URL is the configured public origin, because the security
+    middleware rejects any `Host` that is neither the PUBLIC_ORIGIN host nor a
+    loopback host (app/auth.py). TestClient's default `testserver` host is
+    rejected with 400 `invalid_host`, so this is a host header, not a
+    convenience."""
+    with TestClient(create_app(settings), base_url=TEST_ORIGIN) as test_client:
         yield test_client

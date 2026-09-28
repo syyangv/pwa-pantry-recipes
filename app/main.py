@@ -1,10 +1,11 @@
 """FastAPI application factory for the Pantry Recipes PWA.
 
-Scaffold only: the routes below are the shell contract (version, health, the
-HTML shell, the module-version injection route, and the API 404 envelope).
-Domain routers — pantry catalog, recipe index, daily-note cooking logs — arrive
-under `app/api/` with the feature implementation; nothing here reads the vault
-or the pantry catalog yet.
+Scaffold only: the routes below are the shell contract (version, session,
+health, the HTML shell, the module-version injection route, and the API 404
+envelope). `install_security_middleware` wraps all of it with the identity /
+Origin / CSRF / host guards in `app/auth.py`. Domain routers — pantry catalog,
+recipe index, daily-note cooking logs — arrive under `app/api/` with the
+feature implementation; nothing here reads the vault or the pantry catalog yet.
 
 Route order is load-bearing. `/js/{path}` is registered BEFORE the static mount
 so it wins for `/js/*`, and the static mount is registered LAST so it can never
@@ -29,6 +30,7 @@ from fastapi.staticfiles import StaticFiles
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import RequestResponseEndpoint
 
+from .auth import install_security_middleware
 from .config import Settings, validate_bind_invariant
 from .pwa_version import derive_version, install_pwa_version
 
@@ -59,9 +61,6 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     application = FastAPI(title="Pantry Recipes", version=APP_VERSION, lifespan=lifespan)
     application.state.settings = runtime
-    # TODO(implementation): install_security_middleware(application, runtime)
-    # once identity/CSRF/Origin checks are implemented. The scaffold ships
-    # without an auth middleware, so it MUST NOT be exposed off loopback.
 
     # Mounts GET /api/version (no-store + X-PWA-Backend-Started-At) derived
     # from the same sw.js CACHE_VERSION as APP_VERSION.
@@ -93,6 +92,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             response.headers["Cache-Control"] = "no-store"
         return response
 
+    # Security must register *after* cache_policy so it runs outermost: a
+    # hostile Host is rejected before any middleware parses request.url
+    # (Starlette builds the URL from the Host header), and every rejection
+    # still gets X-Request-ID and the no-store envelope.
+    install_security_middleware(application, runtime)
+
     @application.get("/health", include_in_schema=False)
     def health() -> dict[str, object]:
         return {
@@ -102,6 +107,26 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             "app_data": {"operational": os.access(runtime.app_data_dir, os.R_OK | os.W_OK)},
             "pantry_db": {"readable": os.access(runtime.pantry_items_db, os.R_OK)},
         }
+
+    @application.get("/api/session")
+    def session(request: Request) -> JSONResponse:
+        """The boot contract: who the caller is, the CSRF token every mutation
+        must echo, and the capability flags the UI renders. `version` is the
+        same derive_version() value as /api/version and the sw.js CACHE_VERSION."""
+        identity = (
+            runtime.tailscale_owner_login
+            if runtime.trust_tailscale_headers
+            else runtime.dev_identity
+        )
+        return JSONResponse(
+            {
+                "identity": identity,
+                "csrfToken": request.app.state.csrf.issue(),
+                "version": APP_VERSION,
+                "readOnly": runtime.read_only,
+                "appTimezone": runtime.app_timezone,
+            }
+        )
 
     @application.get("/", include_in_schema=False)
     def shell() -> Response:
