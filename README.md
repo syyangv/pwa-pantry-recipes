@@ -244,23 +244,38 @@ can check against the tree, not as a claim about intent.
   *last* release's fields still exist, which is weaker than it looks; the gate
   cannot detect the omission, because "the spec was not updated" is not a fact
   visible from the running server. The runbook makes it a release step.
-- **`CACHE_VERSION` is behind, and the converge gate says so on the first real
-  run.** `cf39101` changed two mutable frontend files —
-  `app/static/js/router.js` and `app/static/js/views/recipe.js` — without
-  rotating `CACHE_VERSION`, which is still `v0.6.0` from `b5292b9`. Condition 5
-  of the gate reports exactly that, against the real tree:
+- **The `CACHE_VERSION`-behind incident: found by the gate, fixed by the release.
+  Kept here as the worked example of what condition 5 is for.** `cf39101` changed
+  two mutable frontend files — `app/static/js/router.js` and
+  `app/static/js/views/recipe.js` — without rotating `CACHE_VERSION`, which was
+  still `v0.6.0` from `b5292b9`. This is the recorded incident class: a deploy
+  that is *internally consistent* (clean tree, matching versions, correct
+  `SHELL_ASSETS`) while re-using the previous Service Worker cache key, which
+  every other condition passes in. Condition 5 of the gate reported exactly that,
+  against the real tree, on its first live run:
 
   > `CACHE_VERSION was NOT rotated even though these mutable frontend files
   > changed since the commit that last rotated CACHE_VERSION (b5292b96691f):
   > app/static/js/router.js, app/static/js/views/recipe.js`
 
-  This is the recorded incident class — a deploy that is internally consistent
-  while re-using the previous Service Worker cache key — found by the check that
-  was written to find it, on its first run against a real HEAD. It is **not**
-  fixed here: the rotation belongs to the release that carries those changes, and
-  editing another agent's `CACHE_VERSION` from this ticket would be exactly the
-  kind of quiet cross-commit edit the rule exists to prevent. The next release
-  bumps it (`sw.js` CONFIG block only) and re-runs the gate.
+  **It is fixed.** `a303d4a` is the release commit and carries the rotation to
+  `v0.7.0`; the anchor `git log -1 -G"const CACHE_VERSION" -- app/static/sw.js`
+  now resolves to `a303d4a`, and
+  `git diff --name-only a303d4a..HEAD -- app/static` is **empty** — so condition
+  5's rotation half passes against the tree as it stands, and the gate's
+  fixture-follows-shipping behaviour is in `516675f`. Two things are worth
+  keeping from this. First, **the check works**: the one condition that can catch
+  a self-consistent bad deploy caught a real one, unprompted, before anything was
+  installed. Second, **the lesson is now in the release sequence** rather than in
+  this list — `AGENTS.md` § *Deploy* puts the `CACHE_VERSION` bump first in that
+  sequence and `docs/runbook/deployment.md` § 7 makes the gate the thing that
+  confirms it, so a repeat is a release-sequencing error rather than a discovery
+  this section has to keep re-issuing.
+  **What is still true, and is the real limit of the fix:** a rotation is a
+  *commit-order* obligation, not a code property. Nothing in the app can detect a
+  missing bump at review time — only the gate, at release time, against a real
+  HEAD. The rotation is not retroactive, so a frontend change made now and
+  released without the bump is invisible to every test in this repo.
 - **The browser suite is opt-in and CI never runs it.** `playwright` lives in the
   separate `browser` extra (F10), so `pip install ".[test,dev]"` never installs
   it, a default `pytest` *collects and skips* both flows, and neither the visual

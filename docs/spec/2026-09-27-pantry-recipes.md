@@ -1334,8 +1334,8 @@ implements it**. Three new terms:
 
 | Term | Definition | Forbidden synonyms | `CONTEXT.md` status |
 |---|---|---|---|
-| **Ingredient Mapping** | The persisted, auditable resolution of one Ingredient slot to at most one Pantry Item. Carries `raw_value`, `parsed_name`, `parse_method`, `match_method`, tier, confidence, and the rejected candidates. Lives only in the PWA's SQLite; the vault has no equivalent. | match, mapping, link, resolution, join | pending — lands with the P7 implementation commit |
-| **Meal Shortlist** | One of three PWA-owned, user-ordered lists of Recipe notes for `breakfast` / `lunch` / `dinner`. A planning convenience. **Not** a vault record, not synced back, not a classification of the Recipe, and not a grouping of Cooking Records. | meal plan, menu, category, tag, meal type | pending — lands with the P9 implementation commit |
+| **Ingredient Mapping** | The persisted, auditable resolution of one Ingredient slot to **zero or one** Pantry Item — zero is the `unresolved` state, not a partial one. Carries `raw_value`, `parsed_name`, `parse_method`, `match_method`, `match_tier`, `confidence`, and `candidates_json` (the rejected candidates). Lives only in the PWA's SQLite (`ingredient_mappings`, `APP_DATA_DIR`); the vault has no equivalent. `pantry_item_id` is **not unique** — one SKU is legitimately claimable by many Ingredients across many recipes (`空心菜` → id 83 in three notes) — it carries **no** foreign key because the catalog is a separate read-only database, and a `match_method='manual'` row is **immutable** (a `BEFORE UPDATE` trigger aborts, so a hand fix is delete-then-insert). A persisted wrong mapping is permanent and invisible, which is why the term also carries provenance and a re-resolve action. | match, mapping, link, resolution, join | **landed** — `app/db/schema.sql`, `app/mapping/store.py`; the glossary entry is in `CONTEXT.md` |
+| **Meal Shortlist** | One of three PWA-owned, user-ordered lists of Recipe notes for `breakfast` / `lunch` / `dinner`. A planning convenience. **Not** a vault record, not synced back, not a classification of the Recipe, and not a grouping of Cooking Records. The slots are a **closed** set with no `snack`; it is PWA-owned state that may drift from the vault and is never written back; **no** meal frontmatter field exists on a Recipe; an empty slot is a normal empty state, not an error. | meal plan, menu, category, tag, meal type | **landed** — `app/shortlists/store.py`, `app/api/shortlists.py`; the glossary entry is in `CONTEXT.md` |
 | **Stock Join** | The resolved correspondence between one task line in `Logistics/库存/Pantry.md` and at most one [Pantry Item](#pantry-item), keyed on a **normalized name** and repaired by a committed manual override. Computed per read; **never stored as a Pantry Item id**. Its own unresolved bucket is surfaced to the user. F1 states the measured miss rate. | stock match, pantry join, line match, availability join, restock key | **specified and recorded** — see below |
 
 **The two required clause amendments, and their exact scope.** Both are locked
@@ -1360,9 +1360,44 @@ implements it**. Three new terms:
 same-commit rule is a *code* rule, and this commit is the spec amendment the
 decisions themselves required (F1, F13) — the glossary is a contract, and the
 `CONTEXT.md` banner already says so ("the terms below are contracts, not
-descriptions of working code"). Ingredient Mapping and Meal Shortlist stay
-**pending** because nothing about their wording depended on a product decision,
-and adding them ahead of their code would be gratuitous.
+descriptions of working code"). Ingredient Mapping and Meal Shortlist were held
+**pending** here until their implementations existed, because nothing about their
+wording depended on a product decision and adding them ahead of their code would
+have been gratuitous.
+
+**Both have now landed, and this is the reconciliation.** P7 (`61d4d2f`) and P9
+(`2fcb7d4`) shipped their code, and both glossary entries are in `CONTEXT.md` as
+of this amendment. `AGENTS.md`'s same-commit rule was **not** satisfied for
+either: the implementation agents were instructed not to edit `CONTEXT.md`, which
+overrode the rule for this one file, so the two entries are recorded here with
+their code. That is a process miss, not a design change, and the shipped
+behaviour is what the entries above now describe.
+
+**Three places where the shipped code refined the wording proposed above, and the
+shipped behaviour won:**
+
+1. **"at most one Pantry Item" → "zero or one".** `set_manual` and the ladder
+   both leave `pantry_item_id` `NULL` for an `unresolved` slot. That is a state,
+   not a partial one, and calling it "at most one" reads as if a half-bound
+   mapping were possible.
+2. **The field list names the real columns.** `tier` is `match_tier` and the
+   rejected candidates are `candidates_json` (`app/db/schema.sql`).
+3. **Three facts are stated that the original proposal omitted**, because the
+   implementation made them load-bearing: `pantry_item_id` is **not** unique and
+   the mapping is **not** one-to-one (`空心菜` → 83 in three recipes is the
+   measured case); there is **no** foreign key, because the catalog is a separate
+   read-only database and integrity is handled by `stale_rows()` re-resolution
+   instead; and `manual` rows are **immutable** under a `BEFORE UPDATE` trigger,
+   so a hand fix is delete-then-insert. The last is also the reason a persisted
+   wrong mapping is *permanent and invisible* — nothing re-resolves it — which is
+   what makes the provenance fields and the re-resolve action part of the term
+   rather than a convenience.
+
+The Meal Shortlist wording needed no such reconciliation: the slots are closed
+with no `snack` (a `CHECK` on `meal_lists.slot`), the state is PWA-owned and
+never written back, no meal field exists on any of the 16 recipe notes, an empty
+slot renders as a normal empty state, and cooking history is not grouped by
+meal — all exactly as proposed.
 
 `cook_log_receipts` (§7.5) is a PWA-owned mirror of the daily-note row, not a
 new domain concept, so it needs no `CONTEXT.md` **entry** — but it is the reason

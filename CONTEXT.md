@@ -1,9 +1,15 @@
 # Domain Glossary
 
-> **Scaffold state (2026-09-27):** this glossary defines the vocabulary the
-> feature implementation will use. None of the domain surfaces exist yet — the
-> app serves the shell, `/health`, and `/api/version` only. The terms below are
-> contracts, not descriptions of working code.
+> **State (2026-09-28): the terms below are contracts, and the features that
+> implement them have shipped** — the recipe index, the Stock Join, the eight-tier
+> matcher, the materialized Ingredient Mapping, the Meal Shortlists, the Cooking
+> Log write, and the provenance view. An entry is still a *contract* first: it
+> states what a term means and what may not be called it, which is a stronger
+> claim than "here is what the code currently does". Where an entry says a thing
+> is deliberately **not** published or **not** stored, that is the design, not a
+> gap — see `README.md` § *What does not work yet* for what genuinely is one.
+> Deployment is still unauthorized and has not happened; no term here depends on
+> it.
 
 The Obsidian vault is canonical. The PWA **projects** existing Markdown and
 performs only narrowly defined, revision-checked transformations. Every term
@@ -110,6 +116,41 @@ parent, or a half-used item is counted at twice its value. (This is the same
 rule the existing `Logistics/库存/Pantry.md` DataviewJS and the Obsidian Daily
 PWA follow; see `wholefoods-to-pantry/references/pantry-write.md`.)
 
+## Ingredient Mapping
+A materialized row binding **one** Recipe `材料` slot to **one**
+`pantry_item_id` — the persisted, auditable outcome of resolving an
+[Ingredient](#ingredient) against the catalog. It lives only in the PWA's own
+SQLite (`ingredient_mappings`, `APP_DATA_DIR`); the vault has no equivalent, and
+nothing here is a projection of a recipe note. It carries `raw_value`,
+`parsed_name`, `parse_method`, `match_method`, `match_tier`, `confidence`, and
+the rejected `candidates_json`, so a wrong answer can be *shown* rather than
+merely replaced.
+
+- **`pantry_item_id` is NOT unique, and the mapping is NOT one-to-one.** One SKU
+  is legitimately claimable by many Ingredients across many Recipes: `空心菜`
+  resolves to id 83 in three different recipes. "One item, many uses" is the
+  normal case, so the join is many-to-few. The uniqueness the schema does enforce
+  is *narrower and different*: one recipe may not list the same `pantry_item_id`
+  twice, and a violation is a reported `duplicate_slot_conflict` on that one
+  slot, never a silent pick of a winner.
+- **It carries NO foreign key, and that is deliberate.** `pantry_items.db` is a
+  separate, **read-only** database owned by `wholefoods-to-pantry`; there is no
+  enforceable reference across that boundary. Referential integrity is handled
+  instead by re-resolution — a row whose id no longer exists in the live catalog
+  is found by `stale_rows()`, surfaced as `staleMappingCount`, and reset to
+  `unresolved`.
+- **`match_method='manual'` rows are immutable.** A `BEFORE UPDATE` trigger
+  aborts, so changing a hand fix is a `DELETE` plus a fresh `INSERT`, never an
+  overwrite. The guarantee is a property of the *row*, so no call site — a
+  re-resolve sweep, a backfill, a hand-edited query — can clobber a hand fix.
+- **A persisted wrong mapping is permanent and invisible.** Nothing re-resolves a
+  `manual` row, so a wrong hand fix renders as confidently as a right one, and
+  the symptom is a chip that says the wrong thing about the user's own kitchen.
+  That is the whole reason the mapping is materialized *and* carries provenance:
+  the `tier · match_method · #id · confidence` line, the rejected candidates, and
+  the **re-resolve** and **re-map** repair actions are what make a wrong row
+  findable at all.
+
 ## Stock Join
 The act of relating a `pantry_item_id` from `pantry_items.db` to a **live line in
 `Logistics/库存/Pantry.md`**, so that a [Pantry Item](#pantry-item) can be shown
@@ -186,6 +227,33 @@ The aggregate frontmatter a Recipe note carries about past cooks:
 hand-edited and never incremented independently — otherwise it drifts from the
 daily notes it summarizes.
 
+## Meal Shortlist
+One of three PWA-owned, user-ordered lists of [Recipe](#recipe) notes — the
+Breakfast, Lunch, and Dinner lists. A planning convenience, and the whole of it
+is `meal_lists` in the PWA's own SQLite.
+
+- **The slots are a closed set: `breakfast`, `lunch`, `dinner`.** There is no
+  fourth slot and **no `snack`**, enforced by a `CHECK` constraint on the column.
+  Closing the set now is what keeps adding one later a deliberate table rebuild
+  rather than a data migration.
+- **It is PWA-owned state that can drift from the vault, and is never synced
+  back.** The lists name Recipe notes; they do not own them, they do not create
+  them, and a reorder writes nothing outside `APP_DATA_DIR`. A Recipe deleted or
+  renamed in Obsidian leaves its Shortlist entry behind, and the entry renders
+  **broken, not dropped** — the user's ordering is theirs, and silently pruning
+  it would be the app editing the user's list.
+- **A Recipe carries no meal classification, and no frontmatter field is added
+  for one.** A Recipe's membership in `breakfast` says nothing about the Recipe:
+  the same note may sit on two shortlists, or none. Meal-ness is a property of
+  the *user's* arrangement, never of the dish.
+- **An empty slot is a normal empty state, not an error.** All three keys are
+  always present and possibly empty; "nothing planned for lunch" is an answer.
+- **Cooking history is NOT grouped by meal.** The [Recipe Cooking
+  History](#recipe-cooking-history) frontmatter and the daily-note rows stay
+  meal-agnostic; a shortlist has no effect on what a [Cooking
+  Record](#cooking-record) records, and grouping history by slot would
+  contradict `recipeTracker`'s page-counting rule.
+
 ## Server-Owned Root
 A path or folder that comes from the process environment only
 (`PANTRY_ITEMS_DB`, `RECIPES_ROOT`, `DAILY_NOTES_ROOT`, `OBSIDIAN_VAULT_PATH`,
@@ -220,6 +288,7 @@ overwritten cooking log loses a real meal.
 | Pantry Unit | serving, portion, pack, piece, count | "Portion"/"serving" are consumption amounts, not the physical countable unit; "pack" hides the N-units case that causes double counting. |
 | Stock Join | stock match, pantry join, line match, availability join, restock key, join key | "Stock match" reads as the Recipe→Ingredient resolution, which is a different and stronger link. "Availability join" implies availability comes from the join; it comes from the pantry note's status. "Restock key" implies it keys a restock write, which it never does. |
 | Ingredient | 材料 item, ingredient line, shopping item | "Shopping item" implies the app builds a shopping list, which it does not. |
+| Ingredient Mapping | match, mapping, link, resolution, join | "Match"/"resolution" name the *act* of resolving, which happens on a sweep; the Mapping is the row that survives it. "Join" is reserved for the [Stock Join](#stock-join), a different and weaker link. |
 | Seasoning (调料) | ingredient, spice, condiment, flavoring | 调料 is a *separate* frontmatter list from 材料. Calling them ingredients collapses two lists into one and breaks Cookable. |
 | Cooking Tool | equipment, utensil, appliance, pan | "Appliance"/"equipment" imply shoppable, inventory-tracked things; tools are requirements, not stock. |
 | Cookable | available, can-make, makeable, ready, possible | "Available" collides with [Pantry Stock](#pantry-stock) availability and with API availability. "Makeable" is not a word. Use the `n/total` score and the chip row, not a bare boolean — the boolean is never published. |
@@ -228,6 +297,7 @@ overwritten cooking log loses a real meal.
 | Stock Movement | delta, change, diff, transaction | "Transaction"/"delta" imply accounting; a movement is attributed to a cause and is not a ledger entry. |
 | Recipe | dish, meal, menu item, cookbook entry | "Meal" is the occasion, not the note; "dish" is a synonym with no separate definition and invites confusion with the daily note's meal sections. |
 | Recipe Cooking History | stats, counters, metadata | "Stats" is read as derived display; the frontmatter is the durable aggregate that must match the daily notes. |
+| Meal Shortlist | meal plan, menu, category, tag, meal type | "Meal plan" is a [reserved](#reserved-for-later-named-now-so-the-naming-is-not-invented-twice) term for a dated arrangement, which a Shortlist is not. "Category"/"tag"/"meal type" each imply a classification *of the Recipe*; a Shortlist is the user's arrangement, and the Recipe carries no such field. |
 | Server-Owned Root | config path, setting, root, base dir | "Config"/"setting" understates that no request can influence them; that is the security property. |
 
 **A note on Chinese/English mixing.** The vault's own vocabulary is Chinese
