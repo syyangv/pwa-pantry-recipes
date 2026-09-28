@@ -691,18 +691,37 @@ The two existing cooks were typed by hand and are ad-hoc, not a convention.
    source[:heading_end] + b"- [[" + recipe + b"]]" + terminator + source[heading_end:]
    ```
 
-   **The terminator is read from the source, never assumed to be `b"\n"`.** This
-   is not hypothetical: the measured heading `# 笔记` is 8 bytes in UTF-8 and the
-   measured region span `4265..4275` is **10** bytes, so the live note's line
-   terminator is **two** bytes — the vault note is CRLF, or the heading carries a
-   trailing space. Either way, a splice that hard-codes `\n` would introduce a
-   **mixed-terminator file** into the user's daily note: `git` and Obsidian both
-   surface that as a whole-file diff, and `task-date-recorder` re-writes on a
-   `modify` event, so the noise is not transient. The implementation therefore
-   takes the bytes between the heading text and `heading_end` from the region
-   engine's own span and reuses them verbatim. `tests/cooklog/test_writer.py`
-   asserts the terminator is byte-identical to the pre-image's, for both a
-   one-byte and a two-byte terminator.
+   **The terminator is read from the source, never assumed to be `b"\n"`.**
+   **The live daily note does not justify this rule; the rule stands anyway.**
+   Measured, `日记/2026/2026-09-27.md` is **pure LF**: 152 `\n`, **zero**
+   `\r\n`, and no file in `日记/2026/` contains a single CRLF. The 10-byte
+   region span `4265..4275` is **not** evidence of a two-byte terminator: it is
+   a **9-byte heading line** (`# 笔记` is 8 bytes of UTF-8 plus its own one-byte
+   `\n`) **plus a 1-byte blank line** — the region's `b'\n'` content — so
+   `heading_end` is 4274 and the arithmetic closes exactly with a one-byte
+   terminator. An earlier draft of this step read that 10 as 8 + 2 and inferred
+   CRLF; the inference was wrong, and the spec now states the measured facts.
+
+   The rule is unchanged and still load-bearing, because the live note is only
+   the *easy* case. A splice that hard-codes `\n` on a note that *is* CRLF
+   would introduce a **mixed-terminator file** into the user's daily note:
+   `git` and Obsidian both surface that as a whole-file diff, and
+   `task-date-recorder` re-writes on a debounced `modify` event, so the noise is
+   not transient. The same hazard exists in the LF case from the other
+   direction — a plugin or an Obsidian sync client that rewrites the note into
+   CRLF after we have read it, and a later write that then hard-codes LF. The
+   implementation therefore takes the bytes between the heading text and
+   `heading_end` from the region engine's own span and reuses them verbatim, and
+   `app/vault/sections.py` handles **LF, CRLF, and lone CR** uniformly.
+   `tests/cooklog/test_writer.py` asserts the terminator is byte-identical to
+   the pre-image's for both a one-byte and a two-byte terminator, and
+   `tests/vault/test_sections.py` adds the stronger property: a CRLF note must
+   **never gain a lone LF**.
+
+   **Do not "confirm" this rule by re-measuring the live note.** Every note in
+   `日记/2026/` is LF today, so a re-measurement will keep saying LF and will
+   keep looking like the rule is unnecessary. The rule's justification is the
+   CRLF and lone-CR cases the engine must tolerate, not this one file.
 
    With the terminator handled, the `blank=True` case reduces to: the heading's
    own terminator is preserved in `source[:heading_end]`, the new list item
@@ -2890,9 +2909,26 @@ frozen by `tests/js/logic/format.test.mjs` (§10.4) and by the browser flow
 ```
 4/6 ingredients found — missing: 香菇, 娃娃菜
 6/6 ingredients found
-0/6 ingredients found — missing: 空心菜, 香菇, 娃娃菜
+0/3 ingredients found — missing: 空心菜, 香菇, 娃娃菜
 2/5 ingredients found — missing: Clam, 香菇   (严格模式（含调料）: 生抽)
 ```
+
+**The denominator is always the number of names in the list, never a free
+literal.** The rules below make the missing list **one entry per missing
+`材料` (or, under strict mode, per missing `调料`) slot**, and the denominator
+counts exactly the slots the numerator counted, so a `0/6` line must carry six
+names and a `0/3` line carries three. The third example above is therefore the
+`0/3` form, which is the smallest internally consistent rendering of "nothing
+found": three missing Materials over a three-Material recipe. The six-slot
+rendering of the same rule —
+`0/6 ingredients found — missing: 空心菜, 香菇, 娃娃菜, 茼蒿, 红苋菜, 开心果酱` —
+is equally producible, and `tests/js/logic/format.test.mjs` freezes **both**.
+An earlier draft of this section showed the three-name list under a `0/6`
+denominator; that string is unproducible by the rule set, which is the same
+defect class as the D4 `生抽` example that F17 already corrected once, and it is
+corrected here for the same reason. **The code in
+`app/static/js/logic/format.js` is the authority** and was never changed to
+match the bad string; this section was aligned to the code.
 
 Note the shape of the last one, and that it is the F17 correction. The
 **Materials-only** missing list and the **strict-mode addendum** are two
@@ -3598,7 +3634,7 @@ the `browser` extra (§6.1).
 | `tests/db/test_migrations.py` (new) | `init_db()` is idempotent; `schema_migrations` records every version; a re-run is a no-op; the six pragmas are applied on every connection. |
 | `tests/vault/test_atomic_write.py` (new) | Descriptor pinning, symlink refusal, CAS via `race_hook`, backup-then-replace, post-write verification failure and its `finally` cleanup, `ConcurrentFileExists`. |
 | `tests/vault/test_frontmatter.py` (new) | `render()` leaves unrelated bytes byte-identical; a block list round-trips; a duplicate key fails closed. |
-| `tests/vault/test_sections.py` (new) | The `笔记` region is the heading line in a real daily note (the `2026-09-27.md` shape, span `4265..4275`, content `b'\n'`, `blank=True`); `require_unique` raises on two; a note with no `笔记` heading raises the missing-section error rather than inserting one. |
+| `tests/vault/test_sections.py` (new) | The `笔记` region is the heading line in a real daily note (the `2026-09-27.md` shape, span `4265..4275`, content `b'\n'`, `blank=True` — a 9-byte heading line plus a 1-byte blank line, so the note is **pure LF**, not CRLF); `require_unique` raises on two; a note with no `笔记` heading raises the missing-section error rather than inserting one. Plus the terminator widths: a CRLF note is spliced with CRLF and **never gains a lone LF**, and a lone-CR note parses as its LF equivalent. |
 | `tests/vault/test_daily_paths.py` (new) | `resolve("2026-09-27") == "日记/2026/2026-09-27.md"`; rejects `2026-9-27`, `../x`, an absolute path, and a year outside the policy. |
 | `tests/vault/test_pantry_stock.py` (new) | Open vs done markers, from the ported parser: `[ ]` and `[/]` are open, `[x]`/`[X]` are done, `[-]`/`[>]`/unknown are **never** open; `derived_status` is `done` iff all children are done, `in_progress` if any child is done or in-progress, else `open`; `_ADDED`/`_ENDED` recover the `➕`/`✅`/`❌` dates; `禾苑 蟹粉鱼肉狮子头 冷冻 280 克` yields a product core that tier 4 finds at id 108; the `_MAX_ITEMS_TOTAL` and `max_bytes` bounds hold. |
 | `tests/pantry/test_stock_join.py` (new) | **F1's join.** The exact-name tier, the tier-4 basename tier, and the `line_overrides.yaml` override tier, in order; the override is keyed by normalized line name and resolves a `canonical_name` to an id **at read time**, so a renumbered `items.id` does not break it; a duplicate catalog name surfaces both candidates; an unjoinable line lands in `unjoined` and **not** in `in_stock_ids`. |
@@ -3725,7 +3761,7 @@ required, which is the point.
 | `tests/js/shell_assets.test.mjs` (new) | **Closes the missing-entry hole**: walk `app/static/js/**` and `app/static/css/**`, exclude `js/pwa/`, assert every file is in `SHELL_ASSETS`. Also assert no `SHELL_ASSETS` entry lacks a file (the existing direction), that `CACHE_VERSION` matches `/^v\d+\.\d+\.\d+$/`, and that `NETWORK_ONLY_PREFIXES` still contains `'/api/'` and `NETWORK_ONLY_EXACT` still contains `'/health'`. |
 | `tests/js/logic/sort.test.mjs` (new) | The three-level sort, determinism, and that a `0/6` recipe is never filtered out. |
 | `tests/js/logic/chip-class.test.mjs` (new) | All five buckets, the `manual` outline, the strict/non-strict Seasoning split. |
-| `tests/js/logic/format.test.mjs` (new) | **F16 and F17's exact expected strings, frozen.** The four headline forms in §9.13.1 **verbatim**, including the `6/6` case with no missing list, the `0/6` case with the full untruncated list, and the strict-mode form `2/5 ingredients found — missing: Clam, 香菇   (严格模式（含调料）: 生抽)` — asserted as an **exact string equality**, not a regex. Two F16-specific assertions: a `staples`-satisfied Seasoning (`生抽`) still counts as **found** under `strict: true`, and an `unresolved` Seasoning counts as missing under `strict: true` and is **excluded entirely** under `strict: false`. One F17-specific assertion: the Materials-only clause **never** contains a `调料` name under either mode — the exact correction the user accepted. |
+| `tests/js/logic/format.test.mjs` (new) | **F16 and F17's exact expected strings, frozen.** The four headline forms in §9.13.1 **verbatim**, including the `6/6` case with no missing list, the `0/3` case (`0/3 ingredients found — missing: 空心菜, 香菇, 娃娃菜`) **and** the six-slot `0/6` case with the full untruncated list — the same rule at two slot counts, which is what proves the denominator tracks the slot count rather than being a literal — and the strict-mode form `2/5 ingredients found — missing: Clam, 香菇   (严格模式（含调料）: 生抽)` — asserted as an **exact string equality**, not a regex. Two F16-specific assertions: a `staples`-satisfied Seasoning (`生抽`) still counts as **found** under `strict: true`, and an `unresolved` Seasoning counts as missing under `strict: true` and is **excluded entirely** under `strict: false`. One F17-specific assertion: the Materials-only clause **never** contains a `调料` name under either mode — the exact correction the user accepted. |
 | `tests/js/outbox_contract.test.mjs` (new) | The app's `replayDomainIntent` covers every enqueued `type`, sets `X-Client-Id` from `intent.clientId`, and **never** enqueues a cook-log intent. |
 
 ### 10.5 Browser suite — Playwright, two flows, **opt-in** (F10, locked)
@@ -4144,7 +4180,7 @@ mistake for an open question.
 | R14 | Scope creep into quantities / nutrition / write-back | medium | medium | §15 states the deferrals with reasons, and `nutrition-intake`'s units and nutrients are named as the future home so a quantity ticket reuses them instead of forking a converter. |
 | R15 | A dependency is added that a sibling does not use | low | low | **Exactly two, both locked and both with a named sibling precedent: `aiosqlite` (pwa-wardrobe) in `[project].dependencies` (F9) and `playwright` in an optional `[browser]` extra, deliberately **NOT** in `[test]` (F10).** The *placement* is part of each decision and is itself asserted (§6.1): one `grep playwright pyproject.toml` must show exactly one occurrence, inside the `browser` extra, and `aiosqlite` must be a **runtime** dependency rather than a test one — a deployment that installs only the wheel would otherwise fail at first request, in production, on the vault write path. No ORM, no `regex` (F15), no bundler, no build step, no `node_modules` at runtime. **F1 and F4 add neither** — F1 reads a vault note through the already-ported `pantry.py`, and F4 *removes* a dependency-shaped surface (a subprocess and its nine config fields) rather than adding one. |
 | R16 | **F4's manual step is read as a bug** ("the app can't log a cook") | medium | low | The 404 is the most specific error the API emits: it names the date, the exact vault-relative path, and `retryable: true`, and the UI renders the server's `message` verbatim rather than synthesizing a vaguer one. §9.15 records the removed design and the three reasons it was the wrong call, so a future reader sees a decision rather than an oversight. |
-| R17 | **The append introduces a mixed line terminator into the user's daily note** (surfaced by F3) | **medium — the live evidence says it is already 2 bytes, not 1** | low for content, **medium for trust** | `# 笔记` is 8 bytes in UTF-8 and the measured region span `4265..4275` is **10**, so the live note's terminator is two bytes. A splice that hard-codes `b"\n"` would leave one LF in a CRLF file: `git` renders that as a whole-file diff, Obsidian shows a mixed-ending file, and `task-date-recorder` re-writes on a debounced `modify` event so the noise is not transient. F3 step 5 requires the terminator to be read from the source span and reused verbatim; `test_writer.py` asserts it is byte-identical to the pre-image for both a one-byte and a two-byte terminator. The `test_cook_log_flow.py` step-2 "byte-identical everywhere else" assertion is the second line of defence. |
+| R17 | **The append introduces a mixed line terminator into the user's daily note** (surfaced by F3) | **medium — the risk is real, but not on the live note; it is the CRLF and lone-CR cases the engine must tolerate** | low for content, **medium for trust** | **Corrected evidence.** An earlier version of this row claimed the live note is CRLF: it read `# 笔记` as 8 bytes and the measured region span `4265..4275` as 10, and inferred a two-byte terminator. **That inference was wrong.** Measured, `日记/2026/2026-09-27.md` is pure LF — 152 `\n`, **zero** `\r\n` — and no file in `日记/2026/` contains a CRLF at all. The 10-byte span is a **9-byte heading line** (`# 笔记`, 8 bytes of UTF-8, plus its own one-byte `\n`) **plus a 1-byte blank line** (the region's `b'\n'` content), so `heading_end` is 4274 and the arithmetic closes with a one-byte terminator. **The rule F3 mandates is unchanged and still load-bearing**, because the live note is only the easy case: a splice that hard-codes `b"\n"` on a CRLF note leaves one lone LF in an otherwise CRLF file, and `git` renders that as a whole-file diff, Obsidian shows a mixed-ending file, and `task-date-recorder` re-writes on a debounced `modify` event so the noise is not transient. The same hazard appears in the LF case from the other direction — a plugin or Obsidian sync client rewriting the note to CRLF after we read it, then a later write hard-coding LF. F3 step 5 requires the terminator to be read from the source span and reused verbatim, and `app/vault/sections.py` now handles LF, CRLF and lone CR uniformly; `test_writer.py` asserts it is byte-identical to the pre-image for both a one-byte and a two-byte terminator, and `tests/vault/test_sections.py` adds the stronger property that a CRLF note never gains a lone LF. The `test_cook_log_flow.py` step-2 "byte-identical everywhere else" assertion is the second line of defence. **The risk is now justified by the other notes and by post-Obsidian-rewrite states, not by this file** — a reader who re-measures `2026-09-27.md` will find pure LF and must not conclude the rule is unnecessary. |
 | R18 | **A recipe lists the same Pantry Item twice, and that slot's resolution is silently dropped — or the whole resolve pass is silently reverted** (F2) | low today — **0 of the 16 current recipes collides**, and the full 32-slot evidence is in §3's F2 entry | medium — a *silently* dropped resolution is the worst bug class in this app | **F2's override is the whole mitigation, and it hardens what R1 did not cover.** `UNIQUE(recipe_note, pantry_item_id)` catches the defect; the **per-slot `IntegrityError` catch** (§9.10.1) confines the consequence to **one slot**, which is downgraded to `unresolved` with the conflicting candidate in its `candidates_json`, counted in `duplicateSlotConflicts`, and rendered by the `调试` toggle — while every other slot commits and the enclosing `BEGIN IMMEDIATE` transaction stays open. `tests/mapping/test_store.py` asserts all six of those properties plus a static-contract check that the slot `UPDATE` carries neither `OR ROLLBACK` nor `OR FAIL`. The residual is accepted and stated plainly: the user sees one honest `unresolved` chip where they expected a match, and nothing recovers it automatically — which is the correct trade against a whole-table silent revert. |
 
 ---
