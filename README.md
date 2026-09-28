@@ -102,7 +102,7 @@ will not pick them up.
 .venv/bin/python -m pytest
 
 # Lint / types
-.venv/bin/python -m ruff check app tests
+.venv/bin/python -m ruff check app tests scripts
 .venv/bin/python -m mypy app
 
 # Frontend gates (no dependencies; `npm install` is not required)
@@ -404,8 +404,13 @@ can check against the tree, not as a claim about intent.
   and runs in CI is `mypy app`, so `tests/` and `scripts/` are not
   type-checked. `scripts/converge_gate.py` in particular is untyped-checked and
   is gated by its own tests instead.
-- **`scripts/` is not linted.** `ruff check app tests` covers `app/` and
-  `tests/`, so the two deploy scripts are held to review rather than to `ruff`.
+- **`scripts/` is linted, with one quarantined file.** The gate is `ruff check
+  app tests scripts`, so the deploy scripts are held to the same rules as the
+  app. `scripts/converge_gate.py` is the exception: it carries a 37-error
+  backlog (33 `E501`, 3 `UP017`, 1 `F541`) listed by rule in
+  `pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]`, because a concurrent
+  hand-edit of it was not available when the gate widened. A *new* class of
+  error in that file still fails the gate. Clear it and delete the entry.
 
 ## Related projects
 

@@ -106,8 +106,9 @@ scripts/             the LaunchAgent TEMPLATE (pwa-pantry-recipes.example.plist,
                      (the release-specific half of its condition 4).
                      Also render_headlines.mjs, check-modules.mjs (what
                      `npm run check` runs), snapshot_pantry_catalog.py and
-                     snapshot_golden_match_results.py. `scripts/` is NOT linted
-                     by `ruff check app tests`.
+                     snapshot_golden_match_results.py. `scripts/` IS linted by
+                     `ruff check app tests scripts`; converge_gate.py is the
+                     one quarantined file, by rule, in pyproject.toml.
 docs/runbook/        deployment.md — the Serve plan, the install stages, the
                      restart rules, the participant-identity validation
 tests/conftest.py    tmp vault + tmp data dir + seeded pantry catalog
@@ -148,7 +149,7 @@ Two things about that tree that a `find` will not tell you:
 
 ```bash
 .venv/bin/python -m pytest                     # suite
-.venv/bin/python -m ruff check app tests
+.venv/bin/python -m ruff check app tests scripts
 .venv/bin/python -m mypy app
 npm test && npm run check                      # frontend gates
 python3 ~/projects/pwa-template/scripts/vendor.py --check .   # drift gate

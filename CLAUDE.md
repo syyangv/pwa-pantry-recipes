@@ -56,7 +56,7 @@ things a Claude Code session gets wrong without being told.
 ## Before you commit
 
 ```bash
-.venv/bin/python -m pytest && .venv/bin/python -m ruff check app tests \
+.venv/bin/python -m pytest && .venv/bin/python -m ruff check app tests scripts \
   && .venv/bin/python -m mypy app && npm test && npm run check \
   && python3 ~/projects/pwa-template/scripts/vendor.py --check .
 ```
