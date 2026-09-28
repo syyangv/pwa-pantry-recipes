@@ -70,6 +70,7 @@ jobs:
           names = zipfile.ZipFile(wheel).namelist()
           required = [
               "app/__init__.py", "app/config.py", "app/main.py", "app/pwa_version.py",
+              "app/pantry/__init__.py", "app/pantry/catalog.py",
               "app/static/index.html", "app/static/sw.js",
               "app/static/manifest.webmanifest",
               "app/static/css/pwa.css", "app/static/css/tokens.css",
