@@ -14,18 +14,24 @@ Three separate obligations live here, and they are deliberately kept apart:
    catalog contains and the lexicon does not strip must be on a reviewed list, so
    a newly ingested brand is a visible failure rather than a silent mis-strip.
 
-Obligation 3 reads the producer's real `pantry_items.db`, which is a
-read-only asset of a sibling repository and is not present in every clone. When
-it is absent the drift test skips; see `test_catalog_brands_are_all_reviewed`
-for what closes that gap.
+Obligation 3 reads the catalog's `canonical_name` column from the **committed
+`tests/fixtures/pantry_items_snapshot.json`**, not from the producer's live
+`pantry_items.db`. It used to read the live file and skip when the sibling
+checkout was absent, which made the drift gate local-only: a brand newly ingested
+on this machine failed here, and CI — which has no such checkout — saw nothing at
+all. The snapshot is the same 178 rows, regenerated deliberately by
+`scripts/snapshot_pantry_catalog.py` in its own commit (F14), so the gate runs in
+every clone and on every re-import review, and a re-import is a change to this
+repository's committed data rather than a failure about somebody else's disk.
 """
 
 from __future__ import annotations
 
+import ast
 import importlib
+import json
 import os
 import re
-import sqlite3
 import subprocess
 import sys
 import unicodedata
@@ -42,10 +48,10 @@ from app.recipes.brand_lexicon import BRANDS_SOURCE, load_brand_lexicon
 from app.recipes.ingredients import strip_leading_emoji_run
 from app.recipes.normalize import BRAND_LEXICON, normalize_ingredient
 
-# The producer's default catalog location. `PANTRY_ITEMS_DB` overrides it, so
-# the test follows the same server-owned root the app itself reads.
-PRODUCER_CATALOG: Final = (
-    Path.home() / "projects" / "wholefoods-to-pantry" / "assets" / "pantry_items.db"
+#: The frozen catalog dump — the drift gate's only catalog source (F14). Never
+#: the sibling repository's `pantry_items.db`, which CI does not have.
+CATALOG_SNAPSHOT: Final = (
+    Path(__file__).resolve().parent.parent / "fixtures" / "pantry_items_snapshot.json"
 )
 
 # Every distinct leading token of the 178-row catalog that `brands.yaml`
@@ -234,29 +240,16 @@ def _pre_brand(value: str) -> str:
 
 
 def _catalog_rows() -> list[str]:
-    """The producer's `canonical_name` column, read-only, or skip.
+    """The catalog's `canonical_name` column, from the committed snapshot.
 
-    Opened with `mode=ro` because this repository is not its writer and the
-    fixture is a live asset of a sibling checkout, not a copy vendored here.
+    The raw JSON text, never a re-serialization of a parsed copy: the point of
+    freezing these five columns is that the fixture is the producer's bytes. The
+    `area` column is *not* consulted here — the gate asks what names the catalog
+    has, and a non-food row is still a name the brand step will one day be
+    handed. `tests/pantry/test_catalog.py` owns the `area` filter.
     """
-    configured = os.environ.get("PANTRY_ITEMS_DB", "")
-    for candidate in (Path(configured) if configured else None, PRODUCER_CATALOG):
-        if candidate is not None and candidate.is_file():
-            connection = sqlite3.connect(f"file:{candidate}?mode=ro", uri=True)
-            try:
-                return [
-                    row[0]
-                    for row in connection.execute(
-                        "SELECT canonical_name FROM items ORDER BY id"
-                    )
-                ]
-            finally:
-                connection.close()
-    pytest.skip(
-        "pantry_items.db is a read-only asset of the wholefoods-to-pantry "
-        "producer and is not in this clone; set PANTRY_ITEMS_DB to run the "
-        "catalog-drift gate"
-    )
+    loaded = json.loads(CATALOG_SNAPSHOT.read_text(encoding="utf-8"))
+    return [row[1] for row in loaded]
 
 
 def _leading_token(pre_brand: str) -> str:
@@ -733,12 +726,12 @@ def test_catalog_brands_are_all_reviewed() -> None:
     uncovered set must equal a reviewed list, and a token in both the lexicon
     and that list is a stale allowlist entry rather than a pass.
 
-    KNOWN LIMITATION: this test reads the producer's real `pantry_items.db`,
-    which lives in a sibling repository. It therefore SKIPS in CI and in any
-    clone without that checkout, so the gate is local-only today. The durable
-    fix already has an owner: ticket #9 commits a `pantry_items_snapshot.json`
-    (F14) from this same catalog, and pointing this test at that snapshot makes
-    it gate in CI without vendoring the database into this repo.
+    It runs in CI. The gate used to read the producer's `pantry_items.db` from a
+    sibling checkout and skip when that was absent, so it was local-only: a brand
+    ingested on one machine failed here and was invisible everywhere else, which
+    is the worst possible shape for a gate. It reads
+    `tests/fixtures/pantry_items_snapshot.json` instead — the same 178 rows,
+    committed, regenerated deliberately in its own commit (F14).
     """
     unknown = _unreviewed(_uncovered_leading_tokens())
     assert not unknown, (
@@ -789,6 +782,31 @@ def test_the_drift_gate_actually_sees_a_new_brand() -> None:
     assert leaked == "Yeehaw"
     assert leaked not in BRAND_LEXICON
     assert _unreviewed([leaked]) == {"Yeehaw"}
+
+
+def test_the_drift_gate_reads_the_committed_snapshot_and_not_a_live_database() -> None:
+    """The gate's source is frozen data, asserted rather than documented.
+
+    The 129/53/76 split below is only meaningful against a known catalog, and a
+    gate whose source silently went back to a sibling checkout on one machine
+    would keep passing on that machine while CI ran nothing. So: the snapshot is
+    a file in this repository, it holds the 178 rows, and the module holds no
+    `sqlite3` import at all — the drift gate cannot reach a database even by
+    accident.
+    """
+    assert CATALOG_SNAPSHOT.is_file()
+    assert CATALOG_SNAPSHOT.is_relative_to(Path(__file__).resolve().parents[2])
+    imported: set[str] = set()
+    for node in ast.walk(ast.parse(Path(__file__).read_text(encoding="utf-8"))):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+    assert "sqlite3" not in imported, "the drift gate must not open a database"
+    assert "PRODUCER_CATALOG" not in globals(), (
+        "the gate must not resolve the sibling repository's catalog path again"
+    )
+    assert len(_catalog_rows()) == 178
 
 
 def test_the_drift_gate_numbers_are_the_ones_this_revision_was_reviewed_at() -> None:
