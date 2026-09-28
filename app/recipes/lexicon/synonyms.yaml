@@ -1,0 +1,162 @@
+# The closed synonym set the matcher's tier 6 reads.
+#
+# Loaded once at import time by `app/recipes/match_lexicon.py` and indexed into
+# a single folded-name lookup. An entry is a NAME PREDICATE resolved against the
+# live catalog at read time: **a Pantry Item id can never appear here**, because
+# `items.id` is `INTEGER PRIMARY KEY AUTOINCREMENT` and a producer re-import
+# renumbers it. A row is reached by looking its own name up, not by being pinned.
+#
+# Schema. `version` is the schema revision, not the data revision; a loader that
+# does not recognise it refuses to start rather than misreading the file.
+# `synonyms` is a list of entries, each with exactly three fields and no others:
+#
+#   canonical  the preferred name, and the entry's identity
+#   match      every other spelling of the same food, including the catalog's
+#   families   the Pantry Category families a candidate may be adopted from —
+#              MANDATORY, and the food-class guard's only input
+#
+# `families` is mandatory because an entry without one would let any family
+# through, which is the category-family guard switched off while still looking
+# like a guard. `1.1` is fresh produce, `1.2` frozen/prepared, `1.1c`
+# condiments, `2` shelf-stable grocery, `3` bakery, `4` snack, `5` drinks,
+# `1.1f` fruit, `1.1d` dairy, `1.2d`/`1.2m`/`1.2s`/`1.2v` the frozen
+# sub-classes. These are Pantry Category CODES: `CONTEXT.md` defines no
+# code-to-display-text mapping, and this file must not invent one.
+#
+# **It is CLOSED, and Transliteration is NOT used and must never be added.**
+# A pinyin alias silently merges unrelated foods: `花生` and `华生` are
+# different words, `紫苏` and `资生` are, and no review of a synonym list
+# catches that because the pinyin looks correct. An explicit, hand-reviewed
+# `match` entry is auditable; a generated one is not.
+#
+# **`Lemon` and `Lime` are separate entries and must never be merged.**
+# `Lemon`↔`柠檬` and `Lime`↔`青柠` are two different fruits, and `🍋‍🟩` parses
+# to `青柠` — a `contains` rule that let `青柠` reach a `柠檬` row would
+# substitute one fruit for another, which is the exact silent
+# flavour-descriptor error D1 exists to prevent. `青柠` therefore stays
+# `unresolved` until a real catalog row appears, and that is the correct
+# outcome, not a gap.
+#
+# Two rules the segment-boundary guard in `matcher.py` then applies to every
+# name below, and which this file cannot substitute for:
+#
+#   * a name must be a WHOLE segment of the row's basename. `蒜` is not a
+#     segment of `蒜香蒸茄子` (72) or `薯片蒜蓉面包味` (110); `土豆` is not a
+#     segment of `呀!土豆 薯条` (62); `芝麻` is not a segment of `芝麻烧饼` (102).
+#     That is why `Garlic` is spelled `Garlic` and never `Garlic-flavoured`.
+#   * every candidate must share ONE family, and that family must be in this
+#     entry's `families`. `Broccoli` is where this bites: `Cascadian Farm
+#     Broccoli Florets` (14) and `365 … Organic Broccoli Florets` (118) are
+#     `1.2`, while `Forward Greens Micro Broccoli` (154) is `1.1`. The entry
+#     allows `1.2` only — broccoli *florets*, which is the food a recipe
+#     writes — so 154 is refused on class alone and the two survivors are one
+#     family, which is the only reason the entry can resolve at all. Dropping
+#     `1.1` from the allowlist is not a workaround; it is the guard working.
+#
+# A handful of entries carry **the catalog's own spelling of the same food** as
+# an extra alias — `空心菜嫩苗` (83), `红苋菜苗` (139), `新鲜小叶茼蒿` (70),
+# `Chicken Wings` (166). Each is there because the recipe writes the shorter
+# common name and the row carries the more specific one, and the segment rule
+# correctly refuses to reach across the difference: `空心菜` is a prefix of
+# `空心菜嫩苗`, not a whole segment of it, so tier 4 and tier 5 both decline and
+# this list is the only way the row is legitimately reachable. They are names,
+# never ids, and a catalog re-import that renames the row simply stops matching.
+version: 1
+synonyms:
+  # --- greens -------------------------------------------------------------
+  - canonical: Kale
+    match: [羽衣甘蓝, 芥蓝]
+    families: ["1.1", "1.2"]
+  - canonical: Arugula
+    match: [芝麻菜, 沙拉菜]
+    families: ["1.1", "1.2"]
+  - canonical: Cabbage
+    match: [包菜, 卷心菜, 圆白菜]
+    families: ["1.1", "1.2"]
+  - canonical: Baby Chinese Cabbage
+    match: [娃娃菜]
+    families: ["1.1", "1.2"]
+  - canonical: Water Spinach
+    match: [空心菜, 蕹菜, 空心菜嫩苗]
+    families: ["1.1", "1.2"]
+  - canonical: Amaranth
+    match: [红苋菜, 苋菜, 红苋菜苗]
+    families: ["1.1", "1.2"]
+  - canonical: Garland Chrysanthemum
+    match: [茼蒿, 小叶茼蒿, 新鲜小叶茼蒿]
+    families: ["1.1", "1.2"]
+  - canonical: Black Fungus
+    match: [黑木耳, 木耳]
+    families: ["1.1", "1.2"]
+  - canonical: Broccoli
+    match: [西兰花, 花椰菜]
+    families: ["1.2"]
+  # --- fungi and roots ----------------------------------------------------
+  - canonical: Shiitake
+    match: [香菇, 冬菇, 花菇, "Shiitake Mushroom"]
+    families: ["1.1", "1.2", "1.2d"]
+  - canonical: Mushroom
+    match: [蘑菇]
+    families: ["1.1", "2"]
+  - canonical: Potato
+    match: [土豆, 马铃薯]
+    families: ["1.1", "1.2", "2"]
+  - canonical: Sweet Potato
+    match: [红薯, 地瓜]
+    families: ["1.1", "1.2"]
+  - canonical: Tomato
+    match: [番茄, 西红柿]
+    families: ["1.1", "1.2"]
+  - canonical: Egg
+    match: [鸡蛋, 蛋]
+    families: ["1.1", "1.1d", "1.2"]
+  - canonical: Rice
+    match: [米饭, 白米饭]
+    families: ["1.1", "1.2", "2"]
+  # --- fish, meat, herbs --------------------------------------------------
+  - canonical: Mackerel
+    match: [鲭鱼, 青花鱼, 鲅鱼]
+    families: ["1.2", "1.2m", "2"]
+  - canonical: Clam
+    match: [花蛤, 蛤蜊]
+    families: ["1.2", "1.2m", "1.2s", "2"]
+  - canonical: "Chicken Wing"
+    match: [鸡翅, 鸡翅膀, "Chicken Wings"]
+    families: ["1.1", "1.2", "1.2m"]
+  - canonical: "Chicken Thigh"
+    match: [鸡腿, 琵琶腿]
+    families: ["1.1", "1.2", "1.2m"]
+  - canonical: Shishito
+    match: [小米椒, 朝天椒]
+    families: ["1.1", "1.2"]
+  - canonical: Basil
+    match: [香料, 罗勒]
+    families: ["1.1", "1.2"]
+  - canonical: focaccia
+    match: [佛卡夏]
+    families: ["1.2", "2", "3"]
+  - canonical: Stracciatella
+    match: [奶酪]
+    families: ["1.1", "1.1d", "1.2"]
+  - canonical: Lemon
+    match: [柠檬]
+    families: ["1.1", "1.1f", "1.2"]
+  # `Lime` is a separate entry from `Lemon` and must never be merged with it.
+  - canonical: Lime
+    match: [青柠]
+    families: ["1.1", "1.1f", "1.2"]
+  # --- the three `调料` that also appear as free-standing names ------------
+  # `Garlic` and `Sesame` are in this file even though the ladder's staples
+  # tier already covers them as `调料`, because the flavour-descriptor rows they
+  # must NOT reach (110 / 20 / 25 / 66 / 102) are reachable through tier 6, and
+  # an entry is what makes the two guards demonstrable on the real catalog
+  # rather than only on a synthetic one.
+  - canonical: Garlic
+    match: [蒜, 蒜蓉]
+    families: ["1.1", "1.2"]
+  - canonical: Sesame
+    match: [芝麻, 芝麻油]
+    families: ["1.1", "1.1c"]
+  - canonical: Ginger
+    match: [姜, 姜片]
+    families: ["1.1", "1.2", "1.1c"]

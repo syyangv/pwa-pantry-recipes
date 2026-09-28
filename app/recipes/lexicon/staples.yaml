@@ -1,0 +1,64 @@
+# The Seasonings assumed on hand — the matcher's tier 7 (spec §9.9).
+#
+# Loaded once at import time by `app/recipes/match_lexicon.py`.
+#
+# **These are NOT matched against the catalog and do NOT consume the headline
+# score in the default view.** They are a Seasoning class, not a Pantry Item.
+#
+# The empirical justification is a single fact about the catalog: Pantry
+# Category `1.1c` (condiments) has exactly **one** row in 178 (id 177,
+# `李锦记 蒸鱼豉油 14 盎司`). Matching `调料` against the catalog therefore
+# cannot succeed, and without this file `调料` coverage is ~5%. With it, coverage
+# is ~90% for the cost of one file.
+#
+# Schema. `version` is the schema revision, not the data revision.
+# `staples` is a list of whole Seasonings names, matched whole and never as a
+# substring — which is the distinction the live data turns on. `芝麻油` is
+# assumed on hand and plain `芝麻` is **not**, because sesame oil is a condiment
+# in a bottle and sesame seeds are an ingredient you buy, and a substring rule
+# would quietly claim the second one follows from the first. A substring rule
+# would also make `酱油` a staple of every name containing those characters,
+# which is a class assumption dressed as a match.
+#
+# `class_suffixes` is a SUFFIX rule, which is what lets `调味酱油` resolve when
+# the staple is `酱油`. Suffix and not substring, so `蒸鱼豉油` and `老抽` are
+# recognised for what they are without either needing its own line here.
+#
+# §9.9 writes this file as a bare list plus a `class_suffixes` key. That is not
+# valid YAML — a document is either a sequence or a mapping, not both — so the
+# two are nested under a `staples` key here. The contents are §9.9's list
+# verbatim, in §9.9's order.
+#
+# **The matcher applies this list only to `调料`-sourced values.** A `材料` value
+# that appears here resolves to `unresolved` and is surfaced in the provenance
+# view as a probable mis-filed frontmatter entry: a `材料` of `油` would be a
+# real bulk purchase, not an assumed condiment, and counting it as found would
+# inflate the headline that D4 exists to keep honest.
+version: 1
+staples:
+  - 油
+  - 盐
+  - 糖
+  - 生抽
+  - 老抽
+  - 醋
+  - 芝麻油
+  - 蒜
+  - 葱
+  - 姜
+  - 香菜
+  - 鸡精
+  - 黑胡椒
+  - 鱼露
+  - 小米椒
+  - 料酒
+  - dashi
+  - 面粉
+  - 米
+  - 淀粉
+  - 蚝油
+  - 蒸鱼豉油
+  - 韩式辣椒粉
+  - 新奥尔良腌料
+  - 窑鸡粉
+class_suffixes: [酱油, 醋, 油, 粉, 酒, 汁, 酱, 盐, 糖]
