@@ -46,6 +46,13 @@ VERSION = "v9.9.9"
 LOCAL = "http://127.0.0.1:8007"
 DEPLOYED = "https://recipes.test.invalid:8452"
 
+#: Stands in for "a version this world is not running": a stale local backend, a
+#: stale deployed origin, a stale shell. A sentinel rather than a real release
+#: number, so no fixture here has to be re-pinned when a release ships and so
+#: grepping for a shipped literal never lands on a test that reads as coupled to
+#: it. It has to differ from `VERSION`, and nothing else.
+STALE_VERSION = "v0.0.0-stale"
+
 #: Two absolute epochs, so the tests do not decay. `OLD` predates every fixture
 #: file this module writes, so the world is coherent; `YOUNG` postdates the boot
 #: header, so touching a file to it is a change the backend never saw.
@@ -62,6 +69,40 @@ STARTUP_LOADED_SAMPLES = (
     "app/config.py",
     "app/db/schema.sql",
 )
+
+
+def cache_version_of(sw_text: str) -> str:
+    """The `CACHE_VERSION` the gate would read out of this `sw.js` text."""
+    match = gate.CACHE_VERSION_RE.search(sw_text)
+    assert match is not None, "no CACHE_VERSION constant in this sw.js text"
+    return match.group(1)
+
+
+def rewrite_cache_version(sw_text: str, version: str) -> str:
+    """Put `version` in this `sw.js` text, using the gate's own regex.
+
+    **The fixture tracks the shipped version; it does not assert one.** An
+    earlier version of this module replaced a literal `'v0.6.0'`, so the a303d4a
+    bump to `v0.7.0` turned the substitution into a silent no-op: the fixture's
+    worker kept answering `v0.6.0` while every response in the world claimed
+    `v9.9.9`, and condition 1 failed for 13 tests that had nothing wrong with
+    them. A pin like that is a release step nothing documents and nobody
+    performs — the runbook's release sequence (§6) never mentioned it.
+
+    The failure that pin was guarding against is real, and it is what the
+    `count == 1` assertion below is for: a rewrite that matches nothing leaves
+    the fixture disagreeing with the file it claims to mirror, which must be a
+    failure with a name rather than a literal to keep in step by hand. From here
+    the mismatch is caught by the *comparison* —
+    `test_a_version_mismatch_in_either_half_fails_condition_one` breaks each
+    half on purpose and asserts condition 1 notices — so the loud failure the
+    old pin bought is now bought by the thing under test.
+    """
+    rewritten, count = gate.CACHE_VERSION_RE.subn(
+        lambda _match: f"const CACHE_VERSION = '{version}'", sw_text
+    )
+    assert count == 1, f"expected exactly one CACHE_VERSION constant in sw.js, found {count}"
+    return rewritten
 
 
 class World:
@@ -88,10 +129,13 @@ class World:
             path.write_text(f"# {relative}\n", encoding="utf-8")
             os.utime(path, (OLD, OLD))
 
-        # Real bytes wherever the gate parses real bytes. The version is rewritten
-        # to a value no shipped release has used, so a test that accidentally
-        # depends on `v0.6.0` fails loudly instead of passing.
-        self.sw_text = REAL_SW.read_text(encoding="utf-8").replace("'v0.6.0'", f"'{VERSION}'")
+        # Real bytes wherever the gate parses real bytes, and exactly one
+        # substitution: the CACHE_VERSION literal is located with the gate's own
+        # regex and rewritten to VERSION, so the fixture follows whatever version
+        # the shipped file currently carries. The reasoning, and why a literal
+        # pin was removed rather than re-pointed at v0.7.0, is on
+        # `rewrite_cache_version`.
+        self.sw_text = rewrite_cache_version(REAL_SW.read_text(encoding="utf-8"), VERSION)
         self.index_text = REAL_INDEX.read_text(encoding="utf-8")
         self.update_manager = REAL_UPDATE_MANAGER.read_text(encoding="utf-8")
         self.spec: dict[str, Any] = json.loads(REAL_SMOKE_SPEC.read_text(encoding="utf-8"))
@@ -227,6 +271,40 @@ def test_a_coherent_world_converges(world: World) -> None:
     assert "CONVERGED" not in gate.render(results)
 
 
+@pytest.mark.parametrize(
+    "shipped", ["v0.1.0", "v0.6.0", "v0.7.0", "v1.2.3", "v2.0.0-rc.1", "v10.20.30"]
+)
+def test_the_fixture_rewrites_whatever_version_sw_js_carries(shipped: str) -> None:
+    """The version-agnostic property, asserted rather than demonstrated once.
+
+    `a303d4a` bumped the shipped `CACHE_VERSION` to v0.7.0 and the fixture's
+    pinned `'v0.6.0'` replacement silently matched nothing, so the coherent
+    world above stopped being coherent and took 13 tests with it. Each of these
+    is a version this fixture has to survive without anyone editing it: the
+    world is built from the real file either way, and the rewrite has to land on
+    `VERSION` and leave no trace of what was there before — the absence of that
+    trace is precisely what the pinned `.replace()` failed to guarantee."""
+    real = REAL_SW.read_text(encoding="utf-8")
+    as_shipped = real.replace(cache_version_of(real), shipped)
+    assert cache_version_of(as_shipped) == shipped, "the rewrite below is not what shipped"
+
+    rewritten = rewrite_cache_version(as_shipped, VERSION)
+    assert cache_version_of(rewritten) == VERSION
+    assert shipped not in rewritten, (
+        "the old literal survived the rewrite — as it did at a303d4a. If sw.js now "
+        "names its version in a second place, that place has to say which one is "
+        "authoritative."
+    )
+
+
+def test_a_sw_js_with_no_cache_version_fails_the_fixture_loudly() -> None:
+    """The old pin's stated purpose — a fixture that has stopped matching the
+    shipped file must fail loudly — is kept, as a count assertion instead of a
+    literal to maintain."""
+    with pytest.raises(AssertionError, match="exactly one CACHE_VERSION"):
+        rewrite_cache_version("const CACHE_NAME = 'pwa-shell';\n", VERSION)
+
+
 def test_the_baseline_has_exactly_the_ten_numbered_conditions(world: World) -> None:
     """§12 numbers eight steps, and the two preconditions on them — the socket,
     and whether the gate can talk to the origin at all — are numbered 0 and 0b.
@@ -335,7 +413,7 @@ def test_a_listening_socket_passes_condition_zero(
 def test_a_backend_that_has_not_reloaded_sw_js_fails_condition_one(world: World) -> None:
     """The bump is committed, the shell is right, and the process is still
     answering with last release's version — the restart was skipped."""
-    world.responses[f"{LOCAL}/api/version"] = world._json({"version": "v0.6.0"})
+    world.responses[f"{LOCAL}/api/version"] = world._json({"version": STALE_VERSION})
     results, code = run(world)
     result = by_id(results, "1 source-version")
     assert result.status == gate.FAIL
@@ -348,6 +426,28 @@ def test_a_missing_cache_version_is_unproven_not_a_crash(world: World) -> None:
     results, code = run(world)
     assert by_id(results, "1 source-version").status == gate.UNPROVEN
     assert code == 2
+
+
+@pytest.mark.parametrize("side", ["worker", "responses"])
+def test_a_version_mismatch_in_either_half_fails_condition_one(world: World, side: str) -> None:
+    """The reverse direction: the rewrite above is not a rubber stamp.
+
+    A world whose fixture `sw.js` carries any other `CACHE_VERSION`, and a world
+    whose `/api/version` reports any other version, must both fail condition 1
+    and exit 1. This is the failure the removed `'v0.6.0'` pin was guarding
+    against — a fixture that quietly disagrees with the file it mirrors — and it
+    is now proven against the comparison itself, in both directions, rather than
+    against a literal that has to be re-pinned on every release."""
+    other = "v9.9.8-not-this-one"
+    if side == "worker":
+        world._write_sw(rewrite_cache_version(world.sw_text, other))
+    else:
+        world.responses[f"{LOCAL}/api/version"] = world._json({"version": other})
+    results, code = run(world)
+    result = by_id(results, "1 source-version")
+    assert result.status == gate.FAIL, result.detail
+    assert other in result.detail
+    assert code == 1
 
 
 def test_a_dead_backend_is_named_as_dead_with_its_status(world: World) -> None:
@@ -368,11 +468,11 @@ def test_a_dead_backend_is_named_as_dead_with_its_status(world: World) -> None:
 
 
 def test_a_serve_route_pointing_at_another_backend_fails_condition_two(world: World) -> None:
-    world.responses[f"{DEPLOYED}/api/version"] = world._json({"version": "v0.5.0"})
+    world.responses[f"{DEPLOYED}/api/version"] = world._json({"version": STALE_VERSION})
     results, code = run(world)
     result = by_id(results, "2 deployed-version")
     assert result.status == gate.FAIL
-    assert "v0.5.0" in result.detail
+    assert STALE_VERSION in result.detail
     assert code == 1
 
 
@@ -614,14 +714,19 @@ def test_a_version_no_commit_ever_set_is_unproven(world: World) -> None:
 
 def test_the_rotation_anchor_comes_from_a_real_repository(tmp_path: Path) -> None:
     """The one thing a fake git could agree with and the real one would not: the
-    anchor is the commit that last set *this* literal, found with `git log -1 -S`.
-    A release that bumps to v0.7.0, then reverts to v0.6.0, must anchor at the
-    revert — otherwise the reverted release inherits a month of 'unchanged since'
-    and the gate goes blind."""
+    anchor is the commit that last changed a `CACHE_VERSION` line, found with
+    `git log -1 -G"const CACHE_VERSION"`. A release that bumps, then reverts,
+    must anchor at the revert — otherwise the reverted release inherits a month
+    of 'unchanged since' and the gate goes blind.
+
+    The two versions below are arbitrary. The repository is built here, and the
+    anchor matches the *line* rather than the value, so a real release number
+    would only suggest a coupling to `app/static/sw.js` that does not exist."""
+    first_version, second_version = "v1.0.0", "v2.0.0"
     repo = tmp_path / "real-repo"
     (repo / "app" / "static" / "js").mkdir(parents=True)
     (repo / "app" / "static" / "sw.js").write_text(
-        "const CACHE_VERSION = 'v0.6.0';\n", encoding="utf-8"
+        f"const CACHE_VERSION = '{first_version}';\n", encoding="utf-8"
     )
     (repo / "app" / "static" / "js" / "main.js").write_text("// v1\n", encoding="utf-8")
     env = {
@@ -633,7 +738,9 @@ def test_the_rotation_anchor_comes_from_a_real_repository(tmp_path: Path) -> Non
     }
     subprocess.run(("git", "init", "-q"), cwd=repo, check=True, env=env)
     subprocess.run(("git", "add", "-A"), cwd=repo, check=True, env=env)
-    subprocess.run(("git", "commit", "-qm", "bump v0.6.0"), cwd=repo, check=True, env=env)
+    subprocess.run(
+        ("git", "commit", "-qm", f"bump {first_version}"), cwd=repo, check=True, env=env
+    )
     first = subprocess.run(
         ("git", "rev-parse", "HEAD"), cwd=repo, capture_output=True, text=True, check=True
     ).stdout.strip()
@@ -657,16 +764,16 @@ def test_the_rotation_anchor_comes_from_a_real_repository(tmp_path: Path) -> Non
         subprocess.run(("git", "commit", "-qm", message), cwd=repo, check=True, env=env)
 
     # A release that bumped and changed nothing else is clean...
-    write_version("v0.7.0", "bump v0.7.0")
-    assert anchor_for("v0.7.0") == ([], [])
+    write_version(second_version, f"bump {second_version}")
+    assert anchor_for(second_version) == ([], [])
 
-    # ...and a frontend change with no bump is caught against v0.6.0's anchor.
+    # ...and a frontend change with no bump is caught against the old anchor.
     (repo / "app" / "static" / "js" / "main.js").write_text("// v2\n", encoding="utf-8")
     subprocess.run(("git", "add", "-A"), cwd=repo, check=True, env=env)
     subprocess.run(
         ("git", "commit", "-qm", "a frontend change with no bump"), cwd=repo, check=True, env=env
     )
-    stale, _ = anchor_for("v0.6.0")
+    stale, _ = anchor_for(first_version)
     assert len(stale) == 1
     assert "app/static/js/main.js" in stale[0]
 
@@ -675,28 +782,29 @@ def test_the_rotation_anchor_comes_from_a_real_repository(tmp_path: Path) -> Non
     # app/static/sw.js": someone fixing a SHELL_ASSETS hole would reset the
     # window and every un-bumped frontend change behind it would be forgotten.
     (repo / "app" / "static" / "sw.js").write_text(
-        "const CACHE_VERSION = 'v0.7.0';\nconst SHELL_ASSETS = ['/js/new.js'];\n",
+        f"const CACHE_VERSION = '{second_version}';\nconst SHELL_ASSETS = ['/js/new.js'];\n",
         encoding="utf-8",
     )
     subprocess.run(("git", "add", "-A"), cwd=repo, check=True, env=env)
     subprocess.run(
         ("git", "commit", "-qm", "add a precache entry, no bump"), cwd=repo, check=True, env=env
     )
-    still_caught, _ = anchor_for("v0.6.0")
+    still_caught, _ = anchor_for(first_version)
     assert len(still_caught) == 1, still_caught
     assert "app/static/js/main.js" in still_caught[0]
-    # The same commit is still a pending un-bumped change when read at v0.7.0,
-    # which is the other half of "the anchor did not move": neither version sees
-    # a clean tree, so the hole cannot be walked in through an SHELL_ASSETS edit.
-    also_caught, _ = anchor_for("v0.7.0")
+    # The same commit is still a pending un-bumped change when read at the
+    # current version, which is the other half of "the anchor did not move":
+    # neither version sees a clean tree, so the hole cannot be walked in through
+    # an SHELL_ASSETS edit.
+    also_caught, _ = anchor_for(second_version)
     assert len(also_caught) == 1, also_caught
 
     # The documented limitation, asserted rather than hidden: a *revert* of
     # CACHE_VERSION is itself a rotation, so it resets the anchor and the
     # un-bumped change made before it stops being visible. The forward path — the
     # one that ships — is covered by the two assertions above.
-    write_version("v0.6.0", "revert to v0.6.0")
-    after_revert, _ = anchor_for("v0.6.0")
+    write_version(first_version, f"revert to {first_version}")
+    after_revert, _ = anchor_for(first_version)
     assert after_revert == [], (
         "a revert is a rotation; see the limitation note in _mutable_static_changes"
     )
@@ -710,7 +818,7 @@ def test_the_rotation_anchor_comes_from_a_real_repository(tmp_path: Path) -> Non
         check=True,
         env=env,
     )
-    after_revert, _ = anchor_for("v0.6.0")
+    after_revert, _ = anchor_for(first_version)
     assert len(after_revert) == 1, after_revert
     assert "app/static/js/main.js" in after_revert[0]
     head = subprocess.run(
@@ -726,7 +834,7 @@ def test_the_rotation_anchor_comes_from_a_real_repository(tmp_path: Path) -> Non
 def test_a_shell_pinned_to_the_previous_version_fails_condition_six(world: World) -> None:
     """obsidian-daily's recorded failure: the shell reports the new version and
     the browser HTTP cache (304) serves the previous exact-versioned bundle."""
-    stale = world.index_text.replace("__APP_VERSION__", "v0.5.0")
+    stale = world.index_text.replace("__APP_VERSION__", STALE_VERSION)
     world.responses[f"{DEPLOYED}/"] = world._text(stale)
     results, code = run(world)
     result = by_id(results, "6 shell-assets")

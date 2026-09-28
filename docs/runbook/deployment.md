@@ -156,12 +156,39 @@ Never `--force`.
 
 Two steps are the ones that get skipped:
 
-* **Edit `scripts/converge-smoke.json` in the same commit as the bump.** It is
-  the release-specific half of gate condition 4, and a release that does not
-  edit it is asserting that last release's fields still exist — which is a
-  strictly weaker check than it looks.
+* **Edit `scripts/converge-smoke.json` when — and only when — the release changes
+  the API contract.** It is the release-specific half of gate condition 4, and a
+  release that adds an endpoint key without adding it to the spec is asserting
+  that last release's fields still exist, which is a strictly weaker check than
+  it looks. A release that changes no API contract legitimately leaves the file
+  untouched: `v0.7.0` (`cf39101`, the per-date cook-log revision binding and the
+  Back scroll restore) was frontend-only, added no endpoint key, and did not
+  touch the spec. Its `$release` labels therefore still read `v0.6.0` on purpose —
+  `$release` is the release that *introduced* the keys in that entry, and it is
+  the clock the "remove a key once its release is two releases back" rule runs
+  on. Relabelling them `v0.7.0` would claim a release introduced keys it did not
+  and would push the removal of those keys a release further out. What is never
+  acceptable is adding a key this release did not add: it hides a regression
+  behind a field that was always there.
 * **A plist edit is not a code change.** The sequence above says `kickstart -k`;
   that is correct for code and wrong for the plist. Use §5's pair.
+
+**No test is re-pinned per release, and none should be.**
+`tests/deploy/test_converge_gate.py` builds its world from the real
+`app/static/sw.js` by locating `CACHE_VERSION` with the gate's own regex
+(`CACHE_VERSION_RE` in `scripts/converge_gate.py`) and rewriting whatever the
+file currently carries, so a `CACHE_VERSION` bump touches no test. It used to
+replace a literal `'v0.6.0'` instead, and the `v0.7.0` bump in `a303d4a` turned
+that replacement into a silent no-op: the fixture's worker kept answering
+`v0.6.0` while every response in the world claimed `v9.9.9`, and condition 1
+failed across thirteen tests that had nothing wrong with them. A pin that has to
+be re-edited on every release is a release step nobody performs, and §6 is where
+that step would have to be written down. The failure it was guarding against —
+a fixture that quietly disagrees with the file it mirrors — is now caught by the
+comparison itself: `test_a_version_mismatch_in_either_half_fails_condition_one`
+breaks each half of condition 1 on purpose and asserts it fails, and
+`rewrite_cache_version` asserts it matched exactly one constant. If a future
+bump ever does need a test edit, that is a bug to file, not a step to perform.
 
 iOS caches manifest metadata longer than page content, so an icon change may need
 remove-and-re-add from the Home Screen, not a reinstall over the top.
@@ -237,9 +264,9 @@ own most recent commit:
 `v0.6.0`. That is the recorded incident class — a deploy that is internally
 consistent (versions match, the shell pins correctly, `SHELL_ASSETS` is right)
 while re-using the previous Service Worker cache key, so every installed PWA is
-handed the previous exact-versioned bundle. It is left unfixed on purpose: the
-rotation belongs to the release that carries those changes, and the next release
-bumps it inside `sw.js`'s CONFIG block and re-runs the gate.
+handed the previous exact-versioned bundle. The rotation was deliberately left
+to the release that carries those changes, and that is what `a303d4a` is:
+`CACHE_VERSION = 'v0.7.0'`, CONFIG block only, with the gate re-run after it.
 
 ## 8. Validation from a participant identity
 
