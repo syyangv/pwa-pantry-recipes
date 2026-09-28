@@ -873,6 +873,51 @@ class IngredientMappingStore:
             raise UnknownIngredientSlot(f"{recipe_note}#{ingredient_index}")
         return _to_mapping(written[0])
 
+    async def clear_manual(self, recipe_note: str, ingredient_index: int) -> bool:
+        """Drop a hand fix, leaving the slot `unresolved`. `True` if one was there.
+
+        The mirror of `set_manual`, and §9.16's `DELETE …/mapping`. It is a
+        `DELETE` plus a fresh `unresolved` `INSERT` for the same reason the set
+        path is: F6's `BEFORE UPDATE` trigger makes an update of a manual row
+        impossible, and delete-and-insert is the auditable pair. The re-inserted
+        row carries the **previous** `raw_value` / `parsed_name` /
+        `parse_method` verbatim, so clearing a hand fix destroys the repair and
+        nothing else — the audit anchor of what the note actually says survives.
+
+        `False` in two cases, and they are different facts the caller must be able
+        to tell: the slot has **no row at all** (raise `UnknownIngredientSlot`
+        instead — see below), or the slot is not `manual`, in which case there
+        was no hand fix to clear and the plain `unresolved` state the caller
+        asked for is already true. Clearing is therefore idempotent, and a
+        repeated `DELETE` is a 200 with `{"mapping": null}` rather than a 404 —
+        a retry that reports a failure for work that is already done is the kind
+        of plausible-looking wrong answer this module does not produce.
+
+        Raising `UnknownIngredientSlot` for a slot with no row keeps the two
+        answers apart at the route too: 404 means "this slot does not exist", and
+        `{"mapping": null}` means "there is no hand fix here".
+        """
+        key = (recipe_note, ingredient_index)
+        async with self._connect() as conn:
+            existing = await _select_slots(conn, _SELECT_SLOT, key)
+            if not existing:
+                raise UnknownIngredientSlot(f"{recipe_note}#{ingredient_index}")
+            if existing[0].match_method != "manual":
+                return False
+            async with _transaction(conn):
+                await conn.execute(_DELETE_SLOT, key)
+                await conn.execute(
+                    _INSERT_SLOT,
+                    (
+                        recipe_note,
+                        ingredient_index,
+                        existing[0].raw_value,
+                        existing[0].parsed_name,
+                        existing[0].parse_method,
+                    ),
+                )
+        return True
+
     # --- 4. reads ----------------------------------------------------------
 
     async def rows_for(self, recipe_note: str) -> tuple[IngredientMapping, ...]:
@@ -990,13 +1035,22 @@ def _relation_of(result: MatchResult, pantry_item_id: int) -> Relation:
 
 def _candidate_json(candidates: Sequence[MatchCandidate | CandidateRecord]) -> str:
     return json.dumps(
-        [_candidate_payload(candidate) for candidate in candidates],
+        [candidate_payload(candidate) for candidate in candidates],
         ensure_ascii=False,
         separators=(",", ":"),
     )
 
 
-def _candidate_payload(candidate: MatchCandidate | CandidateRecord) -> dict[str, object]:
+def candidate_payload(candidate: MatchCandidate | CandidateRecord) -> dict[str, object]:
+    """The one camelCase projection of an audit entry — `candidatesJson` on the wire.
+
+    Public because `app.api.recipes` publishes this same shape, and a second
+    projection there would be a second spelling of `candidates_json` that could
+    drift from the stored text: F7's provenance is only honest if the client and
+    the stored audit are the same keys, in the same casing, with the same
+    `reason` / `rejectedBy` split. F2 fixed the three keys it names, and the
+    extra three here are the ones the decoder reads back.
+    """
     """One audit entry. `reason` is the single string, `rejectedBy` the whole list.
 
     F2 fixes the conflict entry as
@@ -1097,4 +1151,5 @@ __all__ = [
     "SlotConflict",
     "UnknownIngredientSlot",
     "UnknownPantryItem",
+    "candidate_payload",
 ]

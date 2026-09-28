@@ -1,0 +1,1300 @@
+"""`/api/recipes` — every route, every status code, and the fail-closed 503.
+
+Run alone:  .venv/bin/python -m pytest tests/api/test_recipes_api.py -q
+
+**Every request here goes through the real `create_app(settings)`.** Nothing is
+hand-built and no router is spliced in: the wiring is the thing under test, and a
+route exercised through an app the ticket assembled itself is evidence about that
+app, not about this one. `tests/scaffold/test_routes.py` pins the registration
+*order*, which is the half a request cannot observe.
+
+**The 503 section is the most important file content here, and it is written to
+fail in one specific way.** The spec chose fail-closed over two fallbacks, and
+both fallbacks produce a *plausible* response — a 200 whose recipes all read
+`have-been-buying`, or a 200 with an empty `recipes` list. So the tests assert
+the absence of the plausible answer, not just the presence of the 503: three
+failure modes, and beside each one an assertion that no list, no slot, and no
+count came back. A positive control closes the trap from the other side — a
+`Pantry.md` that is readable and holds *nothing* is a 200 with real recipes,
+because "unreadable" and "empty" are different facts and only one of them is 503.
+
+**Every payload assertion is an exact key set.** F7 says provenance is
+unconditional and F17 says no boolean is ever published, and both of those are
+claims about a *set*, so a `set(body) == {...}` is the only assertion that tests
+them: `assert "cookable" not in body` would pass just as happily on a response
+that grew a `canCook` instead.
+
+**Nothing here reads a live path.** The vault, the `Pantry.md`, and the catalog
+are all written per test under `tmp_path` from the committed literals in
+`tests/api/conftest.py`.
+"""
+
+from __future__ import annotations
+
+import os
+import stat
+from collections.abc import Iterator
+from pathlib import Path
+from typing import Any
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.api.recipes import (
+    MAX_INGREDIENT_INDEX,
+    PANTRY_DB_UNREADABLE,
+    PANTRY_STOCK_UNREADABLE,
+    RECIPE_NOT_FOUND,
+    RESOLVE_IN_FLIGHT,
+    RESOLVE_LOCK_STATE_KEY,
+    build_recipes_router,
+)
+from app.config import Settings
+from tests.api.conftest import (
+    API_CATALOG_ROWS,
+    DUPLICATE_RECIPE,
+    DUPLICATE_RECIPE_BYTES,
+    MAIN_RECIPE,
+    ORIGIN,
+    PANTRY_NOTE,
+    RECIPES_ROOT,
+    client_for,
+    make_settings,
+    seed_catalog,
+    write_pantry_note,
+    write_recipe,
+)
+
+#: §9.16's success key set for the list, plus the `skipped` count §5 requires
+#: next to the other two. Asserted as an exact set on every list test, so a
+#: payload that grew a field — or lost one — fails here rather than being noticed
+#: by a user.
+LIST_KEYS: frozenset[str] = frozenset(
+    {
+        "recipes",
+        "catalogRevision",
+        "stockRevision",
+        "strict",
+        "staleMappingCount",
+        "stockUnjoinedCount",
+        "skipped",
+    }
+)
+
+#: One recipe row's key set. `steps` and `history` are the *detail* additions and
+#: must not leak into the list — a list that carried every step body would be a
+#: payload nobody can page, and F20's "return every recipe" only works because
+#: each row is small.
+LIST_RECIPE_KEYS: frozenset[str] = frozenset(
+    {"noteName", "notePath", "found", "total", "lastCooked", "ingredients", "tools"}
+)
+
+#: F7's unconditional provenance, per slot. Twelve keys, none optional, and
+#: `stockJoinState` beside them because F1's own acknowledged weakness has no
+#: other defence than its visibility.
+SLOT_KEYS: frozenset[str] = frozenset(
+    {
+        "index",
+        "rawValue",
+        "parsedName",
+        "parseMethod",
+        "matchMethod",
+        "matchTier",
+        "pantryItemId",
+        "confidence",
+        "candidatesJson",
+        "inStock",
+        "stockJoinState",
+        "isSeasoning",
+    }
+)
+
+#: §9.16's `PUT` row. `createdAt` / `updatedAt` are here and not on a slot: "when
+#: did this row last change" is a fact about a write, and the chip row is not one.
+MAPPING_KEYS: frozenset[str] = frozenset(
+    {
+        "recipeNote",
+        "ingredientIndex",
+        "rawValue",
+        "parsedName",
+        "parseMethod",
+        "matchMethod",
+        "matchTier",
+        "pantryItemId",
+        "confidence",
+        "candidatesJson",
+        "createdAt",
+        "updatedAt",
+    }
+)
+
+#: §9.10.1's resolve report, plus the conflict entries §9.16 requires to travel
+#: with the count.
+REPORT_KEYS: frozenset[str] = frozenset(
+    {
+        "reconsidered",
+        "resolved",
+        "stillUnresolved",
+        "staleReset",
+        "duplicateSlotConflicts",
+        "conflicts",
+    }
+)
+
+CONFLICT_KEYS: frozenset[str] = frozenset(
+    {"recipeNote", "ingredientIndex", "rawValue", "pantryItemId", "canonicalName", "reason"}
+)
+
+#: The catalog id a hand fix points at: `豆腐` (6), which no `材料` slot in the
+#: fixture recipe already claims, so the re-map is legal. `HELD_SLOT_ITEM_ID`
+#: (3) is the one slot 2 already holds, and pointing a second slot at it is F2's
+#: inverted index — a 409, not a 500.
+FREE_ITEM_ID: int = 6
+HELD_SLOT_ITEM_ID: int = 3
+
+#: The three ways F1 names an unreadable source.
+ABSENT: str = "absent"
+UNREADABLE: str = "unreadable"
+UNPARSEABLE: str = "unparseable"
+
+#: Not a UTF-8 byte sequence, so `parse_sections` raises `SectionError` and
+#: `parse_pantry` raises `PantryError("pantry_unparseable")`. Bytes rather than a
+#: broken heading on purpose: a heading malformation is a parser detail that could
+#: be reclassified, whereas "this file is not text" is a fact about the file that
+#: no parser change can talk its way out of.
+NOT_UTF8: bytes = b"---\nmodified_at: \xff\xfe not text\n---\n# 1 \xba\xf3\n"
+
+#: A note whose frontmatter names `材料` twice, which `RecipeIndex` refuses rather
+#: than letting PyYAML's last-one-wins silently drop a list of Ingredients.
+UNREADABLE_RECIPE: bytes = (
+    "---\n材料:\n  - 番茄\n材料:\n  - 鸡蛋\n---\n# 步骤\n1. \n"
+).encode()
+
+
+@pytest.fixture
+def settings(runtime_root: Path) -> Settings:
+    """A catalog the domain fixtures will read, seeded before the app is built."""
+    configured = make_settings(runtime_root)
+    seed_catalog(configured.pantry_items_db, API_CATALOG_ROWS)
+    return configured
+
+
+@pytest.fixture
+def vault(settings: Settings) -> Path:
+    return settings.vault_path
+
+
+@pytest.fixture
+def note(vault: Path) -> Path:
+    return write_recipe(vault, MAIN_RECIPE)
+
+
+@pytest.fixture
+def stock(vault: Path) -> Path:
+    return write_pantry_note(vault)
+
+
+@pytest.fixture
+def client(settings: Settings, note: Path, stock: Path) -> Iterator[TestClient]:
+    """The real app, lifespan running, with one recipe and a readable pantry."""
+    with client_for(settings) as test_client:
+        yield test_client
+
+
+def _csrf(test_client: TestClient) -> str:
+    """The token `GET /api/session` hands out, taken from the real route.
+
+    Read through the route rather than off `app.state.csrf` so the whole boot
+    contract — session → token → guard → route — is what the mutation tests
+    depend on, and so no test can pass against a token the app would not issue.
+    """
+    return str(test_client.get("/api/session").json()["csrfToken"])
+
+
+def _mutation(test_client: TestClient, **extra: str) -> dict[str, str]:
+    return {"Origin": ORIGIN, "X-CSRF-Token": _csrf(test_client), **extra}
+
+
+def _slot(recipe: dict[str, Any], index: int) -> dict[str, Any]:
+    """The `材料` slot at `index` — seasonings reuse indices, so the caller says
+    which list it is in and this only narrows the lookup."""
+    return next(slot for slot in recipe["ingredients"] if slot["index"] == index)
+
+
+def _by_value(recipe: dict[str, Any], raw: str) -> dict[str, Any]:
+    return next(slot for slot in recipe["ingredients"] if slot["rawValue"] == raw)
+
+
+def _names(body: dict[str, Any]) -> list[str]:
+    return [recipe["noteName"] for recipe in body["recipes"]]
+
+
+# --- the list ---------------------------------------------------------------
+
+
+def test_the_list_carries_exactly_the_specified_keys(client: TestClient) -> None:
+    response = client.get("/api/recipes")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == LIST_KEYS
+    assert body["strict"] == 0
+    assert body["catalogRevision"].startswith("sha256:")
+    assert body["stockRevision"].startswith("sha256:")
+    assert _names(body) == [MAIN_RECIPE]
+    assert set(body["recipes"][0]) == LIST_RECIPE_KEYS
+
+
+def test_the_list_carries_provenance_on_every_single_slot(client: TestClient) -> None:
+    """F7: unconditional. Six slots, six complete provenance records.
+
+    Asserted per slot rather than on the first one, because "the first slot has
+    provenance" is exactly the shape a partially-implemented F7 takes.
+    """
+    recipe = client.get("/api/recipes").json()["recipes"][0]
+
+    assert len(recipe["ingredients"]) == 6
+    for slot in recipe["ingredients"]:
+        assert set(slot) == SLOT_KEYS, slot
+        assert slot["matchMethod"]
+        assert isinstance(slot["matchTier"], int)
+        assert isinstance(slot["confidence"], float)
+        assert isinstance(slot["candidatesJson"], list)
+        assert slot["stockJoinState"] in {"joined", "override", "unresolved"}
+    # F7 again, from the other side: the audit is not a summary of refusals
+    # either. A slot the ladder adopted still carries the row it adopted, with
+    # the name and the id, so the provenance view can name what was chosen and not
+    # only what was turned down.
+    adopted = _by_value(recipe, "番茄")["candidatesJson"]
+    assert len(adopted) == 1
+    assert set(adopted[0]) == {
+        "pantryItemId",
+        "canonicalName",
+        "pantryCategory",
+        "family",
+        "relation",
+        "reason",
+        "rejectedBy",
+    }
+    assert adopted[0]["pantryItemId"] == 1
+    assert adopted[0]["canonicalName"] == "番茄"
+
+
+def test_the_order_is_vault_enumeration_order_and_is_not_sorted(
+    settings: Settings, vault: Path, stock: Path
+) -> None:
+    """D4's sort is client-side (§9.13.3); the server does not pre-empt it.
+
+    Two recipes come back in the order the folder holds them, not in the order
+    their headlines would rank them. A server-side sort would be a second sort to
+    keep correct, and the two would disagree the moment D4's rules changed.
+
+    Both notes are written **before** the app boots, and that is not incidental:
+    `RecipeIndex` holds a `recipe_cache_seconds` (60 s) snapshot, so a note added
+    while the app is running is invisible for up to a minute. That is the designed
+    staleness of a projection the user edits in Obsidian, and the reason the
+    fixture cannot add a note mid-test and expect it to appear.
+    """
+    write_recipe(vault, MAIN_RECIPE)
+    write_recipe(vault, DUPLICATE_RECIPE, DUPLICATE_RECIPE_BYTES)
+    with client_for(settings) as client:
+        body = client.get("/api/recipes").json()
+
+    assert _names(body) == [MAIN_RECIPE, DUPLICATE_RECIPE]
+    # A `0/2` recipe is a first-class row. D4 forbids a threshold, a collapse and
+    # a "show more", and the only way to assert that is to show the worse one.
+    assert [r["found"] / r["total"] for r in body["recipes"]] == [0.75, 0.5]
+
+
+def test_no_response_in_any_mode_publishes_a_cookable_boolean(client: TestClient) -> None:
+    """F17, asserted recursively, over every response this router can produce.
+
+    A top-level `"cookable" not in body` would miss a per-slot one, a per-recipe
+    one, and a `canCook` / `isCookable` rename of the same idea. The walk below
+    covers every dict and every list in the payload, so the only way to satisfy it
+    is to publish no single-boolean summary anywhere — which is the decision, not
+    an implementation detail of one field name.
+    """
+    for response in (
+        client.get("/api/recipes"),
+        client.get("/api/recipes", params={"strict": 1}),
+        client.get(f"/api/recipes/{MAIN_RECIPE}"),
+        client.get(f"/api/recipes/{MAIN_RECIPE}", params={"strict": 1}),
+    ):
+        assert response.status_code == 200, response.text
+        _assert_no_boolean_summary(response.json(), where=response.request.url.path)
+
+
+def _assert_no_boolean_summary(payload: object, *, where: str) -> None:
+    if isinstance(payload, dict):
+        for key, value in payload.items():
+            assert key not in {"cookable", "canCook", "isCookable", "readyToCook"}, (
+                f"{where} publishes a single-boolean summary as {key!r}"
+            )
+            _assert_no_boolean_summary(value, where=f"{where}.{key}")
+    elif isinstance(payload, list):
+        for position, value in enumerate(payload):
+            _assert_no_boolean_summary(value, where=f"{where}[{position}]")
+
+
+# --- the headline: F17's n/total, and F16's strict addendum ------------------
+
+
+def test_the_default_headline_counts_materials_only(client: TestClient) -> None:
+    """`3/4`, and the denominator is four slots, not a free literal (§9.13.1).
+
+    The three that count are resolved: `番茄` and `鸡蛋` on the exact-name tier
+    and `空心菜` through the synonym tier. `🐟 不存在的鱼` matches nothing and is
+    the one missing Material. The two Seasonings are present in the payload and
+    deliberately **not** in the arithmetic — that is F17, and it is the reason a
+    `调料` name can never appear in the default missing list.
+    """
+    recipe = client.get("/api/recipes").json()["recipes"][0]
+
+    assert (recipe["found"], recipe["total"]) == (3, 4)
+    assert [s["rawValue"] for s in recipe["ingredients"] if s["isSeasoning"]] == ["生抽", "盐"]
+    assert _by_value(recipe, "生抽")["matchMethod"] == "staples"
+    assert _by_value(recipe, "生抽")["matchTier"] == 7
+
+
+def test_strict_adds_the_seasonings_and_a_staple_satisfied_one_still_counts(
+    client: TestClient,
+) -> None:
+    """F16: `5/6`. Only an *unresolved* Seasoning is missing, and the staples
+    tier is why this toggle is not useless.
+
+    Pantry Category `1.1c` has one row in 178, so a Seasoning could almost never
+    be resolved against the catalog; counting those as missing would drive every
+    recipe's strict score to near zero. Here both Seasonings are adopted by the
+    staples tier and both count as found, which is the arithmetic F16 locks in.
+    """
+    recipe = client.get("/api/recipes", params={"strict": 1}).json()["recipes"][0]
+
+    assert (recipe["found"], recipe["total"]) == (5, 6)
+    assert not any(
+        _is_missing(slot, strict=True) for slot in recipe["ingredients"] if slot["isSeasoning"]
+    )
+
+
+def test_a_seasoning_slot_is_resolved_and_never_materialized(
+    settings: Settings, vault: Path, stock: Path
+) -> None:
+    """Why a `调料` row has a `matchMethod` at all, asserted as a consequence.
+
+    `ingredient_mappings.ingredient_index` is a `材料` index by schema, so a
+    Seasoning has no row to read — and nothing may invent one, because that would
+    put a frontmatter string into an audit anchor the app never read. So the
+    Seasoning's answer is derived per response by calling the pure ladder with
+    `source="调料"`, which is the only call to it outside the store, and F16 is
+    what it is for.
+
+    Two assertions make the whole design observable. First, the answer is a real
+    tier-7 adoption with a real confidence — not a placeholder. Second, the table
+    still holds only the four Material rows, so the derivation really is
+    per-response and not a write in disguise: `mappings.unresolvedCount` counts one
+    unresolved row, and it is the one *Material* the ladder could not resolve.
+    """
+    write_recipe(vault, MAIN_RECIPE)
+    with client_for(settings) as client:
+        body = client.get("/api/recipes").json()
+        seasonings = [s for s in body["recipes"][0]["ingredients"] if s["isSeasoning"]]
+        health = client.get("/health").json()
+
+    assert [s["matchMethod"] for s in seasonings] == ["staples", "staples"]
+    assert [s["matchTier"] for s in seasonings] == [7, 7]
+    assert all(s["pantryItemId"] is None for s in seasonings)
+    assert all(s["parseMethod"] == "bare" for s in seasonings)
+    # Four Material rows materialized; one of them unresolved. Had a `调料` row
+    # been written, this would be 2 and the schema's `材料`-index claim would be
+    # false.
+    assert health["mappings"]["unresolvedCount"] == 1
+
+
+def _is_missing(slot: dict[str, Any], *, strict: bool) -> bool:
+    """`app/static/js/logic/chip-class.js`'s ladder, restated as the test's oracle.
+
+    Restated rather than imported on purpose: the module under test computes
+    `found` from these very fields, so importing its helper would make the
+    assertion circular. The two must agree — the JS half is frozen for the
+    rendered string by `tests/js/logic/format.test.mjs`.
+    """
+    if slot["matchMethod"] in {"manual", "staples"}:
+        return False
+    if slot["pantryItemId"] is not None:
+        return False
+    return not (slot["isSeasoning"] and not strict)
+
+
+def test_strict_is_a_stateless_query_parameter(client: TestClient) -> None:
+    """F8: the flag is the request and nothing else.
+
+    Two reads, one strict and one not, from the same app with no write between
+    them and no cookie, no header and no SQLite row carrying the preference. A
+    persisted setting would need a round-trip before the first paint and would
+    create a second source of truth.
+    """
+    first = client.get("/api/recipes", params={"strict": 1}).json()
+    second = client.get("/api/recipes").json()
+    third = client.get("/api/recipes", params={"strict": 1}).json()
+
+    assert (first["strict"], second["strict"]) == (1, 0)
+    assert third == first
+    assert (first["recipes"][0]["found"], second["recipes"][0]["found"]) == (5, 3)
+
+
+@pytest.mark.parametrize("value", ["2", "-1", "yes", "true", ""])
+def test_a_strict_that_is_not_zero_or_one_is_422(client: TestClient, value: str) -> None:
+    """A value the flag does not have is a malformed request, not "off".
+
+    `?strict=7` silently meaning "off" would make the parameter's value not
+    matter, and a headline whose accuracy depends on a parameter nobody has to
+    get right is a headline nobody can rely on.
+    """
+    response = client.get("/api/recipes", params={"strict": value})
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_request"
+    assert set(response.json()) == {"requestId", "code"}
+
+
+# --- F1: the fail-closed 503, in all three failure modes --------------------
+
+
+def _break(vault: Path, mode: str) -> Path:
+    """Put `Pantry.md` into failure mode `mode` and return the file to restore."""
+    target = vault / PANTRY_NOTE
+    if mode == ABSENT:
+        target.unlink(missing_ok=True)
+        return target
+    if mode == UNREADABLE:
+        write_pantry_note(vault)
+        os.chmod(target, 0)
+        return target
+    write_pantry_note(vault, NOT_UTF8)
+    return target
+
+
+def _restore(target: Path, mode: str) -> None:
+    """Undo `_break` so a failing assertion cannot cascade into the next test."""
+    if mode == UNREADABLE:
+        os.chmod(target, stat.S_IRUSR | stat.S_IWUSR)
+    target.unlink(missing_ok=True)
+
+
+def _root_can_read_mode_zero() -> bool:
+    """Whether a mode-`0` file is actually unreadable for this uid.
+
+    Under `sudo` the "unreadable" case would silently become a *readable* one and
+    the test would assert a 200 while claiming a 503, which is worse than skipping.
+    """
+    return hasattr(os, "geteuid") and os.geteuid() == 0
+
+
+@pytest.mark.parametrize("mode", [ABSENT, UNREADABLE, UNPARSEABLE])
+def test_an_unreadable_pantry_note_is_503_on_both_read_routes(
+    settings: Settings, note: Path, mode: str
+) -> None:
+    """F1's fail-closed branch, once per failure mode, on both routes that join.
+
+    The blast radius is why this is parametrized: an unreadable `Pantry.md` takes
+    out **every** recipe's chip colour, not one, so both the list and the detail
+    must refuse.
+    """
+    if mode == UNREADABLE and _root_can_read_mode_zero():
+        pytest.skip("root reads a mode-0 file; the unreadable mode needs a non-root uid")
+    with client_for(settings) as client:
+        target = _break(settings.vault_path, mode)
+        try:
+            for path in ("/api/recipes", f"/api/recipes/{MAIN_RECIPE}"):
+                response = client.get(path)
+                assert response.status_code == 503, f"{mode} / {path}: {response.text}"
+                assert response.json()["code"] == PANTRY_STOCK_UNREADABLE
+        finally:
+            _restore(target, mode)
+
+
+@pytest.mark.parametrize("mode", [ABSENT, UNREADABLE, UNPARSEABLE])
+def test_a_degraded_no_items_held_list_is_never_returned(
+    settings: Settings, note: Path, mode: str
+) -> None:
+    """**The assertion whose absence would let the 503 quietly become a 200.**
+
+    The two rejected fallbacks both produce a *plausible* body: "assume not in
+    stock" serves the list with every chip reading `have-been-buying`, and
+    "assume in stock" serves it with every chip green. Neither is an error, so a
+    test that only checked the status could be made to pass by an implementation
+    that quietly served a degraded list instead. So the body itself is the
+    assertion: no `recipes` key, no slot, no count, and the two-key envelope —
+    nothing a client could render as "these are your recipes".
+    """
+    if mode == UNREADABLE and _root_can_read_mode_zero():
+        pytest.skip("root reads a mode-0 file; the unreadable mode needs a non-root uid")
+    with client_for(settings) as client:
+        target = _break(settings.vault_path, mode)
+        try:
+            response = client.get("/api/recipes")
+            body = response.json()
+            assert response.status_code == 503
+            assert set(body) == {"requestId", "code"}
+            assert body["code"] == PANTRY_STOCK_UNREADABLE
+            # Each plausible degraded answer, named and refused.
+            assert "recipes" not in body
+            assert "stockUnjoinedCount" not in body
+            assert "stockRevision" not in body
+            assert "have-been-buying" not in response.text
+            assert "chip--" not in response.text
+            assert MAIN_RECIPE not in response.text
+        finally:
+            _restore(target, mode)
+
+
+def test_a_readable_but_empty_pantry_is_a_200_with_real_recipes(
+    settings: Settings, note: Path
+) -> None:
+    """The positive control, and the reason the 503 above cannot be an empty 200.
+
+    A `Pantry.md` that parses and holds nothing is a real answer: "you have
+    nothing in the pantry", which renders every resolved slot
+    `have-been-buying` — correctly, and for a reason the user can act on. If this
+    were also a 503 the app would be unusable on an empty shelf; if the 503 above
+    were a 200 the app would be confidently wrong on a broken file. The two cases
+    differ only in whether the note could be read, and both are asserted.
+    """
+    with client_for(settings) as client:
+        write_pantry_note(
+            settings.vault_path,
+            "---\nmodified_at: 2026-09-27\n---\n# 1 冰箱\n".encode(),
+        )
+        response = client.get("/api/recipes")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == LIST_KEYS
+    assert _names(body) == [MAIN_RECIPE]
+    assert body["stockUnjoinedCount"] == 0
+    assert body["stockRevision"].startswith("sha256:")
+    recipe = body["recipes"][0]
+    # The identity half survives — the recipe still knows which product it wants.
+    # Only the *stock* half is unavailable, and it says so rather than guessing.
+    assert _by_value(recipe, "番茄")["pantryItemId"] == 1
+    assert _by_value(recipe, "番茄")["inStock"] is False
+    assert _by_value(recipe, "番茄")["stockJoinState"] == "unresolved"
+    # Nothing is in stock, so nothing is claimed to be. This is the one shape that
+    # is *both* a 200 and every chip downgraded — and it is honest, because the
+    # note said so.
+    assert recipe["found"] == 3
+
+
+def test_the_503_leaks_no_absolute_path(settings: Settings, note: Path, vault: Path) -> None:
+    """F1's `PantryError` carries the vault-relative path; §9.19's rule still holds.
+
+    The envelope is public and an absolute path there would disclose the server's
+    filesystem layout to anyone who can reach the port. The code is deliberately
+    generic — §9.16 widens the envelope for exactly two codes, both the Cooking
+    Log's, and nothing here may add a `message` — so the diagnostic the user gets
+    is the UI's own copy of the note name, and the server contributes only a
+    stable, path-free code.
+    """
+    with client_for(settings) as client:
+        response = client.get("/api/recipes")
+        body = response.json()
+
+    assert response.status_code == 503
+    assert set(body) == {"requestId", "code"}
+    assert str(vault) not in response.text
+    assert str(settings.app_data_dir) not in response.text
+    assert PANTRY_NOTE not in response.text
+
+
+def test_an_unreadable_catalog_is_503_pantry_db_unreadable(
+    settings: Settings, note: Path, stock: Path
+) -> None:
+    """The *other* 503, and it is a different code from the stock one.
+
+    The two sources fail for different reasons and are fixed by different user
+    actions, so a UI cannot render them from one branch. Corrupting the file is
+    what makes `mode=ro` SQLite refuse it; the app never writes to the catalog, so
+    the corruption is by hand and the fixture is per-test.
+    """
+    settings.pantry_items_db.write_bytes(b"this is not a SQLite database")
+    with client_for(settings) as client:
+        for path in ("/api/recipes", f"/api/recipes/{MAIN_RECIPE}"):
+            response = client.get(path)
+            assert response.status_code == 503, path
+            assert response.json()["code"] == PANTRY_DB_UNREADABLE
+            assert set(response.json()) == {"requestId", "code"}
+        # A resolvable failure is a 503 on the write route too, and the catalog is
+        # the one source that route reads.
+        assert client.post("/api/recipes/resolve", headers=_mutation(client)).status_code == 503
+        # `/health` still answers: the probe a user reads to find out *why* must
+        # not be the thing that stops answering.
+        health = client.get("/health")
+        assert health.status_code == 200
+        assert health.json()["pantry_db"]["rowCount"] is None
+
+
+# --- F1's join, and the two facts it must not conflate ----------------------
+
+
+def test_a_resolved_but_not_held_slot_is_not_in_stock_and_join_unresolved(
+    client: TestClient,
+) -> None:
+    """F1's measured evidence, in one fixture: `空心菜` → id 3, and `[x]`.
+
+    The recipe resolves to Pantry Item 3, and `Pantry.md` holds 3's line as
+    **done** — bought before, not on the shelf. A catalog-only answer would render
+    this `chip--in-stock`; the two fields below are what prevent it, and they are
+    asserted separately because they answer different questions. `pantryItemId` is
+    the recipe→catalog resolution; `stockJoinState` is the `Pantry.md`→catalog
+    join, which never saw the line at all.
+    """
+    slot = _by_value(client.get("/api/recipes").json()["recipes"][0], "空心菜")
+
+    assert slot["matchMethod"] == "synonym"
+    assert slot["pantryItemId"] == 3
+    assert slot["inStock"] is False
+    assert slot["stockJoinState"] == "unresolved"
+    assert slot["confidence"] == 0.7
+
+
+def test_a_line_the_catalog_explains_reports_the_join_that_explained_it(
+    client: TestClient,
+) -> None:
+    """`joined` for the two open lines, and `inStock: true` beside them.
+
+    The join state and the stock flag agree here and they are still separate
+    fields, which is the point: `joined` says *the join explained this product*,
+    `inStock` says *and it is on the shelf*. A product the join explained on the
+    override tier would be `override` and equally in stock.
+    """
+    recipe = client.get("/api/recipes").json()["recipes"][0]
+
+    for name, item_id in (("番茄", 1), ("鸡蛋", 2)):
+        slot = _by_value(recipe, name)
+        assert slot["stockJoinState"] == "joined", name
+        assert slot["inStock"] is True, name
+        assert slot["pantryItemId"] == item_id, name
+    unmatched = _by_value(recipe, "🐟 不存在的鱼")
+    assert unmatched["stockJoinState"] == "unresolved"
+    assert unmatched["pantryItemId"] is None
+
+
+def test_stock_unjoined_count_surfaces_f1s_misses_without_the_debug_view(
+    client: TestClient,
+) -> None:
+    """F1's escape hatch is load-bearing, and the counter is how it is noticed.
+
+    Two of the five pantry lines resolve to nothing in the catalog, so
+    `stockUnjoinedCount` is 2 without the client opening the provenance view.
+    §9.13.4's join *table* is a later ticket's render; the count is this ticket's
+    obligation, and a UI that never renders the table still gets a rising number.
+    """
+    body = client.get("/api/recipes").json()
+
+    assert body["stockUnjoinedCount"] == 2
+    assert _by_value(body["recipes"][0], "🐟 不存在的鱼")["pantryItemId"] is None
+
+
+def test_no_pantry_line_text_is_published(client: TestClient) -> None:
+    """The join's *evidence* stays server-side; only its state and count travel.
+
+    §9.13.4's table lists each open line with its raw text and its normalized
+    product core, and it is a **view** — a later ticket's render. Nothing here may
+    publish a line, because `GET /api/recipes` is the payload every screen holds
+    and a pantry line is the user's own to-do text.
+    """
+    response = client.get("/api/recipes")
+    # `完全不存在的商品` is a pantry line and no recipe's `材料`, so its absence is
+    # the whole assertion. `🐟 不存在的鱼` is deliberately **not** in this list: it
+    # is also slot 3 of the fixture recipe, and a recipe's own `rawValue` is the
+    # one string in this payload that has to be there — D1's audit anchor.
+    for line in ("完全不存在的商品", "冰箱", "干货", "库存"):
+        assert line not in response.text, line
+
+
+# --- the detail route -------------------------------------------------------
+
+
+def test_the_detail_recipe_carries_the_list_keys_plus_steps_and_history(
+    client: TestClient,
+) -> None:
+    recipe = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
+
+    assert set(recipe) == LIST_RECIPE_KEYS | {"steps", "history"}
+    assert set(recipe["history"]) == {
+        "firstCooked",
+        "lastCooked",
+        "cookingCount",
+        "cookingFrequency",
+        "cookingYears",
+        "recentActivity",
+        "favoriteSeason",
+        "cookingPatterns",
+        "autoUpdated",
+    }
+    # The nine tracker-owned fields, verbatim, including the one the reader keeps
+    # as a string because PyYAML does — a space is not the `T` its timestamp
+    # resolver accepts, and a cosmetic field must never blank a recipe.
+    assert recipe["history"]["lastCooked"] == "2026-09-20"
+    assert recipe["history"]["firstCooked"] == "2026-03-01"
+    assert recipe["history"]["cookingCount"] == 7
+    assert recipe["history"]["autoUpdated"] == "2026-09-21 12:00"
+    assert recipe["steps"] == "\n1. 热锅。\n2. 炒蛋盛出。\n3. 炒番茄，回锅。\n"
+    # The date is a projection, not a re-parse, and the two agree.
+    assert recipe["lastCooked"] == recipe["history"]["lastCooked"]
+
+
+@pytest.mark.parametrize("name", ["不存在", "%E4%B8%8D%E5%AD%98%E5%9C%A8", "empty", "a" * 200])
+def test_a_name_the_index_does_not_hold_is_404_recipe_not_found(
+    client: TestClient, name: str
+) -> None:
+    response = client.get(f"/api/recipes/{name}")
+    assert response.status_code == 404
+    assert response.json()["code"] == RECIPE_NOT_FOUND
+    assert set(response.json()) == {"requestId", "code"}
+
+
+@pytest.mark.parametrize("name", ["%2E%2E", "..%2E", ".hidden", "%2E%2E%2E%2E"])
+def test_a_path_shaped_name_that_reaches_the_route_is_404_recipe_not_found(
+    client: TestClient, name: str
+) -> None:
+    """Server-Owned Root, asserted as an absence, on the names that *do* match.
+
+    The router looks the name up in the in-memory index; it never concatenates it
+    onto anything. So a path-shaped name is simply a name nothing holds, and the
+    answer is the same 404 as any other miss — which is what makes the endpoint
+    unable to read the filesystem even in principle. `%2E%2E` is percent-encoded
+    precisely so the HTTP client cannot normalize it away before the request
+    leaves: a single decoded segment is a name, not a path.
+    """
+    response = client.get(f"/api/recipes/{name}")
+
+    assert response.status_code == 404
+    assert response.json()["code"] == RECIPE_NOT_FOUND
+    assert "root:x:" not in response.text
+    assert "OBSIDIAN_VAULT_PATH" not in response.text
+
+
+@pytest.mark.parametrize("name", ["%2Fetc%2Fpasswd", "..%2F", "%2F%2F%2Fetc"])
+def test_a_name_with_an_encoded_slash_lands_on_the_catch_all_not_the_route(
+    client: TestClient, name: str
+) -> None:
+    """A slash in the name is not a name, and the catch-all says so.
+
+    The decoded name is several path segments, so `{note_name}` cannot match and
+    the request reaches the scaffold's catch-all. Asserting the *code* is the
+    point: it is `not_found` rather than `recipe_not_found`, which says the
+    traversal was neutralized by the router before any handler of ours ran. The
+    difference is worth pinning rather than papering over.
+    """
+    response = client.get(f"/api/recipes/{name}")
+
+    assert response.status_code == 404
+    assert response.json()["code"] == "not_found"
+    assert set(response.json()) == {"requestId", "code"}
+    assert "root:x:" not in response.text
+
+
+@pytest.mark.parametrize("path", ["/api/recipes/../../etc/passwd", "/api/recipes/.."])
+def test_a_traversal_that_escapes_the_api_prefix_gets_the_static_mounts_html_404(
+    client: TestClient, path: str
+) -> None:
+    """The strongest form of the guarantee: the answer is not even our envelope.
+
+    URL normalization resolves these before the request is sent, so `/api/recipes/..
+    ` arrives as `/api/` and `/api/recipes/../../etc/passwd` as `/etc/passwd`. The
+    first matches nothing (the catch-all needs a segment) and the second leaves
+    `/api` entirely, so both land on the static mount and get its HTML 404. A
+    JSON body here would be a *worse* outcome to assert — it would mean one of our
+    handlers had been reached at all.
+    """
+    response = client.get(path)
+
+    assert response.status_code == 404
+    # Not even a `content-type`: the static mount's bare 404. A JSON body here
+    # would be a *worse* outcome to assert — it would mean one of our handlers
+    # had been reached at all.
+    assert not response.headers.get("content-type", "").startswith("application/json")
+    assert "root:x:" not in response.text
+    assert "OBSIDIAN_VAULT_PATH" not in response.text
+
+
+def test_the_name_is_the_wikilink_text_and_the_path_is_vault_relative(
+    client: TestClient, note: Path, vault: Path
+) -> None:
+    """D2: the field `note.note_name` is the same one the cook log writes.
+
+    `RecipeIndex` documents `note_name` as the basename precisely so the
+    `[[wikilink]]` text, this route, and §9.12's `⚠ 已重命名` drift check read one
+    value. So the payload's `noteName` **is** the filename, `notePath` is the
+    vault-relative location, and no client can reconstruct a server-owned absolute
+    path from either.
+    """
+    body = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
+
+    assert body["noteName"] == note.stem == MAIN_RECIPE
+    assert body["notePath"] == f"{RECIPES_ROOT}/{MAIN_RECIPE}.md"
+    assert str(vault) not in str(body)
+
+
+# --- a note the index could not read ----------------------------------------
+
+
+def test_a_note_the_index_cannot_read_is_skipped_and_counted(
+    settings: Settings, vault: Path, stock: Path
+) -> None:
+    """F7's provenance at the *list* level: `skipped`, and the note is not there.
+
+    `RecipeSnapshot.skipped` exists because a note that vanished without a number
+    attached is indistinguishable from one that was never there. So this asserts
+    both halves together: the bad note is absent from `recipes`, and `skipped` is
+    `1` so the absence is reported. A `skipped` of 0 would be a silent drop, and a
+    `skipped` of 1 with the note still listed would be a count about nothing.
+    """
+    write_recipe(vault, MAIN_RECIPE)
+    write_recipe(vault, "坏菜谱", UNREADABLE_RECIPE)
+    with client_for(settings) as client:
+        body = client.get("/api/recipes").json()
+        health = client.get("/health").json()
+
+    assert set(body) == LIST_KEYS
+    assert body["skipped"] == 1
+    assert _names(body) == [MAIN_RECIPE]
+    assert "坏菜谱" not in str(body)
+    # The same number on `/health`, because §5 requires it on both and a count
+    # that lived on only one surface would be one someone has to remember.
+    assert health["recipes"] == {"count": 1, "skipped": 1}
+
+
+# --- the resolve route ------------------------------------------------------
+
+
+def test_resolve_reports_the_five_numbers_and_the_duplicate_slot_conflict(
+    settings: Settings, vault: Path, stock: Path
+) -> None:
+    """F2 made countable, over HTTP, on a real note with a real duplicated `材料`.
+
+    A recipe listing `番茄` twice is a data defect in a user-authored note, not an
+    engine error — which is why §9.16 requires it to be visible *without* opening
+    the 调试 view. So the response carries the count **and** the entries: the
+    recipe, the slot, and the Pantry Item that lost, so a UI can say "this
+    Ingredient also matched 番茄" rather than rendering an unexplained miss.
+    """
+    write_recipe(vault, MAIN_RECIPE)
+    write_recipe(vault, DUPLICATE_RECIPE, DUPLICATE_RECIPE_BYTES)
+    with client_for(settings) as client:
+        response = client.post("/api/recipes/resolve", headers=_mutation(client))
+        assert response.status_code == 200, response.text
+        body = response.json()
+
+        assert set(body) == REPORT_KEYS
+        assert body["duplicateSlotConflicts"] == 1
+        assert body["reconsidered"] == 6
+        assert body["resolved"] + body["stillUnresolved"] == body["reconsidered"]
+        assert body["staleReset"] == 0
+        assert len(body["conflicts"]) == 1
+        conflict = body["conflicts"][0]
+        assert set(conflict) == CONFLICT_KEYS
+        assert conflict["canonicalName"] == "番茄"
+        assert conflict["pantryItemId"] == 1
+        assert conflict["reason"] == "duplicate_slot_conflict"
+        assert conflict["ingredientIndex"] == 1
+        assert conflict["recipeNote"].endswith(f"{DUPLICATE_RECIPE}.md")
+        assert str(vault) not in str(conflict)
+
+        # F2's actual guarantee: the FIRST slot committed and only the second was
+        # downgraded, and the other recipe's slots were untouched by the conflict.
+        # A whole-transaction abort would have reverted all of them, which is the
+        # failure the override exists to prevent.
+        recipes = {r["noteName"]: r for r in client.get("/api/recipes").json()["recipes"]}
+        assert _slot(recipes[DUPLICATE_RECIPE], 0)["pantryItemId"] == 1
+        assert _slot(recipes[DUPLICATE_RECIPE], 1)["pantryItemId"] is None
+        assert _slot(recipes[DUPLICATE_RECIPE], 1)["matchMethod"] == "unresolved"
+        assert _slot(recipes[DUPLICATE_RECIPE], 1)["matchTier"] == 0
+        assert _slot(recipes[DUPLICATE_RECIPE], 1)["candidatesJson"][0]["reason"] == (
+            "duplicate_slot_conflict"
+        )
+        assert (recipes[MAIN_RECIPE]["found"], recipes[MAIN_RECIPE]["total"]) == (3, 4)
+
+
+def test_a_second_resolve_is_idempotent(client: TestClient) -> None:
+    """F2's fixed point: the downgraded slot stays downgraded and stops moving.
+
+    The downgraded slot holds `NULL`, so a pass re-derives the same Pantry Item
+    for it and skips the write because the resolution is unchanged — which is what
+    makes `updated_at` mean "when this row's resolution last changed" rather than
+    "when a pass last walked over it". The count is now 0 because the recipe was
+    never in this fixture, so there is nothing to collide with.
+    """
+    first = client.post("/api/recipes/resolve", headers=_mutation(client)).json()
+    second = client.post("/api/recipes/resolve", headers=_mutation(client)).json()
+
+    assert first["duplicateSlotConflicts"] == 0
+    assert second == first
+    assert second["reconsidered"] == 4
+
+
+def test_resolve_is_409_while_a_pass_is_in_flight(client: TestClient) -> None:
+    """The guard, asserted against a genuinely held lock rather than a mock.
+
+    Two concurrent passes would run the same ladder over the same rows and race
+    each other for the same write lock, and a user who presses "re-resolve" twice
+    deserves one report rather than two racing ones. The lock lives on
+    `app.state` and is released on every path, so holding it here exercises the
+    real object the route reads — and the release afterwards is itself asserted,
+    because a guard that wedges is worse than one that is absent.
+    """
+    # The lock is created on first use rather than published by the `lifespan`,
+    # so one real pass runs first and the guard below holds the *live* object the
+    # route reads. Creating it in the lifespan instead would be one less moving
+    # part, and would also make an app with no `lifespan` a 503 rather than a 409.
+    assert client.post("/api/recipes/resolve", headers=_mutation(client)).status_code == 200
+    lock = client.app.state[RESOLVE_LOCK_STATE_KEY]
+    client.portal.call(lock.acquire)
+    try:
+        response = client.post("/api/recipes/resolve", headers=_mutation(client))
+    finally:
+        client.portal.call(lock.release)
+
+    assert response.status_code == 409
+    assert response.json()["code"] == RESOLVE_IN_FLIGHT
+    assert set(response.json()) == {"requestId", "code"}
+    assert client.post("/api/recipes/resolve", headers=_mutation(client)).status_code == 200
+
+
+# --- the two manual-mapping routes (F6) -------------------------------------
+
+
+def test_put_mapping_returns_the_row_and_reached_it_through_set_manual(
+    client: TestClient,
+) -> None:
+    """F6: a hand fix is a delete + insert, and the response is the new row.
+
+    The engine's answer for slot 3 was `unresolved`; the user's is Pantry Item 3.
+    `match_method: 'manual'` and `confidence: 1.0` are the schema's own encoding
+    for "no tier, full claim", and the audit anchor survives — a hand fix changes
+    which product this Ingredient is, not what the frontmatter says.
+    """
+    before = _by_value(
+        client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"], "🐟 不存在的鱼"
+    )
+    assert before["matchMethod"] == "unresolved"
+
+    response = client.put(
+        f"/api/recipes/{MAIN_RECIPE}/ingredients/3/mapping",
+        json={"pantryItemId": FREE_ITEM_ID},
+        headers=_mutation(client),
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert set(body) == {"mapping"}
+    mapping = body["mapping"]
+    assert set(mapping) == MAPPING_KEYS
+    assert mapping["matchMethod"] == "manual"
+    assert mapping["pantryItemId"] == FREE_ITEM_ID
+    assert mapping["confidence"] == 1.0
+    assert mapping["matchTier"] == 0
+    assert mapping["rawValue"] == "🐟 不存在的鱼"
+    assert mapping["parsedName"] == "不存在的鱼"
+    # And the read path agrees, which is what a hand fix is for: the headline
+    # moves from 3/4 to 4/4 because the user said they have it.
+    after = _by_value(
+        client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"], "🐟 不存在的鱼"
+    )
+    assert after["matchMethod"] == "manual"
+    assert after["pantryItemId"] == FREE_ITEM_ID
+    assert after["inStock"] is False
+    assert client.get("/api/recipes").json()["recipes"][0]["found"] == 4
+
+
+def test_delete_mapping_clears_the_hand_fix_and_is_idempotent(client: TestClient) -> None:
+    """Clearing restores `unresolved`, and clearing again is a 200, not a 404.
+
+    Idempotence is the point: a retry that reported a failure for work already
+    done is the plausible-looking wrong answer this app does not produce. Only a
+    slot with **no row at all** is a 404, because `ensure_rows` is how a slot comes
+    into existence and nothing here creates one.
+    """
+    client.put(
+        f"/api/recipes/{MAIN_RECIPE}/ingredients/3/mapping",
+        json={"pantryItemId": FREE_ITEM_ID},
+        headers=_mutation(client),
+    )
+    path = f"/api/recipes/{MAIN_RECIPE}/ingredients/3/mapping"
+
+    first = client.delete(path, headers=_mutation(client))
+    second = client.delete(path, headers=_mutation(client))
+
+    assert first.status_code == 200
+    assert first.json() == {"mapping": None}
+    assert second.status_code == 200
+    assert second.json() == {"mapping": None}
+    after = _by_value(
+        client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"], "🐟 不存在的鱼"
+    )
+    assert after["matchMethod"] == "unresolved"
+    assert after["pantryItemId"] is None
+    # The audit anchor still describes the note, not the repair.
+    assert after["rawValue"] == "🐟 不存在的鱼"
+
+
+def test_a_manual_row_survives_a_resolve_pass(client: TestClient) -> None:
+    """F6's guarantee is a property of the *row*, not of one call site.
+
+    `resolve_all` skips `manual`, so a catalog re-import, a future backfill, a
+    repair script and a hand-edited query all behave identically — because none of
+    them is what enforces it. A `POST /api/recipes/resolve` is the cheapest
+    demonstration of that, and the count is the evidence: four Material rows, one
+    of them manual, three reconsidered.
+    """
+    client.put(
+        f"/api/recipes/{MAIN_RECIPE}/ingredients/3/mapping",
+        json={"pantryItemId": FREE_ITEM_ID},
+        headers=_mutation(client),
+    )
+    report = client.post("/api/recipes/resolve", headers=_mutation(client)).json()
+
+    assert report["reconsidered"] == 3
+    after = _by_value(
+        client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"], "🐟 不存在的鱼"
+    )
+    assert after["matchMethod"] == "manual"
+    assert after["pantryItemId"] == FREE_ITEM_ID
+
+
+def test_binding_a_slot_to_an_item_the_recipe_already_holds_is_409(client: TestClient) -> None:
+    """F2's inverted index, hit by a hand fix — a 409, and nothing is written.
+
+    Slot 2 (`空心菜`) already holds Pantry Item 3, so pointing slot 3 at the same
+    product trips `ux_ingredient_mappings_recipe_item`. `set_manual`'s
+    transaction rolls back whole, so the previous row is intact; the request is a
+    genuine conflict rather than a malformed one, and the answer carries F2's own
+    reason string so one code covers both the ladder's catch and this one. The
+    user who wants a recipe to list one Pantry Item twice edits the note.
+
+    Without this mapping the exception escaped the handler as a 500 with a
+    traceback in the log and a blank screen in the UI.
+    """
+    response = client.put(
+        f"/api/recipes/{MAIN_RECIPE}/ingredients/3/mapping",
+        json={"pantryItemId": HELD_SLOT_ITEM_ID},
+        headers=_mutation(client),
+    )
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "duplicate_slot_conflict"
+    assert set(response.json()) == {"requestId", "code"}
+    recipe = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
+    assert _slot(recipe, 2)["pantryItemId"] == HELD_SLOT_ITEM_ID
+    assert _slot(recipe, 3)["pantryItemId"] is None
+    assert _slot(recipe, 3)["matchMethod"] == "unresolved"
+
+
+def test_a_pantry_item_the_live_catalog_does_not_have_is_422(client: TestClient) -> None:
+    """A 422, not a 404: the request is well formed, the id is not a member.
+
+    F6 makes a `manual` row immutable, so a bad id accepted once could only ever
+    be repaired by another delete-and-insert — and until then it renders a chip
+    claiming a product that does not exist.
+    """
+    response = client.put(
+        f"/api/recipes/{MAIN_RECIPE}/ingredients/3/mapping",
+        json={"pantryItemId": 9999},
+        headers=_mutation(client),
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "unknown_pantry_item"
+    assert set(response.json()) == {"requestId", "code"}
+
+
+def test_a_mapping_write_for_an_unknown_recipe_is_404(client: TestClient) -> None:
+    for method in ("put", "delete"):
+        response = client.request(
+            method.upper(),
+            "/api/recipes/不存在/ingredients/0/mapping",
+            json={"pantryItemId": 1},
+            headers=_mutation(client),
+        )
+        assert response.status_code == 404, method
+        assert response.json()["code"] == RECIPE_NOT_FOUND
+
+
+@pytest.mark.parametrize("index", [-1, MAX_INGREDIENT_INDEX + 1])
+def test_an_ingredient_index_that_cannot_exist_is_422(client: TestClient, index: int) -> None:
+    response = client.put(
+        f"/api/recipes/{MAIN_RECIPE}/ingredients/{index}/mapping",
+        json={"pantryItemId": 1},
+        headers=_mutation(client),
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_ingredient_index"
+
+
+def test_a_mapping_body_that_carries_an_extra_field_is_refused_not_ignored(
+    client: TestClient,
+) -> None:
+    """`extra="forbid"`, for the same reason the cook log's body is.
+
+    An ignored field is a field that looks like it worked, and a body carrying a
+    `path`-shaped key beside a valid `pantryItemId` is exactly the shape of a
+    client that thinks it can name a file.
+    """
+    response = client.put(
+        f"/api/recipes/{MAIN_RECIPE}/ingredients/3/mapping",
+        json={"pantryItemId": 1, "path": "../../etc/passwd"},
+        headers=_mutation(client),
+    )
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_request"
+
+
+def test_read_only_refuses_every_mutation_before_any_existence_check(
+    settings: Settings,
+) -> None:
+    """403 `read_only` precedes the 404, so a read-only install cannot probe.
+
+    Comparing 403 against 404 is otherwise a way to enumerate which recipes and
+    which slots exist without being able to write one — the same obligation
+    `tests/api/test_auth.py` states for the cook log, on the three routes that
+    write here. Neither the recipe nor the pantry note exists in this fixture, so
+    a 404 is the other possible answer and the ordering is what is asserted.
+    """
+    read_only = make_settings(
+        settings.app_data_dir.parent, OBSIDIAN_READ_ONLY="true"
+    )
+    seed_catalog(read_only.pantry_items_db, API_CATALOG_ROWS)
+    with client_for(read_only) as client:
+        for method, path in (
+            ("put", f"/api/recipes/{MAIN_RECIPE}/ingredients/0/mapping"),
+            ("delete", f"/api/recipes/{MAIN_RECIPE}/ingredients/0/mapping"),
+        ):
+            response = client.request(
+                method.upper(), path, json={"pantryItemId": 1}, headers=_mutation(client)
+            )
+            assert response.status_code == 403, method
+            assert response.json()["code"] == "read_only"
+        # The resolve pass writes too, so it is refused by the same gate.
+        assert client.post("/api/recipes/resolve", headers=_mutation(client)).status_code == 403
+        # And the reads still work: read-only is about writing the vault, not
+        # about refusing to tell the user what is in it.
+        assert client.get("/api/recipes").status_code == 503
+
+
+# --- the guards, in the shipped order ---------------------------------------
+#
+# Order is host → identity → read_only → body size → Origin → content-type →
+# CSRF. Each test omits exactly one header so the 403 names the guard under test;
+# a test that omitted two would prove nothing about which one fired.
+
+
+def test_a_resolve_without_an_origin_is_403_origin_not_allowed(client: TestClient) -> None:
+    response = client.post("/api/recipes/resolve")
+    assert response.status_code == 403
+    assert response.json()["code"] == "origin_not_allowed"
+
+
+def test_a_resolve_without_a_csrf_token_is_403_csrf_required(client: TestClient) -> None:
+    response = client.post("/api/recipes/resolve", headers={"Origin": ORIGIN})
+    assert response.status_code == 403
+    assert response.json()["code"] == "csrf_required"
+
+
+def test_a_foreign_host_is_400_before_anything_else(client: TestClient) -> None:
+    response = client.post(
+        "/api/recipes/resolve", headers={"Host": "evil.example", "Origin": ORIGIN}
+    )
+    assert response.status_code == 400
+    assert response.json()["code"] == "invalid_host"
+
+
+def test_a_spoofed_identity_header_is_401_in_trusted_header_mode(
+    runtime_root: Path, note: Path, stock: Path
+) -> None:
+    """Identity precedes every other guard, so a spoofed header is 401 and not 403.
+
+    In trusted-header mode the app believes Tailscale and a `Tailscale-User-Login`
+    the caller chose *is* the spoof, so `origin_not_allowed` would be the wrong
+    answer: it would tell the caller their Origin failed when what actually
+    happened is that they are not who they said.
+    """
+    trusted = make_settings(runtime_root, TRUST_TAILSCALE_HEADERS="true")
+    seed_catalog(trusted.pantry_items_db, API_CATALOG_ROWS)
+    with client_for(trusted) as client:
+        response = client.post(
+            "/api/recipes/resolve",
+            headers={"Origin": ORIGIN, "Tailscale-User-Login": "attacker@evil.invalid"},
+        )
+    assert response.status_code == 401
+    assert response.json()["code"].startswith("identity_")
+
+
+# --- the surface itself -----------------------------------------------------
+
+
+def test_the_router_registers_exactly_the_five_recipe_routes() -> None:
+    """§9.16's table is the whole surface, asserted on the router object.
+
+    `/api/recipes/resolve` is registered **before** `/api/recipes/{note_name}` on
+    purpose: a `POST` would not match the `GET`-only detail route today, but a
+    future `POST /api/recipes/{note_name}` would, and the literal path must win.
+    The order is asserted so a reordering has to be deliberate.
+    """
+    routes = [
+        (route.path, sorted(route.methods - {"HEAD"}))  # type: ignore[union-attr]
+        for route in build_recipes_router().routes
+    ]
+    assert routes == [
+        ("/api/recipes", ["GET"]),
+        ("/api/recipes/{note_name}", ["GET"]),
+        ("/api/recipes/resolve", ["POST"]),
+        ("/api/recipes/{note_name}/ingredients/{index}/mapping", ["PUT"]),
+        ("/api/recipes/{note_name}/ingredients/{index}/mapping", ["DELETE"]),
+    ]
+
+
+def test_every_recipe_response_carries_the_cache_and_request_id_headers(
+    client: TestClient,
+) -> None:
+    """`no-store` on every `/api/*`, and a `requestId` that matches the header.
+
+    §9.16's first sentence, asserted rather than assumed, and asserted together
+    because the two are what let a UI error and a log line be joined after the
+    fact.
+    """
+    token = _csrf(client)
+    for response in (
+        client.get("/api/recipes"),
+        client.get(f"/api/recipes/{MAIN_RECIPE}"),
+        client.post("/api/recipes/resolve", headers={"Origin": ORIGIN, "X-CSRF-Token": token}),
+    ):
+        assert response.status_code == 200, response.text
+        assert response.headers["cache-control"] == "no-store", response.request.url
+        assert response.headers["x-request-id"]
+        assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
+    # The `requestId` the body and the header share is on the *error* envelope —
+    # a success payload has no envelope. It is asserted here because joining a UI
+    # message to a log line is the whole purpose of the field.
+    refused = client.get("/api/recipes/不存在")
+    assert refused.status_code == 404
+    assert refused.headers["cache-control"] == "no-store"
+    assert refused.json()["requestId"] == refused.headers["x-request-id"]
+
+
+def test_the_read_routes_write_nothing_to_the_vault(client: TestClient, vault: Path) -> None:
+    """F20's list, and every read, are read-only with respect to the vault.
+
+    The PWA-owned SQLite file **is** written — `ensure_rows` materializes the
+    mapping table, which is D1's whole point and is not a vault write. The vault
+    is not: a byte-for-byte comparison of every note before and after a list, a
+    detail and a resolve pass.
+    """
+    before = {
+        path: path.read_bytes() for path in sorted(vault.rglob("*.md")) if path.is_file()
+    }
+    client.get("/api/recipes")
+    client.get(f"/api/recipes/{MAIN_RECIPE}")
+    client.post("/api/recipes/resolve", headers=_mutation(client))
+    after = {path: path.read_bytes() for path in sorted(vault.rglob("*.md")) if path.is_file()}
+
+    assert set(after) == set(before)
+    assert after == before

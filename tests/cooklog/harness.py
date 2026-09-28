@@ -20,15 +20,14 @@ host guard are the real guards and not a test-only imitation. The two exception
 handlers are `app.main._api_error` verbatim, so the envelope under test is the
 envelope the app emits.
 
-`app/main.py` does **not** register the Cooking Log router — that registration
-belongs between `/js/{path}` and the `/api/{unmatched_path}` catch-all and is
-#15's wiring — so this harness is what makes the routes reachable.
+`app/main.py` registers the Cooking Log router itself, at §9.19's position
+between `/js/{path}` and the `/api/{unmatched_path:path}` catch-all, so
+`mount_cook_logs` is now a no-op that only publishes the writer.
 `tests/api/test_cooklog_api.py` asserts the two-key envelope is key-for-key
 identical to `_api_error`'s and that F4's extension is the only thing added, which
-is what keeps that harness honest rather than a second, divergent app. It also
-splices the same router into the **real** `create_app` at §9.19's position
-(`mount_cook_logs`), because a router that no request can reach has not been
-tested; that splice is a no-op once the wiring lands.
+is what keeps this harness honest rather than a second, divergent app; and
+`tests/scaffold/test_routes.py` pins the registration order the splice used to
+stand in for.
 """
 
 from __future__ import annotations
@@ -199,31 +198,63 @@ def make_app_factory(
 CATCH_ALL_PATH: Final = "/api/{unmatched_path:path}"
 
 
+def registered_paths(application: FastAPI) -> list[str]:
+    """Every path in the app's route table, in match order, routers flattened.
+
+    **FastAPI >= 0.141 keeps an `include_router` result as one wrapper object
+    rather than splicing the child's routes into the parent's list.** A
+    `getattr(route, "path", None)` scan therefore sees `None` for every route a
+    router contributed, and reports `/api/cook-logs` as unregistered on an app
+    that has it. That is not a cosmetic detail: `mount_cook_logs` uses exactly
+    such a scan to decide whether it has anything left to do, so a wrapper-blind
+    scan makes it double-register against the real wiring.
+
+    The walk descends through the wrapper and prepends its prefix, so a nested
+    `include_router` is handled the same way. The static mount reports `""`,
+    which is what makes "the mount is last" assertable — the empty path matches
+    everything, so a route after it is unreachable.
+    """
+    table: list[str] = []
+    for route in application.router.routes:
+        original = getattr(route, "original_router", None)
+        if original is None:
+            table.append(getattr(route, "path", None) or "")
+            continue
+        prefix = getattr(getattr(route, "include_context", None), "prefix", "") or ""
+        table.extend(prefix + path for path in registered_paths_of(original))
+    return table
+
+
+def registered_paths_of(router: object) -> list[str]:
+    """`registered_paths` for a bare `APIRouter` rather than a whole app."""
+    table: list[str] = []
+    for route in getattr(router, "routes", []):  # type: ignore[attr-defined]
+        original = getattr(route, "original_router", None)
+        if original is None:
+            table.append(getattr(route, "path", None) or "")
+            continue
+        prefix = getattr(getattr(route, "include_context", None), "prefix", "") or ""
+        table.extend(prefix + path for path in registered_paths_of(original))
+    return table
+
+
 def mount_cook_logs(application: FastAPI, writer: CookingLogWriter) -> FastAPI:
     """Put the Cooking Log routes on the **real** app, where §9.19 says they go.
 
-    `app/main.py` is not this ticket's to edit, so the two `TODO(implementation)`
-    markers are still there and `create_app` mounts no domain router. This
-    inserts the router's own routes at the documented position in the app's
-    route table, which is the part that cannot be unit-tested any other way:
-    whether the route is reachable at all, whether `/api/{unmatched_path}`
-    shadows it, whether the static mount registered last still serves `/`, and
-    whether the real `cache_policy` and `/api/session` reach the route.
+    Before the wiring landed, this spliced the router's routes in front of the
+    catch-all — `include_router` appends, which would have been the wrong order
+    and would have produced a test that passes for the wrong reason.
 
-    It is a splice rather than `include_router` because the catch-all and the
-    static mount are already registered by then, and `include_router` appends —
-    which would be the wrong order and would produce a test that passes for the
-    wrong reason.
-
-    **Idempotent by design:** if the routes are already registered, this does
-    nothing and the test exercises the real registration. The same test
-    therefore holds before and after the wiring lands, and nothing here has to
-    be undone when it does.
+    It is now a **no-op**: `app/main.py` registers the router itself, at that
+    position, and the check below is written against `registered_paths` so it can
+    see a router's routes inside FastAPI's `include_router` wrapper. The same
+    tests therefore held before and after the wiring landed, and nothing here has
+    to be undone when it does.
     """
     application.state[COOK_LOG_WRITER_STATE_KEY] = writer
-    table = application.router.routes
-    if any(getattr(route, "path", None) == "/api/cook-logs" for route in table):
+    if "/api/cook-logs" in registered_paths(application):
         return application
+    table = application.router.routes
     index = next(
         position
         for position, route in enumerate(table)
@@ -257,6 +288,7 @@ __all__ = [
     "make_settings",
     "mount_cook_logs",
     "open_store",
+    "registered_paths",
     "writer_for",
     "write_note",
 ]

@@ -106,11 +106,28 @@ def test_health_reports_the_same_version_and_leaks_no_paths(
     assert body["status"] == "ok"
     assert body["vault"] == {"readable": True}
     assert body["app_data"] == {"operational": True}
-    assert body["pantry_db"] == {"readable": True}
+    # §9.19's five count groups, each with exactly the names the spec names and
+    # not one more. `pantry_db.rowCount` is the `items` TABLE's row count, which
+    # is why it is 1 here: the fixture catalog is seeded with one row.
+    assert body["pantry_db"] == {"readable": True, "rowCount": 1}
+    assert set(body["recipes"]) == {"count", "skipped"}
+    assert set(body["stock"]) == {"openCount", "unjoinedLineCount"}
+    assert set(body["mappings"]) == {"unresolvedCount"}
+    # The seeded catalog has one row, the fixture vault has no `Pantry.md` at
+    # all, and its Recipes folder is empty. So the catalog count is a real
+    # number, and stock is `None` — "not available" — rather than 0, which would
+    # claim the pantry was read and held nothing.
+    assert body["recipes"] == {"count": 0, "skipped": 0}
+    assert body["stock"] == {"openCount": None, "unjoinedLineCount": None}
+    assert body["mappings"]["unresolvedCount"] == 0
     # Health is unauthenticated: it must not disclose the server-owned paths.
     assert str(settings.vault_path) not in response.text
     assert str(settings.app_data_dir) not in response.text
     assert str(settings.pantry_items_db) not in response.text
+    # F1: the failure names the vault-relative note and no absolute path, and it
+    # reaches `/health` as a null counter rather than as a 500 — the probe a user
+    # reads to find out *why* the app is answering 503 must keep answering.
+    assert "Pantry.md" not in response.text
 
 
 # --- 2. Module-version injection + static shell ------------------------

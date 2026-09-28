@@ -11,12 +11,14 @@ ignored field is a field that looks like it worked.
 Every response below emits exactly the scaffold's `{"requestId", "code"}` unless
 it is one of the two codes F4 names, which add `message` / `date` /
 `relativePath` / `retryable` (and, for the 409, `currentRevision`). Key order
-and the two-key baseline are produced by `cook_log_error`, which is
-`app/main.py`'s `_api_error` plus optional keyword arguments —
-`tests/api/test_cooklog_api.py` asserts the two-key case is key-for-key
-identical to that function, so #15 can fold the extension into `_api_error`
-without any response changing shape. `relativePath` is **vault-relative**,
-never absolute, so the Server-Owned Root invariant and `/health` hold.
+and the two-key baseline are produced by `cook_log_error`, which is now a
+**delegation** to `app/api/envelope.py:api_error` — the same function
+`app/main.py`'s `_api_error` delegates to, which is how §9.19's fold happens
+without the circular import it would otherwise be.
+`tests/api/test_cooklog_api.py` asserts the two-key case is key-for-key identical
+to that function, so the fold changed nothing observable. `relativePath` is
+**vault-relative**, never absolute, so the Server-Owned Root invariant and
+`/health` hold.
 
 **Nothing here creates a daily note** (F4). A missing note is a 404 that names
 the date and the expected path and is retryable once the user creates it in
@@ -39,6 +41,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..cooklog.writer import CookingLogWriter, CookLogError, CookLogResult
+from .envelope import api_error
 
 #: Same bound, same trim, same non-empty rule as `pwa-deals` (§9.16).
 MAX_CLIENT_ID_LENGTH: Final = 200
@@ -98,26 +101,26 @@ def cook_log_error(
     retryable: bool | None = None,
     current_revision: str | None = None,
 ) -> JSONResponse:
-    """`app/main.py`'s `_api_error` with F4's optional detail, or nothing.
+    """The shared envelope, delegated.
 
-    Every optional field defaults to absent and is **omitted**, never sent as
-    `null`, so a pre-existing code keeps emitting exactly the two-key envelope.
+    The body used to live here. It does not any more: #15 folds it into
+    `app/main.py`'s `_api_error` (§9.19), and the only way to do that without an
+    `ImportError` is to put the body in a module both sides can import — see
+    `app/api/envelope.py` for the full argument. This signature is unchanged, so
+    every call site below and the return annotation stay as they were, and
+    `tests/api/test_cooklog_api.py::test_the_two_key_envelope_is_key_for_key_the_scaffolds`
+    still compares byte-for-byte against `_api_error`.
     """
-    payload: dict[str, Any] = {
-        "requestId": getattr(request.state, "request_id", None),
-        "code": code,
-    }
-    if message is not None:
-        payload["message"] = message
-    if log_date is not None:
-        payload["date"] = log_date
-    if relative_path is not None:
-        payload["relativePath"] = relative_path
-    if retryable is not None:
-        payload["retryable"] = retryable
-    if current_revision is not None:
-        payload["currentRevision"] = current_revision
-    return JSONResponse(payload, status_code=status_code)
+    return api_error(
+        request,
+        status_code,
+        code,
+        message=message,
+        log_date=log_date,
+        relative_path=relative_path,
+        retryable=retryable,
+        current_revision=current_revision,
+    )
 
 
 def cook_log_failure(request: Request, error: CookLogError) -> JSONResponse:
