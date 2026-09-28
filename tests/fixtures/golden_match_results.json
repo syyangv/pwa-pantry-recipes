@@ -10,8 +10,8 @@
     "Easy Fragrant Fried Rice": {
       "allMaterialsResolved": false,
       "duplicateMaterialItemIds": [],
-      "headline": "1/4 ingredients found — missing: 鸡蛋, 包菜, 米饭",
-      "headlineStrict": "6/10 ingredients found — missing: 鸡蛋, 包菜, 米饭   (严格模式（含调料）: 青柠)",
+      "headline": "0/4 ingredients found — missing: 西兰花, 鸡蛋, 包菜, 米饭",
+      "headlineStrict": "5/10 ingredients found — missing: 西兰花, 鸡蛋, 包菜, 米饭   (严格模式（含调料）: 青柠)",
       "materials": [
         {
           "candidates": [
@@ -148,9 +148,10 @@
           "rawValue": "🍚"
         }
       ],
-      "materialsFound": 1,
+      "materialsFound": 0,
       "materialsTotal": 4,
       "missingMaterials": [
+        "西兰花",
         "鸡蛋",
         "包菜",
         "米饭"
@@ -587,8 +588,8 @@
     "微波菜菜": {
       "allMaterialsResolved": false,
       "duplicateMaterialItemIds": [],
-      "headline": "1/3 ingredients found — missing: 香菇, 娃娃菜",
-      "headlineStrict": "1/3 ingredients found — missing: 香菇, 娃娃菜",
+      "headline": "0/3 ingredients found — missing: Kale, 香菇, 娃娃菜",
+      "headlineStrict": "0/3 ingredients found — missing: Kale, 香菇, 娃娃菜",
       "materials": [
         {
           "candidates": [
@@ -634,9 +635,10 @@
           "rawValue": "娃娃菜"
         }
       ],
-      "materialsFound": 1,
+      "materialsFound": 0,
       "materialsTotal": 3,
       "missingMaterials": [
+        "Kale",
         "香菇",
         "娃娃菜"
       ],
@@ -876,8 +878,8 @@
     "炒红苋菜": {
       "allMaterialsResolved": true,
       "duplicateMaterialItemIds": [],
-      "headline": "1/1 ingredients found",
-      "headlineStrict": "3/3 ingredients found",
+      "headline": "0/1 ingredients found — missing: 红苋菜",
+      "headlineStrict": "2/3 ingredients found — missing: 红苋菜",
       "materials": [
         {
           "candidates": [
@@ -901,9 +903,11 @@
           "rawValue": "红苋菜"
         }
       ],
-      "materialsFound": 1,
+      "materialsFound": 0,
       "materialsTotal": 1,
-      "missingMaterials": [],
+      "missingMaterials": [
+        "红苋菜"
+      ],
       "missingSeasonings": [],
       "notePath": "fake/炒红苋菜.md",
       "seasonings": [
@@ -1194,8 +1198,8 @@
     "煮菜菜": {
       "allMaterialsResolved": true,
       "duplicateMaterialItemIds": [],
-      "headline": "2/2 ingredients found",
-      "headlineStrict": "2/2 ingredients found",
+      "headline": "1/2 ingredients found — missing: 茼蒿",
+      "headlineStrict": "1/2 ingredients found — missing: 茼蒿",
       "materials": [
         {
           "candidates": [
@@ -1240,9 +1244,11 @@
           "rawValue": "茼蒿"
         }
       ],
-      "materialsFound": 2,
+      "materialsFound": 1,
       "materialsTotal": 2,
-      "missingMaterials": [],
+      "missingMaterials": [
+        "茼蒿"
+      ],
       "missingSeasonings": [],
       "notePath": "fake/煮菜菜.md",
       "seasonings": [],
