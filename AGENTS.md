@@ -25,14 +25,31 @@ Two caveats, both load-bearing, both in `README.md` § *What does not work yet*:
    and it was diagnosed, not worked around: no `--baseline`, no relaxed check,
    no claim of a pass that was not observed. `VANTAGE-LIMITED` is **not** a pass
    and its exit code is **3**, not 0.
-2. **The participant-identity validation has NEVER been performed.**
-   `docs/runbook/deployment.md` §8 requires a phone off the host's network, and
-   no phone was reachable from the deploy session. **No observer has ever seen
-   an authenticated 200 from the deployed origin**; every network request the
-   deploy made was refused, so the service has only ever been observed *failing
-   closed*. Loopback with the owner login returns 200 on everything, which proves
-   the app, not the exposed surface. Nothing in this repository may be read as
-   evidence that the authenticated path works.
+2. **The participant-identity validation has been performed — as a user
+   attestation for its positive half and as machine-observed probes for its two
+   negative halves.** `docs/runbook/deployment.md` §8 is the full record.
+   **Positive half:** on 2026-09-28 the user opened
+   `https://home-macbook-air.tailcd6e49.ts.net:8452` on `mieiphone` (`syyangv@`,
+   `100.99.212.85`, off this host's network) and reported that the app loads. A
+   `401 identity_missing` cannot render the app, so that does establish the
+   injected-identity chain works over the tailnet from a remote peer. It is a
+   **user attestation, not a machine-verified result** — no agent, tool, gate run
+   or test in this repository observed it, and it establishes reachability and
+   identity, not convergence. **Both negative halves are closed**, and unlike the
+   positive one they are machine-observed by the user in their own terminal:
+   unrelated HTTPS ports (`8444`, `8451`, `8453`, `9000`, `4433`) all refused,
+   with `8452` answering `401` in the same batch as a control; and
+   `nc -z -G 2 100.87.56.102 22` refused after the user ran
+   `sudo systemsetup -setremotelogin off` **themselves** — the user, not an
+   agent, with no sudoers grant created or needed — corroborated by
+   `launchctl print-disabled system` reporting `"com.openssh.sshd" => disabled`.
+   **Both negative probes were made from this serving node**, and a probe from
+   here to this node's own `100.x` address never leaves the machine, so they
+   confirm the ports are closed locally and **do not exercise tailnet ACLs from
+   a genuinely remote peer**; only a probe from a phone would. Neither the
+   attestation nor the vantage upgrades the claim past what was observed. None
+   of this converges anything: the gate's answer is unchanged, and caveat 1
+   above is the one that still decides what this deploy is.
 
 Do not describe the gate as passing, and do not substitute a loopback or
 desktop check for the participant check. `docs/runbook/deployment.md` is the
@@ -239,8 +256,10 @@ introduces the code that implements it, not later.
 ### Deploy
 
 **Deployed 2026-09-28, with the gate at exit 3 (`VANTAGE-LIMITED`) and the
-participant-identity check never performed — see the state header at the top of
-this file and `README.md` § *What does not work yet`.** Concretely: the plist is installed at
+participant-identity check performed — attested by the user for its positive
+half, machine-observed for its two negative halves, both negatives from the
+serving node. See the state header at the top of this file and `README.md` §
+*What does not work yet*.** Concretely: the plist is installed at
 `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist`, the label
 `com.syang.pwa-pantry-recipes` is loaded and `state = running`, and
 `tailscale serve status` lists `8452 → http://127.0.0.1:8007`. Do not re-bootstrap

@@ -4,7 +4,8 @@ A local, installable Progressive Web App for **deciding what to cook from what
 is already in the pantry**, and for recording the cook in the Obsidian daily
 note.
 
-> **Status (2026-09-28): the features are shipped; the app is not deployed.**
+> **Status (2026-09-28): the features are shipped and the app is deployed as a
+> service; its verification is not finished.**
 > Every route in `docs/spec/2026-09-27-pantry-recipes.md` §9.16 exists and is
 > reachable: the recipe list and detail views, F1's three-tier Stock Join, D4's
 > honest match display and the 溯源 provenance table with F2's two repair
@@ -182,9 +183,12 @@ annotated list; the four that matter most are:
 in-session, so `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` is
 installed, `com.syang.pwa-pantry-recipes` is loaded with `state = running`, and
 `tailscale serve status` lists the ingress. What is *not* true is that the
-release gate has passed: run from the serving host it exits **3**, with
-conditions 2–8 `VANTAGE-LIMITED`, and the participant-identity check the runbook
-requires **has never been performed**. Both are stated precisely in
+release gate has passed: it has never exited 0, and run from the serving host it
+exits **3**, with conditions 2–8 `VANTAGE-LIMITED`. The runbook's
+**participant-identity check has been performed** — attested by the user for its
+positive half, machine-observed for its two negative halves, both negatives from
+the serving node — which is a different fact and does not move the gate. Both are
+stated precisely in
 [What does not work yet](#what-does-not-work-yet); read them before claiming the
 deploy is verified.
 
