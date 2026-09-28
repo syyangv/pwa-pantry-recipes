@@ -58,6 +58,26 @@ body {
   display: none;
 }
 
+/* --- Banners ------------------------------------------------------------
+ * The shell HTML already names `.banner .banner-notice` and
+ * `.banner .banner-error`; these are the two paints. A banner is an
+ * announcement, not a control, so it never takes a tap target. */
+.banner {
+  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--fg);
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.banner-error {
+  border-color: var(--danger);
+  background: var(--chip-missing-bg);
+  color: var(--chip-missing-fg);
+}
+
 .banner-notice {
   background: var(--bg-elev);
   border: 1px solid var(--border);
@@ -327,6 +347,176 @@ code {
   background: var(--chip-assumed-bg);
   color: var(--chip-assumed-fg);
   font-size: 0.75rem;
+}
+
+/* --- The recipe row (D4) -------------------------------------------------
+ * One line of evidence plus a chip row. The row is a GRID ITEM of
+ * `.recipe-grid` (1 / 2 / 3 columns), and each cell is a vertical stack: the
+ * link, then the chip row. The link wraps the NAME and the HEADLINE and
+ * deliberately not the chip row — a horizontal scroller inside an anchor turns
+ * a swipe into a navigation on a touch device.
+ *
+ * The headline is `logic/format.js`'s string and nothing may reflow it into
+ * meaning: it wraps (`overflow-wrap: anywhere`) because a long missing list is
+ * never truncated — §9.13.1 truncating it would hide the exact thing the user
+ * needs to buy. */
+.recipe-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+}
+
+.recipe-row__link {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  min-height: var(--tap-min);
+  justify-content: center;
+  color: inherit;
+  text-decoration: none;
+}
+
+.recipe-row__name {
+  font-weight: 600;
+}
+
+.recipe-row__headline {
+  margin: 0;
+  color: var(--fg-muted);
+  font-size: 0.9rem;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+/* The 调试 secondary line (§9.13.4). It is INSIDE the chip, so the chip grows
+ * vertically rather than the row getting a second line to align across. */
+.chip__provenance {
+  margin-left: 6px;
+  padding-left: 6px;
+  border-left: 1px solid currentColor;
+  opacity: 0.75;
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* A Cooking Tool is a REQUIREMENT, not stock, so it wears none of D4's five
+ * buckets. The neutral paint is the point: a tool must never read as "in
+ * stock" or "missing". */
+.chip--tool {
+  background: var(--bg-elev);
+  color: var(--fg-muted);
+  border-color: var(--border);
+}
+
+/* --- Empty and error states (D4 / F1) ------------------------------------
+ * An empty list is a NORMAL state and is deliberately not styled as a failure:
+ * a view that made "no recipes" look broken teaches the user that a fresh vault
+ * is a bug (§8 story 14, and the same rule D3 states for a shortlist). */
+.empty-state {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 16px;
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-sm);
+}
+
+.empty-state__title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.error-state {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 12px;
+  border: 1px solid var(--chip-missing-border);
+  border-radius: var(--radius-sm);
+  background: var(--chip-missing-bg);
+  color: var(--chip-missing-fg);
+}
+
+.error-state__title {
+  margin: 0;
+  font-weight: 600;
+}
+
+.error-state .muted {
+  color: inherit;
+  opacity: 0.85;
+}
+
+/* --- The detail view ------------------------------------------------------ */
+.fields {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 8px 0;
+}
+
+.field {
+  display: flex;
+  gap: var(--tap-gap);
+  min-width: 0;
+}
+
+.field__label {
+  flex: 0 0 9em;
+  color: var(--fg-muted);
+  font-size: 0.85rem;
+}
+
+.field__value {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+/* The note body, VERBATIM. `pre-wrap` keeps the vault's own line breaks and
+ * indentation while still wrapping on a phone; the bytes come from
+ * `textContent`, so a step can never become markup. */
+.steps {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  line-height: 1.6;
+}
+
+.log-date {
+  display: block;
+  width: 100%;
+  margin: var(--tap-gap) 0;
+  padding: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--fg);
+}
+
+/* The picker's height cap and the 16px input font are the VENDORED baseline's
+ * (`.form-sheet` in pwa.css, `input` in pwa.css) and are deliberately not
+ * re-declared here — see the header of this file. What is app-specific is the
+ * stacking and the spacing, plus the bottom safe-area padding iOS draws the
+ * home indicator over. */
+.date-picker {
+  display: flex;
+  flex-direction: column;
+  gap: var(--tap-gap);
+  margin-top: var(--tap-gap);
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--fg);
+}
+
+.date-picker[hidden] {
+  display: none;
 }
 
 .version-badge {

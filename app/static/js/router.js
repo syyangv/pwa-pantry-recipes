@@ -385,6 +385,23 @@ export function saveViewState(patch) {
   return require_().saveViewState(patch);
 }
 
+/**
+ * This view's own `history` entry state — the same value the router reads when
+ * it restores the offset.
+ *
+ * Exported for one specific reason, and it is not convenience. The router calls
+ * `scrollTo` immediately after `mount()` returns, but a view that fetches is
+ * still showing its loading state at that moment, so a long list is a few pixels
+ * tall and the restore silently CLAMPS (measured in Chromium: an offset of 640
+ * lands on 16). A view whose first paint is asynchronous therefore has to
+ * re-apply the target once its content is in, and it must read the SAME entry
+ * the router read rather than keeping its own copy of the number — two copies
+ * of a restore target is exactly how they come to disagree.
+ */
+export function readViewState() {
+  return require_().readViewState();
+}
+
 export function currentRoute() {
   return require_().current();
 }

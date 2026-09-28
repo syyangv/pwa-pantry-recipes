@@ -34,6 +34,7 @@ export const EXPECTED_TESTS = [
   'tests/js/router.test.mjs',
   'tests/js/scaffold.test.mjs',
   'tests/js/shell_assets.test.mjs',
+  'tests/js/views.test.mjs',
 ];
 
 const REPO_ROOT = join(dirname(fileURLToPath(import.meta.url)), '..', '..');

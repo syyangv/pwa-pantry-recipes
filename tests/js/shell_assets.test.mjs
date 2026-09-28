@@ -78,6 +78,29 @@ test('every frontend module and stylesheet is precached', () => {
   );
 });
 
+/* NON-VACUITY, for the gate directly above. A gate that compares two sets
+ * derived from the same source can be green because both sides are empty, or
+ * because a name was spelled differently on the two sides and the comparison
+ * silently found nothing to complain about. This one proves the comparison
+ * still bites: it removes ONE real, precached file from the precached set and
+ * asserts the same expression then reports exactly that file. If a future
+ * refactor of `precached` or `frontendFiles` breaks the comparison, this fails
+ * first and says which half went wrong. */
+test('the precache completeness gate still catches an unprecached file', () => {
+  const probe = 'js/logic/sort.js';
+  assert.ok(precached.has(probe), `the probe file itself is not precached: ${probe}`);
+  assert.ok(frontendFiles.includes(probe), 'the probe file is not in the walked set');
+  const withoutProbe = new Set([...precached].filter((file) => file !== probe));
+  const caught = frontendFiles.filter((file) => !withoutProbe.has(file));
+  assert.deepEqual(caught, [probe], 'dropping one precached file was not detected');
+  // And the negative control: the real set is complete, so the gate's own
+  // answer is an empty list for a reason rather than by construction.
+  assert.deepEqual(frontendFiles.filter((file) => !precached.has(file)), []);
+  // The set is not empty either. A comparison between two empty sets passes
+  // forever and means nothing.
+  assert.ok(precached.size >= frontendFiles.length, 'the precached set is smaller than the walked set');
+});
+
 test('every precached path has a file behind it', () => {
   const dangling = [...precached].filter((file) => !existsSync(join(STATIC_DIR, file)));
   assert.deepEqual(dangling, [], `SHELL_ASSETS references a missing file: ${dangling.join(', ')}`);

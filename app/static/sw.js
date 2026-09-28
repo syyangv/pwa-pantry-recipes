@@ -21,7 +21,7 @@
  * the version injected into the HTML shell all derive from this constant, so
  * the served cache name and every reported version cannot drift. Bump on every
  * deploy. */
-const CACHE_VERSION = 'v0.3.0';
+const CACHE_VERSION = 'v0.4.0';
 const CACHE_NAME = `pwa-shell-${CACHE_VERSION}`;
 const API_CACHE_NAME = `pwa-api-${CACHE_VERSION}`;
 const OUTBOX_SYNC_TAG = 'outbox';
@@ -64,7 +64,16 @@ const SHELL_ASSETS = [
   '/js/views/shortlists.js?v=' + CACHE_VERSION,
   '/js/views/settings.js?v=' + CACHE_VERSION,
   '/js/views/provenance.js?v=' + CACHE_VERSION,
-  // Pure client-side logic modules. Not imported by main.js yet, so they are
+  // The D4 display primitives, shared by the home and recipe views. They live
+  // at the top of js/ rather than in a js/components/ directory on purpose: a
+  // new subdirectory under static/js/ needs its own [tool.setuptools]
+  // package-data glob, and pyproject.toml is owned by another agent this wave.
+  // `static/js/*` already covers them, so a wheel ships them with no
+  // registration step at all.
+  '/js/chips.js?v=' + CACHE_VERSION,
+  '/js/panels.js?v=' + CACHE_VERSION,
+  '/js/pending-edits.js?v=' + CACHE_VERSION,
+  // Pure client-side logic modules. Not imported by main.js itself, so they are
   // named here rather than pulled in by the boot graph; without the entries a
   // cold offline start would resolve them from the network and fail.
   '/js/logic/chip-class.js?v=' + CACHE_VERSION,

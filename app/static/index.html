@@ -26,6 +26,12 @@
     <link rel="stylesheet" href="/css/pwa.css?v=__APP_VERSION__">
     <link rel="stylesheet" href="/css/tokens.css?v=__APP_VERSION__">
     <link rel="stylesheet" href="/css/styles.css?v=__APP_VERSION__">
+    <!-- Pattern M / F19: the pull-to-refresh indicator's paint. Inert on its
+         own — `.ptr-indicator` is only ever mounted by views/home.js, which is
+         the ONE view initPullToRefresh() is called from. The other two views
+         deliberately do not link anything for it and are excluded by the
+         spec. -->
+    <link rel="stylesheet" href="/css/pull-refresh.css?v=__APP_VERSION__">
     <title>Pantry Recipes</title>
   </head>
   <body>
