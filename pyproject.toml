@@ -17,13 +17,29 @@ dev = ["mypy>=1.13,<2", "ruff>=0.8,<1", "types-PyYAML>=6,<7"]
 browser = ["playwright>=1.44"]
 
 [tool.setuptools]
-# Scaffold modules only. `app.vault` / `app.pantry` / `app.recipes` are created
-# with the feature implementation, not before.
-packages = ["app"]
+# Auto-discovery, not a hand-maintained list. An explicit `packages` list is a
+# silent-green trap: a subpackage a ticket forgot to register still yields a
+# wheel, and CI's wheel check still passes because it only lists what it knows
+# about. Discovery removes the per-ticket registration step entirely.
+# `namespaces = false` restricts the result to directories carrying an
+# `__init__.py`, so `app/static` stays a data directory rather than becoming a
+# package, and no `__pycache__` can match.
 include-package-data = true
 
+[tool.setuptools.packages.find]
+include = ["app*"]
+namespaces = false
+
 [tool.setuptools.package-data]
+# Every key names a package that exists on disk, and every glob matches at
+# least one real file. A glob that silently matches nothing ships nothing while
+# the build still succeeds, so `tests/scaffold/test_app.py` asserts both of
+# those resolve. Dotted keys MUST stay quoted: an unquoted `app.recipes` tries
+# to add a sub-key to the already-defined `app` table and the whole file fails
+# to parse.
 app = ["static/*", "static/css/*", "static/js/*", "static/js/pwa/*", "static/icons/*"]
+"app.recipes" = ["lexicon/*.yaml"]
+"app.db" = ["schema.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

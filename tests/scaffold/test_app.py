@@ -21,6 +21,12 @@ later, and that a later feature PR could silently undo:
      the spec added. Both are decisions about what is NOT there as much as
      about what is: a reintroduced CLI field, or `playwright` in `[test]`,
      silently undoes a locked decision.
+  5. The packaging registration. One-directional on purpose: every package the
+     build registers must exist on disk, and every `package-data` glob must
+     match a real file. It deliberately does NOT claim the converse — that every
+     directory under `app/` is registered — because a ticket only owns its own
+     diff, so a completeness scan turns red on directories another ticket has
+     not created yet and on `__pycache__` appearing.
 """
 
 from __future__ import annotations
@@ -28,7 +34,9 @@ from __future__ import annotations
 import re
 import tomllib
 from dataclasses import fields
+from fnmatch import fnmatch
 from pathlib import Path
+from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
@@ -340,3 +348,108 @@ def test_aiosqlite_is_a_runtime_dependency_and_playwright_is_an_opt_in_extra() -
     # One occurrence in the whole file, and it is the `browser` extra: a second
     # one in `[test]` would make the browser suite non-optional in CI.
     assert text.count("playwright") == 1
+
+
+# --- 5. Packaging registration -------------------------------------------
+
+
+def _pyproject() -> dict[str, Any]:
+    return tomllib.loads(PYPROJECT_PATH.read_text(encoding="utf-8"))
+
+
+def _discovered_packages(config: dict[str, Any]) -> set[str]:
+    """What `packages.find` with `namespaces = false` will select.
+
+    Reproduced rather than imported: `find_packages` is a build-time dependency,
+    `types-setuptools` is not, and importing it would make the `mypy` config's
+    `files = ["app", "tests"]` unsatisfiable without a new dependency this
+    ticket may not add. For a flat layout the two definitions coincide —
+    directories carrying an `__init__.py`, filtered by the `include` globs.
+    """
+
+    finder = config["tool"]["setuptools"]["packages"]["find"]
+    if finder["namespaces"] is not False:
+        return _namespace_packages()
+    includes = finder["include"]
+    found = set()
+    for init in sorted((REPO_ROOT / "app").rglob("__init__.py")):
+        dotted = ".".join(init.parent.relative_to(REPO_ROOT).parts)
+        if any(fnmatch(dotted, pattern) for pattern in includes):
+            found.add(dotted)
+    return found
+
+
+def _namespace_packages() -> set[str]:
+    """Every directory under `app/`, which is what `namespaces = true` selects.
+
+    Only reached to produce a failure message that names the offending entries.
+    """
+
+    return {
+        ".".join(path.relative_to(REPO_ROOT).parts)
+        for path in (REPO_ROOT / "app").rglob("*")
+        if path.is_dir()
+    }
+
+
+def test_every_registered_package_exists_on_disk() -> None:
+    # One direction only: a stale registration. A package listed after its
+    # directory was removed builds a wheel that silently lacks code.
+    packages = _discovered_packages(_pyproject())
+    assert packages, "auto-discovery found nothing under app/"
+    for package in sorted(packages):
+        directory = REPO_ROOT / package.replace(".", "/")
+        assert directory.is_dir(), f"{package} is registered but {directory} does not exist"
+        # A data directory is not a package. `app/static` is served from disk
+        # and shipped via `package-data`, so promoting it to a package would be
+        # a claim the tree does not make.
+        assert package != "app.static"
+        assert "__pycache__" not in package.split(".")
+
+
+def test_discovery_does_not_pick_up_data_directories() -> None:
+    # `namespaces = false` is what does this. The setuptools default is `true`,
+    # and with it `app.static`, `app.static.js`, `app.static.js.pwa`,
+    # `app.static.css`, `app.static.icons` and `app.recipes.lexicon` all become
+    # "packages" — which is a wrong package set, not a harmless one.
+    finder = _pyproject()["tool"]["setuptools"]["packages"]["find"]
+    assert finder["namespaces"] is False
+    packages = _discovered_packages(_pyproject())
+    assert not any(part == "static" for package in packages for part in package.split("."))
+    assert "app.recipes.lexicon" not in packages
+
+
+def test_every_package_data_key_resolves_to_a_package_and_a_real_file() -> None:
+    # A key for a package that is not on disk ships nothing; a glob that matches
+    # nothing ships nothing. Both are the same silent-green hole the wheel
+    # check cannot see, because it only lists files it already knows about.
+    config = _pyproject()
+    packages = _discovered_packages(config)
+    package_data: dict[str, list[str]] = config["tool"]["setuptools"]["package-data"]
+
+    assert set(package_data).issubset(packages)
+    for package, patterns in package_data.items():
+        package_dir = REPO_ROOT / package.replace(".", "/")
+        prefix = f"{package.replace('.', '/')}/"
+        for pattern in patterns:
+            matched = [
+                path
+                for path in package_dir.rglob("*")
+                if path.is_file()
+                and fnmatch(path.relative_to(REPO_ROOT).as_posix(), f"{prefix}{pattern}")
+            ]
+            assert matched, f"{package!r} pattern {pattern!r} matches no file on disk"
+
+
+def test_dotted_package_data_keys_are_quoted() -> None:
+    # An unquoted `app.db = [...]` in a file that already defines `app` is a
+    # hard parse error, not a warning: TOML reads it as adding a sub-key to an
+    # immutable table, and the whole build fails with
+    # "Cannot mutate immutable namespace".
+    for line in PYPROJECT_PATH.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if "=" not in stripped or stripped.startswith(("#", "[")):
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if "." in key:
+            assert key.startswith('"') and key.endswith('"'), line
