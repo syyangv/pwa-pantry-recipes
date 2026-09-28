@@ -3,10 +3,13 @@
 A local-only PWA that answers **"what can I cook from what I already have?"**
 and records the cook in the Obsidian daily note.
 
-**Scaffold state (2026-09-27): infrastructure only.** No feature is
-implemented. `app/main.py` serves the shell, `/health`, and `/api/version`; the
-`TODO(implementation)` markers name exactly what is missing. Do not describe
-this app as working — read `README.md` § *What does not work yet*.
+**State (2026-09-27): infrastructure and domain primitives, no user-facing
+feature.** The shell, `/health`, `/api/version`, and `/api/session` are wired and
+the auth guards are installed, and the domain primitives below ship and are
+tested — but **none of them is reachable from a request**: the `lifespan` is a
+bare `yield`, there are no domain routers, and the two `TODO(implementation)`
+markers in `app/main.py` name exactly what is missing. Do not describe this app
+as working — read `README.md` § *What does not work yet*.
 
 ## Non-negotiables
 
@@ -59,14 +62,42 @@ Two rules that are easy to get wrong:
 ```
 app/config.py        typed, fail-closed Settings.from_environment()
 app/main.py          create_app() factory; route order is load-bearing
+app/auth.py          identity / Origin / CSRF / Host guards; CSRF token store
 app/pwa_version.py   VENDORED pwa-infra — do not edit
+app/db/              the owned SQLite layer: schema.sql, aiosqlite connect,
+                     pragmas, numbered migrations (init_db)
+app/pantry/          the read-only PantryCatalog over pantry_items.db `items`
+app/recipes/         the recipe index + note parser, the ingredient value
+                     parser, the product-core normalizer, and lexicon/brands.yaml
+app/vault/           atomic_write (AtomicNoteStore), frontmatter, sections,
+                     daily_paths — all byte-span primitives
 app/static/          sw.js (configured) + the vendored js/pwa/*, css/*
-scripts/             the example LaunchAgent plist
+app/static/js/logic/ chipClass, headline, sortRecipes — pure, node --test ed,
+                     and imported by nothing in app/static but sw.js's
+                     SHELL_ASSETS list
+scripts/             the example LaunchAgent plist + generate_icons.py
 tests/conftest.py    tmp vault + tmp data dir + seeded pantry catalog
-tests/scaffold/      the convergence gate and the static shell contract
-tests/js/            node --test structural gates for the boot contract
+tests/api/           the auth guards, the session contract, CSRF
+tests/db/            migrations and pragmas
+tests/pantry/        the catalog
+tests/recipes/       reader, ingredients, normalize, brand lexicon
+tests/vault/         atomic_write, frontmatter, sections, daily_paths
+tests/scaffold/      the convergence gate, route table, static shell, icons
+tests/js/            node --test gates for the boot contract + SHELL_ASSETS
+tests/js/logic/      node --test gates for the three logic modules
 previews/            VENDORED pwa-infra device frames (dev-only)
 ```
+
+Two things about that tree that a `find` will not tell you:
+
+- **`app/static/js/logic/*.js` does not ship in the wheel.** The
+  `package-data` globs cover `static/js/*` and `static/js/pwa/*` but not
+  `static/js/logic/*`, so those three precached modules are absent from the
+  built wheel. Recorded in `README.md` § *What does not work yet*.
+- **`package.json`'s test glob is quoted on purpose.** `'tests/js/**/*.test.mjs'`
+  reaches `/bin/sh`, which has no `globstar`; unquoted, the runner silently
+  collects a subset and reports 0 failures. `tests/js/collection-probe.mjs`
+  guards it. Never unquote it.
 
 ## Commands
 
@@ -74,8 +105,16 @@ previews/            VENDORED pwa-infra device frames (dev-only)
 .venv/bin/python -m pytest                     # suite
 .venv/bin/python -m ruff check app tests
 .venv/bin/python -m mypy app
-npm test && npm run check                      # frontend structural gates
+npm test && npm run check                      # frontend gates
 python3 ~/projects/pwa-template/scripts/vendor.py --check .   # drift gate
+
+# Package check. `build/` and the egg-info MUST go first: `pip wheel .` reuses
+# a stale `build/lib` and a stale git-ignored SOURCES.txt, and reports success
+# either way. See README.md § "Why the wheel command cleans two directories".
+rm -rf /tmp/wheel build pwa_pantry_recipes.egg-info
+.venv/bin/python -m pip wheel . --no-deps \
+  --no-build-isolation --wheel-dir /tmp/wheel
+
 .venv/bin/python -m uvicorn app.main:create_app --factory \
   --host 127.0.0.1 --port 8007
 ```

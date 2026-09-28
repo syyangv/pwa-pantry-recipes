@@ -4,12 +4,19 @@ A local, installable Progressive Web App for **deciding what to cook from what
 is already in the pantry**, and for recording the cook in the Obsidian daily
 note.
 
-> **Scaffold status (2026-09-27): infrastructure only.** The repository contains
-> the vendored pwa-infra shell, a fail-typed configuration surface, the
-> LaunchAgent template, CI, and a green scaffold test. **No feature is
-> implemented** — there is no pantry view, no recipe index, and no cooking-log
-> write. The app boots and serves `/`, `/health`, `/api/version`, `/sw.js`, the
-> manifest, and the static assets; the placeholder panel says so. See
+> **Status (2026-09-27): infrastructure and domain primitives, no user-facing
+> feature yet.** The repository contains the vendored pwa-infra shell, a
+> fail-typed configuration surface, the LaunchAgent template, CI, and — shipped
+> since the scaffold — the identity/CSRF/Origin guards with `GET /api/session`,
+> the four PWA icons and their generator, the owned SQLite schema and connection
+> layer, the read-only `PantryCatalog`, the recipe index and note parser over
+> `RECIPES_ROOT`, the atomic-write / frontmatter / section / daily-path vault
+> primitives, and the pure frontend logic modules (chip classifier, headline
+> formatter, recipe sort). **None of it is reachable from the UI.** The app boots
+> and serves `/`, `/health`, `/api/version`, `/api/session`, `/sw.js`, the
+> manifest, and the static assets; the placeholder panel says so. There is no
+> pantry view, no recipe list, and no cooking-log write, and the two engines that
+> produce them are unbuilt. See
 > [What does not work yet](#what-does-not-work-yet).
 
 ## Architecture
@@ -23,7 +30,8 @@ FastAPI (loopback only)  ──  vanilla ES modules  ──  no build step
 ```
 
 - **No bundler, no `node_modules` at runtime.** `app/static/` is served as-is.
-  `npm` exists only to run `node --test` on the scaffold's structural gates.
+  `npm` exists only to run `node --test` over the boot-contract and pure-logic
+  gates.
 - **Vendored infra, not a dependency.** `app/static/js/pwa/*`, `css/pwa.css`,
   `css/pull-refresh.css`, and `app/pwa_version.py` are byte-identical copies of
   https://github.com/syyangv/pwa-template, gated by a pre-commit hook and a CI
@@ -47,9 +55,14 @@ python3 -m venv .venv
 .venv/bin/python -m pip install --upgrade pip
 .venv/bin/python -m pip install "setuptools>=69" -e '.[test,dev]'
 
-# 2. configure (SERVER-OWNED values; see .env.example for the full contract)
+# 2. configure (SERVER-OWNED values; see .env.example for the full contract).
+#    Nothing parses a .env file — app/config.py reads os.environ — so either
+#    `set -a; . ./.env; set +a` in this shell, or copy the file and load it with
+#    `direnv`, or pass the variables inline. `cp .env.example .env` on its own
+#    records intent and configures nothing.
 cp .env.example .env
 $EDITOR .env
+set -a; . ./.env; set +a
 
 # 3. install the pre-commit drift gate (one-time per clone)
 git config core.hooksPath git-hooks
@@ -64,14 +77,16 @@ workers, so use the loopback host (or a Tailscale Serve HTTPS origin) — not
 `http://<lan-ip>:8007`, which will register no worker.
 
 `--reload` watches `app/`, so `sw.js`/`index.html` edits are picked up
-automatically. Because the app reads its configuration at **startup**, changes
-to `.env` need a restart.
+automatically. Because the app reads its configuration at **startup** and
+`.env` is never read, changes to those variables need a restart — `--reload`
+will not pick them up.
 
 ## Verification
 
 ```bash
-# Scaffold test — the convergence gate (/api/version == sw.js CACHE_VERSION)
-.venv/bin/python -m pytest tests/scaffold/test_app.py -q
+# Convergence gate (/api/version == sw.js CACHE_VERSION), session contract,
+# route table, security headers, and the icon generator's --check
+.venv/bin/python -m pytest tests/scaffold/ -q
 
 # Whole Python suite
 .venv/bin/python -m pytest
@@ -80,17 +95,41 @@ to `.env` need a restart.
 .venv/bin/python -m ruff check app tests
 .venv/bin/python -m mypy app
 
-# Frontend structural gates (no dependencies; `npm install` is not required)
-npm test          # node --test tests/js/*.test.mjs
+# Frontend gates (no dependencies; `npm install` is not required)
+npm test          # node --test 'tests/js/**/*.test.mjs' — the glob is QUOTED.
+                  # /bin/sh has no globstar, so an unquoted `**` narrows to one
+                  # level and the runner silently collects a subset. See
+                  # tests/js/collection-probe.mjs, which re-runs this exact
+                  # script and fails if any expected test file is missing.
 npm run check     # node --check on the module graph entry + the worker
 
 # Vendored-infra drift gate (what the pre-commit hook runs)
 python3 ~/projects/pwa-template/scripts/vendor.py --check .
 
-# The package check CI runs: the built wheel must carry the static shell
-rm -rf /tmp/wheel && .venv/bin/python -m pip wheel . --no-deps \
+# The package check CI runs: the built wheel must carry the static shell.
+# `build/` and the egg-info MUST be removed first — see the note below.
+rm -rf /tmp/wheel build pwa_pantry_recipes.egg-info
+.venv/bin/python -m pip wheel . --no-deps \
   --no-build-isolation --wheel-dir /tmp/wheel
 ```
+
+### Why the wheel command cleans two directories
+
+`pip wheel .` is not hermetic here, and it fails **silently** — the build
+reports success either way. `setuptools` copies sources into `build/lib` and
+**never cleans it**, so any file present in a previous build ships in the next
+wheel even if it no longer exists in the tree. Verified here: with a leftover
+`build/lib/app/STALE_LEFTOVER.txt`, the same command produced a **45**-file wheel
+containing that file; after `rm -rf build` it produced the correct **44**-file
+wheel. `include-package-data = true` also reads
+`pwa_pantry_recipes.egg-info/SOURCES.txt`, which is git-ignored, so a stale one
+can describe a tree that no longer exists. Cleaning both makes the local number
+comparable to CI's, which builds from a fresh checkout and therefore never sees
+either directory.
+
+CI is not affected: `actions/checkout` gives a clean tree, and the
+`pip install ".[test,dev]"` step that runs before the wheel build regenerates
+`SOURCES.txt` from that same clean tree, so there is no stale input to inherit.
 
 ## Configuration
 
@@ -122,16 +161,53 @@ it would take `:8452` (8443 and 8445–8451 are allocated).
 
 ## What does not work yet
 
-Honest list of every gap, so nothing here reads as finished:
+Honest list of every gap, so nothing here reads as finished. `AGENTS.md` tells
+readers to trust this section, so every bullet below is stated as something you
+can check against the tree, not as a claim about intent.
 
-- **No feature code.** No `/api/*` route exists except the version endpoint.
-  The `[[apps]]` portfolio entry therefore pins the scaffold test only.
-- **No auth.** The identity / CSRF / Origin middleware is a `TODO` in
-  `create_app`. The scaffold is loopback-safe by construction only — do not
-  expose it off loopback, and do not treat it as production-ready.
-- **No icons.** `app/static/icons/` is a placeholder README; all four PNGs the
-  manifest and the `apple-touch-icon` link reference are missing. iOS falls back
-  to a page screenshot for the Home Screen icon. See that README.
+- **No domain routes.** The only `/api/*` endpoints are `GET /api/version` and
+  `GET /api/session`; anything else under `/api/` returns the 404 envelope
+  (`GET /api/recipes` → `404 {"code":"not_found"}`). The `TODO(implementation)`
+  block in `app/main.py` names the three routers that do not exist yet. Nothing
+  in `app/recipes/`, `app/pantry/`, `app/vault/`, or `app/db/` is reachable from
+  a request.
+- **No lifespan wiring.** `create_app`'s `lifespan` is a bare `yield` with a
+  `TODO(implementation)`. The SQLite connection, the migration run, the
+  `PantryCatalog`, the recipe index, and the `AtomicNoteStore` are all
+  constructed nowhere at startup. Every shipped module is exercised only by its
+  own tests.
+- **No frontend views.** `app/static/index.html` renders a "Scaffold" panel that
+  says infrastructure-only. There is no `app/static/js/views/`, no router, and
+  nothing imports the three `logic/` modules: `chipClass()`, `headline()`, and
+  `sortRecipes()` are exercised only by their `node --test` files. They are in
+  `sw.js`'s `SHELL_ASSETS`, and nothing else in `app/static/` references them
+  but that precache list.
+- **Both engines are unbuilt.** The pantry **match** engine (F1's stock join and
+  the tier ladder, `app/pantry/stock_join.py` and `app/recipes/matcher.py`) and
+  the **daily-note cooking-log write** (`append_cook_link`, and the
+  `AtomicNoteStore` commit around it) do not exist. The recipe index, the
+  catalog, and the vault primitives they would call are the *inputs*, already
+  shipped; the matching and the write are not.
+- **No deployment.** `scripts/pwa-pantry-recipes.example.plist` is a template
+  only and has never been bootstrapped; Tailscale Serve ingress is not
+  configured. See [Deployment](#deployment-planned). The one access control that
+  *is* real today is `app/auth.py` — the identity / Origin / CSRF / Host guards
+  wrap every response and `validate_bind_invariant` refuses startup on a
+  non-loopback `BIND_HOST` in every mode, so the earlier "loopback-safe by
+  construction only" caveat no longer applies. It guards an app with no domain
+  routes behind it, which is not the same as being production-ready.
+- **Three shell modules do not ship in the wheel.**
+  `app/static/js/logic/{chip-class,format,sort}.js` are in `sw.js`'s
+  `SHELL_ASSETS` but **not** in the built wheel: `[tool.setuptools.package-data]`
+  globs `static/js/*` (which matches only `main.js` and the sub*directories*) and
+  `static/js/pwa/*`, with no `static/js/logic/*` entry, so the three files are
+  absent from all **44** entries of the wheel. Nothing breaks today because
+  `main.js` does not import them yet, and neither the CI wheel check nor
+  `test_every_package_data_key_resolves_to_a_package_and_a_real_file` can see it
+  — the first only lists files it already knows about, the second only asserts
+  each glob matches *at least one* file. Any installed app that precaches those
+  three paths will 404 them offline. Adding the glob is a `pyproject.toml`
+  change, deliberately not made here.
 - **`sw.js` `SHELL_ASSETS` must be extended for every new static file.** The
   precache list covers every file currently in the tree, and
   `tests/js/shell_assets.test.mjs` fails a commit that adds a module or
@@ -139,16 +215,25 @@ Honest list of every gap, so nothing here reads as finished:
   or `app/static/css` without a matching precache entry, in either direction. An
   omission is a silent offline-shell hole: the file works online and is simply
   absent from the installed app.
+- **`npm test`'s glob is load-bearing and fragile.** `package.json` runs
+  `node --test 'tests/js/**/*.test.mjs'` with the pattern **quoted**, because
+  `npm` invokes the script through `/bin/sh`, which has no `globstar`: an
+  unquoted `**` narrows to one level, the runner is handed a list with whole test
+  files missing, and the suite reports 0 failures having never started them. No
+  reporter on Node 22 names the files it ran, so
+  `tests/js/collection-probe.mjs` re-runs the real script through the same shell
+  and asserts the collected set. Do not unquote that pattern.
 - **No `.env` loading library.** The app reads `os.environ`; use `env`, a
   launchd `EnvironmentVariables` dict, or a `direnv`/shell export. Copying
   `.env.example` to `.env` documents intent but nothing parses it yet.
 - **No installer script.** `APP_DATA_DIR` is not created for you; `mkdir -p` it
   with mode `0700`.
-- **`mypy` scope is `app` only** (mirroring the sibling's command, whose
-  `files` list also names `tests` but whose CI step checks `app/...` paths).
-  `tests/` is not type-checked yet.
-- **`[dev]` has no browser tooling.** There are no Playwright tests; the
-  visual/interaction surface is unverified.
+- **`mypy` scope is `app` only.** `pyproject.toml`'s `files` list names both
+  `app` and `tests`, but the command this repo documents, runs in `AGENTS.md`,
+  and runs in CI is `mypy app`, so `tests/` is not type-checked.
+- **`[dev]` has no browser tooling.** Playwright lives in the separate `browser`
+  extra and CI never installs it, so there are no Playwright tests; the visual
+  and interaction surface is unverified.
 
 ## Related projects
 
