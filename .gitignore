@@ -8,6 +8,9 @@ __pycache__/
 htmlcov/
 .venv/
 *.egg-info/
+# Stale duplicate of the app source written by `pip wheel .`. Never commit it,
+# and never let a `git add -A` capture another worker's half-finished output.
+build/
 
 # Local session / scratch artifacts
 .omx/
