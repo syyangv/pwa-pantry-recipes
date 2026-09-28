@@ -3750,7 +3750,7 @@ Three rules carried from the siblings:
 `pyproject.toml` already sets `timeout = 120` and `timeout_method = "signal"`.
 Keep both — 120 s is a hang detector, not a budget, and the signal method raises
 *inside* the test so every `finally` runs, whereas the thread method hard-exits
-the process and skips exactly that cleanup. CI runs `ruff check app tests` →
+the process and skips exactly that cleanup. CI runs `ruff check app tests scripts` →
 `mypy app` → `pytest` → `npm test` → `npm run check` → wheel build. Add the four
 icon files to the wheel-content check.
 
@@ -4056,8 +4056,11 @@ sequential execution recomputed after each ticket; the ordering above is the
 *ready* order, not a license to parallelize.
 
 **Verification after every phase**, not just at the end:
-`pytest` → `ruff check app tests` → `mypy app` → `npm test` → `npm run check` →
-`vendor.py --check .`. A phase that cannot pass its own suite does not proceed.
+`pytest` → `ruff check app tests scripts` → `mypy app` → `npm test` →
+`npm run check` → `vendor.py --check .`. A phase that cannot pass its own suite
+does not proceed. The `ruff` scope includes `scripts/` and the `mypy` scope does
+not; that asymmetry is deliberate and is §10.6's subject, so do not "make them
+match" by adding `scripts/` to `mypy` or by dropping it from `ruff`.
 
 ---
 
