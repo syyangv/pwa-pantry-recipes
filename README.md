@@ -4,20 +4,24 @@ A local, installable Progressive Web App for **deciding what to cook from what
 is already in the pantry**, and for recording the cook in the Obsidian daily
 note.
 
-> **Status (2026-09-27): infrastructure and domain primitives, no user-facing
-> feature yet.** The repository contains the vendored pwa-infra shell, a
-> fail-typed configuration surface, the LaunchAgent template, CI, and — shipped
-> since the scaffold — the identity/CSRF/Origin guards with `GET /api/session`,
-> the four PWA icons and their generator, the owned SQLite schema and connection
-> layer, the read-only `PantryCatalog`, the recipe index and note parser over
-> `RECIPES_ROOT`, the atomic-write / frontmatter / section / daily-path vault
-> primitives, and the pure frontend logic modules (chip classifier, headline
-> formatter, recipe sort). **None of it is reachable from the UI.** The app boots
-> and serves `/`, `/health`, `/api/version`, `/api/session`, `/sw.js`, the
-> manifest, and the static assets; the placeholder panel says so. There is no
-> pantry view, no recipe list, and no cooking-log write, and the two engines that
-> produce them are unbuilt. See
-> [What does not work yet](#what-does-not-work-yet).
+> **Status (2026-09-28): the features are shipped; the app is not deployed.**
+> Every route in `docs/spec/2026-09-27-pantry-recipes.md` §9.16 exists and is
+> reachable: the recipe list and detail views, F1's three-tier Stock Join, D4's
+> honest match display and the 溯源 provenance table with F2's two repair
+> actions, the three Meal Shortlists, the page-owned offline outbox with the
+> `X-Client-Id` exactly-once ledger, and the Cooking Log write. The `lifespan`
+> opens and closes all of it. The identity / Origin / CSRF / Host / content-type
+> guards are real, and an unauthenticated mutation is refused before it reaches
+> a route.
+>
+> **It has never been run as a service.** `AGENTS.md` records deployment as not
+> authorized, `scripts/pwa-pantry-recipes.example.plist` is a template, there is
+> no LaunchAgent in `~/Library/LaunchAgents`, and no Tailscale Serve route exists
+> on the planned ingress port 8452. The deploy path — the rendered plist, the
+> staged installer, the Tailscale plan, and a **runnable** converge gate — is
+> built and verified; see [Deployment](#deployment) and
+> [`docs/runbook/deployment.md`](docs/runbook/deployment.md). What is genuinely
+> missing is in [What does not work yet](#what-does-not-work-yet).
 
 ## Architecture
 
@@ -111,6 +115,17 @@ python3 ~/projects/pwa-template/scripts/vendor.py --check .
 rm -rf /tmp/wheel build pwa_pantry_recipes.egg-info
 .venv/bin/python -m pip wheel . --no-deps \
   --no-build-isolation --wheel-dir /tmp/wheel
+
+# The release gate. Exit 0 converged, 1 failed, 2 a condition could not be
+# evaluated — and 2 is NOT a pass. See docs/runbook/deployment.md § 7.
+# --owner-login is required in the production posture (TRUST_TAILSCALE_HEADERS=
+# true), because app/auth.py guards every path. It is a Settings value, not a
+# secret: it is the login the Tailscale proxy already injects.
+.venv/bin/python scripts/converge_gate.py \
+  --local-origin http://127.0.0.1:8007 \
+  --deployed-origin https://home-macbook-air.tailcd6e49.ts.net:8452 \
+  --owner-login <TAILSCALE_OWNER_LOGIN> \
+  --vault /Users/syang/obsidian/syang
 ```
 
 ### Why the wheel command cleans two directories
@@ -147,17 +162,60 @@ annotated list; the four that matter most are:
 | `PANTRY_ITEMS_DB` | Absolute, outside the vault. The `wholefoods-to-pantry` SQLite catalog (`items` table), opened **read-only**. Missing file ⇒ startup failure, so a bad path can never look like an empty pantry. |
 | `RECIPES_ROOT` / `DAILY_NOTES_ROOT` | Vault-relative roots: recipe notes (`Hobbies/做饭/Recipes`) and year-subfoldered daily notes (`日记`). |
 
-## Deployment (planned)
+## Deployment
 
-`scripts/pwa-pantry-recipes.example.plist` is a fully commented LaunchAgent
-template with `__UPPER_CASE__` placeholders, a loopback bind on port **8007**,
-and `SoftResourceLimits NumberOfFiles 8192` (launchd's default 256 is not the
-shell's `ulimit -n`; a descriptor leak otherwise only appears in production).
+**Not authorized, and not done.** `AGENTS.md` § *Deploy* records deployment as
+not yet authorized. There is no plist in `~/Library/LaunchAgents`, nothing named
+`com.syang.pwa-pantry-recipes` in `launchctl list`, and no Tailscale Serve route
+on the planned ingress port. What exists is the *path*: a template that renders
+and lints, a staged installer, a Serve plan, and a converge gate that runs.
 
-It is an **example**. Bootstrap it only with explicit authorization, and only
-after the implementation lands — installing it today starts a service whose
-domain routes do not exist. Tailscale Serve ingress has **not** been configured;
-it would take `:8452` (8443 and 8445–8451 are allocated).
+Two ports, never one end-to-end: the app binds loopback **8007**, the phone
+reaches **8452**, and Tailscale Serve proxies between them. Never `:443`; 8000
+and 8002–8006 are allocated to sibling PWAs, as are Serve ingresses 8443 and
+8445–8451.
+
+### The artifacts
+
+| File | What it is |
+|---|---|
+| `scripts/pwa-pantry-recipes.example.plist` | The template. `__UPPER_CASE__` placeholders, loopback bind on 8007, `SoftResourceLimits NumberOfFiles 8192`, `ThrottleInterval 2`, `KeepAlive`, `--timeout-graceful-shutdown 5`, and the full `EnvironmentVariables` contract. `tests/deploy/test_launchagent_template.py` asserts each of those against the file and against `app/config.py`. |
+| `scripts/install_launchagent.sh` | Three stages: render + `plutil -lint` (no side effects), `--apply` (creates `APP_DATA_DIR` 0700 and the log directory, copies the plist, **starts nothing**), `--bootstrap` (bootout + bootstrap — the step that needs authorization). Plus `--teardown` for the rollback. |
+| `scripts/converge_gate.py` | The release gate: nine conditions, stdlib-only, exit 0 / 1 / 2. |
+| `scripts/converge-smoke.json` | The release-specific half of condition 4. **Edit it in every release.** |
+| [`docs/runbook/deployment.md`](docs/runbook/deployment.md) | The operational form: the Serve commands with the audit before and after, the install stages, the restart rules, and the participant-identity validation. |
+
+### The converge gate, in one line
+
+```bash
+.venv/bin/python scripts/converge_gate.py \
+  --local-origin http://127.0.0.1:8007 \
+  --deployed-origin https://home-macbook-air.tailcd6e49.ts.net:8452 \
+  --vault /Users/syang/obsidian/syang
+```
+
+It checks the listener (not the process), whether the origin answers the gate at
+all and in which identity posture, the source `CACHE_VERSION` against
+local `/api/version`, local against deployed, the `X-PWA-Backend-Started-At`
+timestamp against every changed startup-loaded file, a release-specific live API
+smoke check, that the **served** `/sw.js` carries this `CACHE_VERSION` *and* that
+`CACHE_VERSION` was rotated since the last mutable frontend change, that the
+served HTML pins the same versioned assets as the SW cache name, that the served
+update manager re-checks on resume, and that an open confirmation flow postpones
+the reload. **Exit 2 means a condition could not be evaluated, which is not a
+pass** — before a Serve route exists, that is the correct answer.
+
+### The auth posture this deploy path would publish
+
+Real, installed, and wrapping every response. An unauthenticated mutation is
+refused before it reaches a route: `403 origin_not_allowed` without a matching
+`Origin`, `403 csrf_required` without a token, `401 identity_spoof` for any
+client-supplied `Tailscale-*` header in development-identity mode. With
+`OBSIDIAN_READ_ONLY=true` every mutation is `403 read_only` with **no write
+allowlist** (F18). The stopping point is not the guards — it is that
+`bootstrap` starts a service which appends to the real daily note, and
+`tailscale serve` puts it on a surface a phone can reach. Both are one command
+away and neither was run.
 
 ## What does not work yet
 
@@ -165,52 +223,61 @@ Honest list of every gap, so nothing here reads as finished. `AGENTS.md` tells
 readers to trust this section, so every bullet below is stated as something you
 can check against the tree, not as a claim about intent.
 
-- **No domain routes.** The only `/api/*` endpoints are `GET /api/version` and
-  `GET /api/session`; anything else under `/api/` returns the 404 envelope
-  (`GET /api/recipes` → `404 {"code":"not_found"}`). The `TODO(implementation)`
-  block in `app/main.py` names the three routers that do not exist yet. Nothing
-  in `app/recipes/`, `app/pantry/`, `app/vault/`, or `app/db/` is reachable from
-  a request.
-- **No lifespan wiring.** `create_app`'s `lifespan` is a bare `yield` with a
-  `TODO(implementation)`. The SQLite connection, the migration run, the
-  `PantryCatalog`, the recipe index, and the `AtomicNoteStore` are all
-  constructed nowhere at startup. Every shipped module is exercised only by its
-  own tests.
-- **No frontend views.** `app/static/index.html` renders a "Scaffold" panel that
-  says infrastructure-only. There is no `app/static/js/views/`, no router, and
-  nothing imports the three `logic/` modules: `chipClass()`, `headline()`, and
-  `sortRecipes()` are exercised only by their `node --test` files. They are in
-  `sw.js`'s `SHELL_ASSETS`, and nothing else in `app/static/` references them
-  but that precache list.
-- **Both engines are unbuilt.** The pantry **match** engine (F1's stock join and
-  the tier ladder, `app/pantry/stock_join.py` and `app/recipes/matcher.py`) and
-  the **daily-note cooking-log write** (`append_cook_link`, and the
-  `AtomicNoteStore` commit around it) do not exist. The recipe index, the
-  catalog, and the vault primitives they would call are the *inputs*, already
-  shipped; the matching and the write are not.
-- **No deployment.** `scripts/pwa-pantry-recipes.example.plist` is a template
-  only and has never been bootstrapped; Tailscale Serve ingress is not
-  configured. See [Deployment](#deployment-planned). The one access control that
-  *is* real today is `app/auth.py` — the identity / Origin / CSRF / Host guards
-  wrap every response and `validate_bind_invariant` refuses startup on a
-  non-loopback `BIND_HOST` in every mode, so the earlier "loopback-safe by
-  construction only" caveat no longer applies. It guards an app with no domain
-  routes behind it, which is not the same as being production-ready.
-- **`sw.js` `SHELL_ASSETS` and `package-data` must be extended for every new
-  static file.** The precache list covers every file currently in the tree, and
+- **No deployment — the real one.** There is no
+  `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist`, no
+  `com.syang.pwa-pantry-recipes` in `launchctl list`, and no Tailscale Serve
+  route on the planned ingress port 8452. The app has only ever run as a
+  foreground dev server. The deploy path is built and verified
+  ([Deployment](#deployment), `docs/runbook/deployment.md`) but
+  `install_launchagent.sh --bootstrap` and `tailscale serve` have never been run,
+  because `AGENTS.md` records deployment as unauthorized and neither was
+  authorized in the session that built it. **Everything below this bullet is a
+  smaller gap than this one.**
+- **The converge gate has never seen a deployed origin.** It exits 2 against a
+  loopback server, which is the honest answer: conditions 2, 3 and 4 have no
+  second origin to compare against until the Serve route exists. Its nine
+  conditions are each proven able to fail (`tests/deploy/test_converge_gate.py`,
+  and against a live server in the session that wrote it), but a gate that has
+  only ever seen one origin has only ever seen half of the problem.
+- **`scripts/converge-smoke.json` is a one-release artifact.** It is populated for
+  v0.6.0 and nothing rewrites it. A release that forgets to edit it asserts that
+  *last* release's fields still exist, which is weaker than it looks; the gate
+  cannot detect the omission, because "the spec was not updated" is not a fact
+  visible from the running server. The runbook makes it a release step.
+- **`CACHE_VERSION` is behind, and the converge gate says so on the first real
+  run.** `cf39101` changed two mutable frontend files —
+  `app/static/js/router.js` and `app/static/js/views/recipe.js` — without
+  rotating `CACHE_VERSION`, which is still `v0.6.0` from `b5292b9`. Condition 5
+  of the gate reports exactly that, against the real tree:
+
+  > `CACHE_VERSION was NOT rotated even though these mutable frontend files
+  > changed since the commit that last rotated CACHE_VERSION (b5292b96691f):
+  > app/static/js/router.js, app/static/js/views/recipe.js`
+
+  This is the recorded incident class — a deploy that is internally consistent
+  while re-using the previous Service Worker cache key — found by the check that
+  was written to find it, on its first run against a real HEAD. It is **not**
+  fixed here: the rotation belongs to the release that carries those changes, and
+  editing another agent's `CACHE_VERSION` from this ticket would be exactly the
+  kind of quiet cross-commit edit the rule exists to prevent. The next release
+  bumps it (`sw.js` CONFIG block only) and re-runs the gate.
+- **The browser suite is opt-in and CI never runs it.** `playwright` lives in the
+  separate `browser` extra (F10), so `pip install ".[test,dev]"` never installs
+  it, a default `pytest` *collects and skips* both flows, and neither the visual
+  nor the interaction surface is verified on CI. Run it deliberately:
+  `.venv/bin/python -m pip install ".[browser]" && .venv/bin/python -m pytest tests/browser -q`.
+- **`sw.js` `SHELL_ASSETS` and `package-data` must be extended together, every
+  time.** The precache list covers every file currently in the tree, and
   `tests/js/shell_assets.test.mjs` fails a commit that adds a module or
-  stylesheet under `app/static/js` (beyond the vendored `js/pwa/` boot modules)
-  or `app/static/css` without a matching precache entry, in either direction. An
+  stylesheet under `app/static/js` (beyond the vendored `js/pwa/`) or
+  `app/static/css` without a matching precache entry, in either direction. An
   omission is a silent offline-shell hole: the file works online and is simply
-  absent from the installed app. The wheel side of the same hole is gated too —
-  `test_every_static_file_is_covered_by_a_package_data_glob` fails a commit that
-  adds a file under `app/static/` that no `package-data` glob matches, which is
-  what let `app/static/js/logic/*.js` ship in `SHELL_ASSETS` but in no wheel
-  (`static/js/*` matched `main.js` and the *subdirectories*, and glob `*` does
-  not cross a `/`). Note the registration is per directory: a new subdirectory
-  under `static/js/` needs its own `static/js/<name>/*` entry, and all three of
-  `SHELL_ASSETS`, `package-data`, and CI's wheel `required` list have to be
-  extended together or the app works online and 404s offline.
+  absent from the installed app. The wheel side is gated by
+  `test_every_static_file_is_covered_by_a_package_data_glob`, and the registration
+  is **per directory, one level deep** — a new subdirectory under `static/js/`
+  needs its own `static/js/<name>/*` entry, because glob `*` does not cross a `/`.
+  All three of `SHELL_ASSETS`, `package-data`, and CI's wheel `required` list
+  have to move together or the app works online and 404s offline.
 - **`npm test`'s glob is load-bearing and fragile.** `package.json` runs
   `node --test 'tests/js/**/*.test.mjs'` with the pattern **quoted**, because
   `npm` invokes the script through `/bin/sh`, which has no `globstar`: an
@@ -219,17 +286,19 @@ can check against the tree, not as a claim about intent.
   reporter on Node 22 names the files it ran, so
   `tests/js/collection-probe.mjs` re-runs the real script through the same shell
   and asserts the collected set. Do not unquote that pattern.
-- **No `.env` loading library.** The app reads `os.environ`; use `env`, a
-  launchd `EnvironmentVariables` dict, or a `direnv`/shell export. Copying
-  `.env.example` to `.env` documents intent but nothing parses it yet.
-- **No installer script.** `APP_DATA_DIR` is not created for you; `mkdir -p` it
-  with mode `0700`.
+- **No `.env` loading library.** The app reads `os.environ`, full stop. Use
+  `env`, a launchd `EnvironmentVariables` dict (which is what the LaunchAgent
+  template uses, and the only mechanism that configures the service), or a
+  `direnv`/shell export. Copying `.env.example` to `.env` documents intent and
+  configures nothing — and `install_launchagent.sh` deliberately does not create
+  one, because a second source of truth for the same values is how they drift.
 - **`mypy` scope is `app` only.** `pyproject.toml`'s `files` list names both
   `app` and `tests`, but the command this repo documents, runs in `AGENTS.md`,
-  and runs in CI is `mypy app`, so `tests/` is not type-checked.
-- **`[dev]` has no browser tooling.** Playwright lives in the separate `browser`
-  extra and CI never installs it, so there are no Playwright tests; the visual
-  and interaction surface is unverified.
+  and runs in CI is `mypy app`, so `tests/` and `scripts/` are not
+  type-checked. `scripts/converge_gate.py` in particular is untyped-checked and
+  is gated by its own tests instead.
+- **`scripts/` is not linted.** `ruff check app tests` covers `app/` and
+  `tests/`, so the two deploy scripts are held to review rather than to `ruff`.
 
 ## Related projects
 

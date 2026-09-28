@@ -1,0 +1,72 @@
+{
+  "$comment": [
+    "The release-specific half of the converge gate (spec §12.4, template §3e 4).",
+    "EDIT THIS FILE IN EVERY RELEASE. A version match cannot detect a new static",
+    "frontend talking to an old in-memory schema: both report the new CACHE_VERSION",
+    "and conditions 1/2/3/6 all pass while the app is broken. The only thing that",
+    "catches it is asserting that a key THIS release added is in the LIVE response.",
+    "",
+    "Shape: one entry per endpoint, with the keys its response must carry. Remove",
+    "a key only when the release that introduced it is two releases back. Adding a",
+    "key you did not add is worse than adding none — it hides a regression behind a",
+    "key that was always there.",
+    "",
+    "`require_deployed` defaults to true, so a run without --deployed-origin is",
+    "reported UNPROVEN rather than passing on the local half alone."
+  ],
+  "endpoints": [
+    {
+      "$release": "v0.6.0 — the D4 honest match display, F1's Stock Join, and F7's unconditional provenance (issues #1-#22)",
+      "path": "/api/recipes",
+      "top_level_keys": [
+        "catalogRevision",
+        "recipes",
+        "skipped",
+        "staleMappingCount",
+        "stockRevision",
+        "stockUnjoinedCount",
+        "strict"
+      ],
+      "array_item_keys": {
+        "recipes": ["found", "ingredients", "lastCooked", "noteName", "notePath", "tools", "total"]
+      },
+      "array_item_nested_keys": {
+        "recipes": {
+          "ingredients": [
+            "candidatesJson",
+            "confidence",
+            "inStock",
+            "index",
+            "isSeasoning",
+            "matchMethod",
+            "matchTier",
+            "pantryItemId",
+            "parseMethod",
+            "parsedName",
+            "rawValue",
+            "stockJoinState"
+          ]
+        }
+      }
+    },
+    {
+      "$release": "v0.6.0 — §9.19's five /health count groups",
+      "path": "/health",
+      "top_level_keys": [
+        "app_data",
+        "mappings",
+        "pantry_db",
+        "recipes",
+        "status",
+        "stock",
+        "vault",
+        "version"
+      ]
+    },
+    {
+      "$release": "v0.6.0 — the boot contract: identity, CSRF token, readOnly, timezone",
+      "path": "/api/session",
+      "top_level_keys": ["appTimezone", "csrfToken", "identity", "readOnly", "version"]
+    }
+  ]
+}

@@ -2,40 +2,79 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
   "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <!--
-  pwa-pantry-recipes.example.plist — EXAMPLE LaunchAgent for the Pantry
+  pwa-pantry-recipes.example.plist — the LaunchAgent template for the Pantry
   Recipes PWA.
 
-  *** THIS FILE IS AN EXAMPLE ONLY. IT MUST NOT BE INSTALLED WITHOUT EXPLICIT
-      AUTHORIZATION. ***
+  *** THIS FILE IS A TEMPLATE. IT MUST NOT BE INSTALLED WITHOUT EXPLICIT
+      AUTHORIZATION FROM THE USER IN THE SAME SESSION. ***
 
-  The app writes cooking logs into the Obsidian vault, so installing this would
-  start a service that mutates real notes. Scaffold state: the domain routers do
-  not exist yet, so today the service only serves the shell, /health, and
-  /api/version. Authorize and complete the implementation before bootstrapping.
+  AGENTS.md records deployment as not yet authorized, and
+  docs/runbook/deployment.md is the plan. Prepare it with
+  scripts/install_launchagent.sh, never by hand: the two settings that break
+  silently (the file-descriptor ceiling and the log directory's parent) are
+  both invisible in a plist that merely parses.
 
-  Invariants:
-  * BIND_HOST MUST be loopback (127.0.0.1). With TRUST_TAILSCALE_HEADERS=true
-    the app rejects a non-loopback bind before serving. The Tailscale Serve
-    proxy (not the app) is the only network-facing surface.
-  * TRUST_TAILSCALE_HEADERS=true means the app trusts the Tailscale-User-Login
-    header ONLY when the connection arrived from the proxy via loopback. If you
-    ever change the bind host, flip this back to false and re-run the smoke
-    suite before considering any external exposure.
-  * The three server-owned roots (PANTRY_ITEMS_DB, RECIPES_ROOT,
-    DAILY_NOTES_ROOT) are set here and are NOT overridable by any request.
+  Two ports, never one end-to-end
+    8007  this process. A loopback bind, and the only thing it listens on.
+    8452  the Tailscale Serve ingress the phone reaches. Tailscale proxies
+          8452 to 127.0.0.1:8007. Never 443; 8000/8002-8006 and 8443-8451 are
+          allocated to sibling PWAs. See docs/runbook/deployment.md.
 
-  Replace every __UPPER_CASE__ placeholder below. Then, ONLY with explicit
-  authorization:
-      plutil -lint <file>                                  # syntax check
-      cp <file> ~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist
-      launchctl bootstrap gui/$(id -u) \
-        ~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist
-      # or legacy: launchctl load -w ~/Library/LaunchAgents/<label>.plist
-  Restart after a code change (kickstart alone picks up code, not plist edits):
-      launchctl kickstart -k gui/$(id -u)/com.syang.pwa-pantry-recipes
-  Unload / rollback:
-      launchctl bootout gui/$(id -u)/com.syang.pwa-pantry-recipes
-      rm ~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist
+  Invariants
+    * BIND_HOST MUST be loopback (127.0.0.1). app/config.py refuses a
+      non-loopback bind in every mode, and with TRUST_TAILSCALE_HEADERS=true it
+      refuses at startup with trusted_headers_require_loopback_bind. The
+      Tailscale Serve proxy, not this process, is the only network-facing
+      surface. If you ever change the bind host you are no longer deploying
+      this topology; re-read the runbook first.
+    * TRUST_TAILSCALE_HEADERS=true means the app trusts the Tailscale-User-Login
+      header ONLY because the connection arrived from the proxy over loopback.
+      With it false, app/auth.py is in development-identity mode: it REJECTS any
+      client-supplied Tailscale header with 401 identity_spoof and answers as
+      DEV_IDENTITY. The value below is the production posture, and it is only
+      correct once the Serve route on 8452 exists and carries the owner login.
+    * The server-owned roots (PANTRY_ITEMS_DB, PANTRY_NOTE_RELATIVE,
+      RECIPES_ROOT, DAILY_NOTES_ROOT) are set here and are NOT overridable by any
+      request. No request field reaches Settings.
+
+  THE ENVIRONMENT MECHANISM
+    This app has NO .env parser. Settings.from_environment() reads os.environ,
+    full stop. So the EnvironmentVariables dict below IS the mechanism, and it
+    is the shape every sibling agent on this machine runs
+    (com.syang.pwa-obsidian-daily.plist is the same). The "set -a; . ./.env;
+    set +a" incantation in README.md is how a SHELL picks the same values up for
+    a dev server; it has no effect here, because launchd does not run a shell.
+    Copying .env.example to .env therefore configures nothing and must never be
+    mistaken for having done so. Every value below is validated at boot, and a
+    bad one refuses startup rather than degrading to an empty result.
+
+  PERMISSIONS
+    APP_DATA_DIR must be mode 0700. install_launchagent.sh creates it with
+    "install -d -m 700". It does not touch a .env file, because this dict is the
+    mechanism and a second source of truth for the same values is how they
+    drift.
+
+  Replace every __UPPER_CASE__ placeholder below, then run
+  scripts/install_launchagent.sh. Its three stages are: render and lint (no
+  authorization, no side effects), apply (creates APP_DATA_DIR and the log
+  directory, copies the plist, starts NOTHING), and bootstrap (bootout then
+  bootstrap — the step that starts a service which writes cooking logs into the
+  real vault, and the reason the other two stages exist).
+
+  A plist edit needs bootout followed by bootstrap. A kickstart re-reads the
+  binary and IGNORES the plist, so a NumberOfFiles fix that is only kickedstart
+  leaves the old settings running and reports success. A code-only change needs
+  kickstart -k. Never the force flag.
+
+  Then prove the socket rather than the process (port_manager.py inspect 8007)
+  and run the converge gate (scripts/converge_gate.py) against both the local
+  and the deployed origin. A restart is not a release: launchctl print showing
+  state = running proves a process is alive, and a matching /api/version proves
+  the frontend is current. Neither proves the backend reloaded configuration —
+  that is the gate's condition 3.
+
+  Unload and rollback: bootout the label, then remove the plist from
+  ~/Library/LaunchAgents. install_launchagent.sh has a teardown mode for it.
 -->
 <plist version="1.0">
 <dict>
@@ -46,7 +85,7 @@
     <key>ProgramArguments</key>
     <array>
         <!-- Absolute python from the project venv. -->
-        <string>__VENV_PYTHON__/bin/python</string>
+        <string>__VENV_DIR__/bin/python</string>
         <string>-m</string>
         <string>uvicorn</string>
         <!-- The factory reads the environment at boot, not at import. -->
@@ -56,11 +95,17 @@
         <string>--host</string>
         <string>127.0.0.1</string>
         <!-- Dedicated app port 8007 (8000/8002-8006 allocated to sibling
-             PWAs). Not 443. -->
+             PWAs: wardrobe prod/dev, deals, obsidian-daily, obsidian-monthly,
+             obsidian-editor). Not 443, and not the Serve ingress port. -->
         <string>--port</string>
         <string>8007</string>
         <string>--log-level</string>
         <string>info</string>
+        <!-- A vault write is in flight-dated work: a 5 s grace lets the atomic
+             write finish, and makes KeepAlive's respawn predictable instead of
+             racing a half-closed AtomicNoteStore. -->
+        <string>--timeout-graceful-shutdown</string>
+        <string>5</string>
     </array>
 
     <key>WorkingDirectory</key>
@@ -68,48 +113,85 @@
 
     <key>EnvironmentVariables</key>
     <dict>
-        <!-- Exact PATH the daemon needs: system dirs plus the venv bin, so
+        <!-- Exact PATH the daemon needs: the venv bin plus the system dirs, so
              python/uvicorn resolve without a login shell. -->
         <key>PATH</key>
-        <string>__VENV_PYTHON__/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <string>__VENV_DIR__/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
         <key>HOME</key>
         <string>__USER_HOME__</string>
 
-        <!-- === Core (required) === -->
+        <!-- === Core (required; a bad value refuses startup) === -->
         <key>OBSIDIAN_VAULT_PATH</key>
         <string>__OBSIDIAN_VAULT_PATH__</string>
-        <!-- Must be OUTSIDE the vault. -->
+        <!-- Must be OUTSIDE the vault, and mode 0700. -->
         <key>APP_DATA_DIR</key>
         <string>__APP_DATA_DIR__</string>
-        <!-- Must equal the exact origin Tailscale Serve serves. -->
+        <!-- Must equal the exact origin Tailscale Serve serves, byte for byte:
+             scheme, host and port, no path, no trailing slash. The Origin guard
+             compares mutations against it exactly, so one extra slash here is
+             every mutation answered 403 origin_not_allowed. -->
         <key>PUBLIC_ORIGIN</key>
         <string>__PUBLIC_ORIGIN__</string>
-        <!-- Must equal the normalized login the proxy injects. -->
+        <!-- Must equal the normalized login the proxy injects, byte for byte. -->
         <key>TAILSCALE_OWNER_LOGIN</key>
         <string>__TAILSCALE_OWNER_LOGIN__</string>
+        <!-- Only used when TRUST_TAILSCALE_HEADERS is false. -->
         <key>DEV_IDENTITY</key>
         <string>__DEV_IDENTITY__</string>
         <key>BIND_HOST</key>
         <string>127.0.0.1</string>
-        <!-- true only behind the loopback Tailscale Serve proxy. -->
+        <!-- true ONLY behind the loopback Tailscale Serve proxy. -->
         <key>TRUST_TAILSCALE_HEADERS</key>
         <string>true</string>
         <key>APP_TIMEZONE</key>
         <string>America/New_York</string>
 
-        <!-- === Server-owned domain roots === -->
-        <!-- wholefoods-to-pantry's SQLite catalog. Opened READ-ONLY by this
-             app; that project remains the sole writer. Must be OUTSIDE the
-             vault. A missing file refuses startup. -->
+        <!-- === Server-owned domain roots (no request field reaches these) === -->
+        <!-- wholefoods-to-pantry's SQLite catalog (`items`). Opened READ-ONLY by
+             this app; that project remains the sole writer. Must be OUTSIDE the
+             vault. A missing file refuses startup, so a bad path can never look
+             like an empty pantry. -->
         <key>PANTRY_ITEMS_DB</key>
         <string>__PANTRY_ITEMS_DB__</string>
-        <!-- Vault-relative folder of recipe notes. -->
+        <!-- The live Pantry.md: Pantry Stock state (open/in_progress/done/cancelled,
+             per Pantry Unit). Read-only to this app. The catalog above says what
+             is bought; this says what is held now (F1). -->
+        <key>PANTRY_NOTE_RELATIVE</key>
+        <string>__PANTRY_NOTE_RELATIVE__</string>
+        <!-- Vault-relative folder of recipe notes. Read-only to this app. -->
         <key>RECIPES_ROOT</key>
-        <string>Hobbies/做饭/Recipes</string>
-        <!-- Vault-relative root of year-subfoldered daily notes; cooking logs
-             are appended to the dated note inside it. -->
+        <string>__RECIPES_ROOT__</string>
+        <!-- Vault-relative root of year-subfoldered daily notes; a cooking log
+             is appended to the dated note inside it. Nothing here ever creates a
+             missing daily note (F4): that is a 404 naming the date, not a write. -->
         <key>DAILY_NOTES_ROOT</key>
-        <string>日记</string>
+        <string>__DAILY_NOTES_ROOT__</string>
+        <!-- Empty means the daily notes' own layout is the only bound on the
+             year. A value must be YYYY-YYYY, e.g. 2024-2027. -->
+        <key>DAILY_NOTES_YEAR_POLICY</key>
+        <string>__DAILY_NOTES_YEAR_POLICY__</string>
+
+        <!-- === Write posture and read budgets === -->
+        <!-- true refuses EVERY /api/* mutation with 403 read_only, after identity
+             and before every other mutation check. There is deliberately no write
+             allowlist (F18): with F4 removing the note-creation service this flag
+             is the only gate between a mutation and the vault. Start read-only
+             (docs/runbook/deployment.md § 6). -->
+        <key>OBSIDIAN_READ_ONLY</key>
+        <string>__OBSIDIAN_READ_ONLY__</string>
+        <!-- F11. STOCK_CACHE_SECONDS is the maximum staleness a chip colour can
+             have, because the user toggles Pantry.md lines from Obsidian with
+             this PWA open. -->
+        <key>CATALOG_CACHE_SECONDS</key>
+        <string>300</string>
+        <key>STOCK_CACHE_SECONDS</key>
+        <string>30</string>
+        <key>RECIPE_CACHE_SECONDS</key>
+        <string>60</string>
+        <!-- Hard ceiling on the bytes read from one note, so a runaway or
+             hostile file is refused before it is parsed. -->
+        <key>MAX_RECIPE_BYTES</key>
+        <string>2000000</string>
     </dict>
 
     <!-- Keep the loopback server alive; restart on crash. -->
@@ -118,26 +200,33 @@
     <!-- Space out respawns so a crash loop cannot spin the CPU. -->
     <key>ThrottleInterval</key>
     <integer>2</integer>
-    <!-- RunAtLoad starts it at login; set deliberately. Operators may prefer a
-         manual `launchctl kickstart` during rollout. -->
+    <!-- RunAtLoad starts it at login. Remove this key during a staged rollout so
+         a reboot cannot bring up a configuration that has not been validated. -->
     <key>RunAtLoad</key>
     <true/>
 
-    <!-- launchd gives a LaunchAgent a 256 maxfiles soft limit, NOT the
-         shell's (ulimit -n). Without this, a descriptor leak is invisible in
-         manual testing and shows up in production as intermittent 500s with
-         "OSError: [Errno 24] Too many open files". Raise the ceiling AND fix
-         leaks; this key alone only delays the failure. -->
+    <!-- launchd gives a LaunchAgent a 256 maxfiles soft limit, NOT the shell's
+         `ulimit -n`. This is NOT optional in this app: `AtomicNoteStore` holds
+         pinned directory descriptors for the lifetime of the process by design,
+         and the lifespan's `finally` is the only thing that releases them. At
+         256 the app dies under a load the shell never notices. The key only
+         raises the ceiling; it does not excuse a leak, and
+         scripts/converge_gate.py does not check for one; count them with lsof against the
+         pid after a burst instead. -->
     <key>SoftResourceLimits</key>
     <dict>
         <key>NumberOfFiles</key>
         <integer>8192</integer>
     </dict>
 
-    <!-- Logs under a git-ignored logs/ dir in the repo. -->
+    <!-- Under ~/Library/Logs, the convention every sibling agent on this machine
+         uses. NOT a path inside the repo: launchd creates the log FILES but never
+         their parent directory, so a `__REPO_ROOT__/logs/...` path fails to spawn
+         with no error the operator can see — the job simply never starts. The
+         installer `mkdir -p`s this directory. -->
     <key>StandardOutPath</key>
-    <string>__REPO_ROOT__/logs/pantry-recipes.stdout.log</string>
+    <string>__USER_HOME__/Library/Logs/pwa-pantry-recipes/server.log</string>
     <key>StandardErrorPath</key>
-    <string>__REPO_ROOT__/logs/pantry-recipes.stderr.log</string>
+    <string>__USER_HOME__/Library/Logs/pwa-pantry-recipes/server.log</string>
 </dict>
 </plist>
