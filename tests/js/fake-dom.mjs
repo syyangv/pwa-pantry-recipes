@@ -221,6 +221,16 @@ class FakeNode {
    * was a hand-written window stub for that one module — which is the drift this
    * file exists to prevent. It is a fixed shape, matched by one regex, and the
    * throw below still guards everything else.
+   *
+   * Class names accept `_`, because the app's own BEM classes have it
+   * (`.field__label`, `.field__value`, `.recipe-row__name`) and a stub that
+   * could not select them would push every assertion about a detail panel onto
+   * `[data-role]` lookups instead — which reads the panel through a door the
+   * view never promised to use.
+   *
+   * Both of those are real selectors the app queries, added when the code that
+   * queries them landed; the count above is therefore a fact about the app, not
+   * a number anyone should keep in sync by hand.
    */
   querySelectorAll(selector) {
     const trimmed = selector.trim();
@@ -245,7 +255,7 @@ class FakeNode {
     }
     const tag = trimmed.match(/^([a-z][a-z0-9-]*)$/i);
     if (tag) return walk(this).filter((node) => node.tagName === tag[1].toUpperCase());
-    const notAttr = trimmed.match(/^\.([a-z0-9-]+):not\(\[([a-z-]+)\]\)$/);
+    const notAttr = trimmed.match(/^\.([a-z0-9_-]+):not\(\[([a-z-]+)\]\)$/);
     if (notAttr) {
       return walk(this).filter(
         (node) => node.classList.contains(notAttr[1]) && node.getAttribute(notAttr[2]) === null,
@@ -253,7 +263,7 @@ class FakeNode {
     }
     const attribute = trimmed.match(/^\[([a-z-]+)\]$/);
     if (attribute) return walk(this).filter((node) => node.getAttribute(attribute[1]) !== null);
-    const prefixed = trimmed.match(/^\.([a-z0-9-]+)$/);
+    const prefixed = trimmed.match(/^\.([a-z0-9_-]+)$/);
     if (prefixed) return walk(this).filter((node) => node.classList.contains(prefixed[1]));
     throw new Error(`fake-dom: unsupported selector "${selector}"`);
   }

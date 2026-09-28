@@ -29,12 +29,20 @@ from typing import Final
 
 from fastapi import Request
 
+from ..cooklog.writer import CookingLogWriter
 from ..mapping.store import IngredientMappingStore
 from ..pantry.catalog import PantryCatalog
 from ..pantry.stock import PantryStockIndex
 from ..recipes.reader import RecipeIndex
 from ..shortlists.intents import ShortlistIntentLedger
 from ..shortlists.store import MealShortlistStore
+
+#: The Cooking Log writer's own key, imported rather than re-spelled. §9.15 makes
+#: it `app/api/cooklog.py`'s contract and it predates this module, so a second
+#: literal here would be exactly the silent-`None` failure this module exists to
+#: prevent — the one thing worse now that a *second* router reads it. `cooklog.py`
+#: imports nothing from here, so the dependency runs one way.
+from .cooklog import COOK_LOG_WRITER_STATE_KEY
 
 #: §9.19's four readers plus the `AtomicNoteStore` the two vault readers share.
 #: Named here rather than in `app/main.py` so the router and the lifespan cannot
@@ -84,6 +92,7 @@ Resource = (
     | IngredientMappingStore
     | MealShortlistStore
     | ShortlistIntentLedger
+    | CookingLogWriter
 )
 
 
@@ -111,6 +120,19 @@ def shortlist_intent_ledger(request: Request) -> ShortlistIntentLedger:
     return _get(request, SHORTLIST_INTENT_LEDGER_STATE_KEY, ShortlistIntentLedger)
 
 
+def cook_log_writer(request: Request) -> CookingLogWriter:
+    """The Cooking Log writer, as a READ source.
+
+    A second consumer that is not a write: the recipe detail view needs the
+    receipt ledger to report how far `cooking_count` is behind, and it reaches it
+    through this accessor rather than through a second connection of its own. It
+    is a reader here in the same sense `MealShortlistStore` is — the object on
+    `app.state` is shared, and which of its methods a given caller may use is the
+    caller's business, not the state's.
+    """
+    return _get(request, COOK_LOG_WRITER_STATE_KEY, CookingLogWriter)
+
+
 def _get[ResourceT: Resource](
     request: Request, key: str, expected: type[ResourceT]
 ) -> ResourceT:
@@ -121,6 +143,7 @@ def _get[ResourceT: Resource](
 
 
 __all__ = [
+    "COOK_LOG_WRITER_STATE_KEY",
     "MAPPING_STORE_STATE_KEY",
     "MEAL_SHORTLIST_STORE_STATE_KEY",
     "PANTRY_CATALOG_STATE_KEY",
@@ -129,6 +152,7 @@ __all__ = [
     "RESOURCE_UNAVAILABLE_CODE",
     "SHORTLIST_INTENT_LEDGER_STATE_KEY",
     "ResourceUnavailable",
+    "cook_log_writer",
     "mapping_store",
     "meal_shortlist_store",
     "pantry_catalog",

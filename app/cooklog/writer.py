@@ -195,13 +195,19 @@ class NotesSectionMissing(CookLogError):
 
 
 class CookLogReceiptsUnavailable(CookLogError):
-    """The ledger write failed after the note was committed.
+    """The ledger is unreadable — the write failed after the note was committed,
+    or a read of it failed.
 
     Reported as its own 503 rather than swallowed, and rather than reported as
     a success: the note *is* on disk and the row that answers "did the app write
     this?" is not, and saying `logged` would be claiming an audit trail that does
     not exist. The remedy is to retry, and the retry is a deduped no-op that
     back-fills the row — so the shape is safe to retry, not a dead end.
+
+    On the read side the argument is the same and the claim inverted: an
+    unreadable ledger is not evidence of a synced tracker, so the detail view
+    answers 503 rather than publishing an empty pending-cook list that reads as
+    "nothing is behind".
     """
 
     code = "cook_log_receipts_unavailable"
@@ -453,6 +459,37 @@ class CookLogReceipts:
         row = await cursor.fetchone()
         return None if row is None else str(row["written_at"])
 
+    async def log_dates(
+        self, connection: aiosqlite.Connection, *, recipe_note: str
+    ) -> tuple[str, ...]:
+        """Every `log_date` this recipe was logged on, ascending.
+
+        **Read-only, and the one query here that exists for a read surface
+        rather than for the write path.** It is how the detail view answers "the
+        tracker has not counted this yet" without the PWA ever touching the nine
+        tracker-owned frontmatter fields: the receipt says the PWA wrote a
+        Cooking Record on a date, and comparing that date against
+        `RecipeCookingHistory.last_cooked` is a read of two facts that already
+        exist. Nothing here writes, and nothing here writes back.
+
+        `recipe_tracker_synced` is deliberately NOT selected and deliberately not
+        used to answer that question. It is inserted as 0 and **nothing in this
+        repository ever flips it to 1** — the read-path comparison §13.5 describes
+        has no implementation — so a filter on it would return every receipt
+        forever and would report a permanent, growing "unsynced" count for a
+        recipe whose tracker had in fact run. The date comparison is the honest
+        signal because it is the definition: a cook is counted exactly when the
+        tracker's `last_cooked` has reached its date.
+        """
+        rows = await (
+            await connection.execute(
+                "SELECT log_date FROM cook_log_receipts"
+                " WHERE recipe_note = ? ORDER BY log_date",
+                (recipe_note,),
+            )
+        ).fetchall()
+        return tuple(str(row["log_date"]) for row in rows)
+
 
 #: `app.db.connect_db` is an `asynccontextmanager`, so the writer depends on a
 #: factory rather than a connection: it opens and closes one per operation, which
@@ -540,6 +577,36 @@ class CookingLogWriter:
         )
 
     # --- the read-back --------------------------------------------------
+
+    async def cook_log_dates(self, recipe_note: str) -> tuple[str, ...]:
+        """Every date this recipe was logged on through the PWA, ascending.
+
+        The read-side counterpart to `append`, and the only reason a router
+        outside the Cooking Log surface reads this object at all: the detail view
+        has to say how far behind `cooking_count` is, and the receipt is the only
+        record of a cook the tracker has not seen yet.
+
+        **It does not read the vault.** `read_back` above must, because it
+        answers about a daily note; this answers about a SQLite table, so a
+        recipe whose note is unreadable still reports its pending cooks instead of
+        404-ing on a staleness annotation. A `sqlite3.Error` becomes
+        `CookLogReceiptsUnavailable` exactly as it does on the write path, and the
+        caller answers 503 rather than reporting "nothing pending" — an unreadable
+        ledger is not evidence of a synced tracker.
+
+        The connection is opened and closed here rather than taken from the
+        caller: this is a `GET`, it holds nothing across a yield, and borrowing
+        the writer's factory is what keeps a second unclosed connection from
+        appearing next to it.
+        """
+        recipe_note = _require_recipe_note(recipe_note)
+        async with self._connect() as connection:
+            try:
+                return await self._receipts.log_dates(connection, recipe_note=recipe_note)
+            except sqlite3.Error as exc:
+                raise CookLogReceiptsUnavailable(
+                    f"cook_log_receipts_unavailable: {exc}"
+                ) from exc
 
     async def read_back(self, log_date: str) -> tuple[str, str, tuple[CookLogEntry, ...]]:
         """`(relative_path, note_revision, entries)` for one date.

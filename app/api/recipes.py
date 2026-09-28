@@ -141,6 +141,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import ConfigurationError
+from ..cooklog.writer import CookLogError
 from ..mapping.store import (
     DUPLICATE_SLOT_CONFLICT,
     CandidateRecord,
@@ -168,6 +169,7 @@ from ..vault.pantry import PantryError
 from .envelope import api_error
 from .resources import (
     ResourceUnavailable,
+    cook_log_writer,
     mapping_store,
     pantry_catalog,
     pantry_stock,
@@ -308,16 +310,49 @@ def build_recipes_router() -> APIRouter:
     async def read_recipe(
         request: Request, note_name: str, strict: Strict = 0
     ) -> JSONResponse:
-        """One Recipe, full. The same fields as the list, plus steps and history."""
+        """One Recipe, full. The list's fields, plus steps, history, and staleness.
+
+        **`pendingCookDates` is the only thing on this route that is not a
+        projection of the note.** Every other key comes from the file; this one
+        comes from comparing the file against the PWA's own receipt ledger, and
+        it exists because the nine tracker-owned fields are recomputed **only when
+        the note is opened in Obsidian** — so a recipe cooked through this PWA
+        shows a `cooking_count` that is wrong until the user opens the note, with
+        nothing on the surface to say so. That is the plausible-looking wrong
+        answer §9.13 is about, arrived at by a different road.
+
+        The list route deliberately does not carry it: a per-recipe ledger read
+        on every list load is a query per recipe to render a panel the user has
+        not opened, and the list already publishes `lastCooked` as its recency
+        signal.
+        """
         try:
             context = await _load(request, strict=strict == 1)
         except _SourceUnavailable as exc:
             return _fail(request, 503, exc.code)
         note = _find(context.snapshot, note_name)
         if note is None:
+            # Before the writer lookup, deliberately: "this recipe does not exist"
+            # is true regardless of which resources the lifespan published, so a
+            # missing recipe must keep answering 404 rather than inherit a 503
+            # about an unrelated collaborator.
             return _fail(request, 404, RECIPE_NOT_FOUND)
+        try:
+            writer = cook_log_writer(request)
+        except ResourceUnavailable as exc:
+            return _fail(request, 503, exc.code)
         await _current(request, context.store, (note,))
-        return JSONResponse({"recipe": await context.detail(note)})
+        try:
+            pending = await writer.cook_log_dates(note.note_name)
+        except CookLogError as exc:
+            return _fail(request, exc.status_code, exc.code)
+        return JSONResponse(
+            {
+                "recipe": await context.detail(
+                    note, pending_cook_dates=_pending_cook_dates(note, pending)
+                )
+            }
+        )
 
     @router.post("/api/recipes/resolve")
     async def resolve(request: Request) -> JSONResponse:
@@ -517,11 +552,21 @@ class _Context:
         """One row of the list: the headline numbers and the whole chip row."""
         return await self._recipe(note, include_body=False)
 
-    async def detail(self, note: RecipeNote) -> dict[str, Any]:
-        """The detail body: the same, plus `steps` and the Cooking History."""
-        return await self._recipe(note, include_body=True)
+    async def detail(
+        self, note: RecipeNote, *, pending_cook_dates: tuple[str, ...] = ()
+    ) -> dict[str, Any]:
+        """The detail body: the same, plus `steps`, the Cooking History, and staleness."""
+        return await self._recipe(
+            note, include_body=True, pending_cook_dates=pending_cook_dates
+        )
 
-    async def _recipe(self, note: RecipeNote, *, include_body: bool) -> dict[str, Any]:
+    async def _recipe(
+        self,
+        note: RecipeNote,
+        *,
+        include_body: bool,
+        pending_cook_dates: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
         slots = await self._slots(note)
         found, total = self._score(slots)
         body: dict[str, Any] = {
@@ -543,6 +588,10 @@ class _Context:
         if include_body:
             body["steps"] = note.steps
             body["history"] = _history(note)
+            # The DATES, not a count. The count is `len()` of this list, and a
+            # count the client has to take on faith is the thing this key exists
+            # to replace; the dates are the evidence and they cost one array.
+            body["pendingCookDates"] = list(pending_cook_dates)
         return body
 
     async def _slots(self, note: RecipeNote) -> list[dict[str, Any]]:
@@ -866,6 +915,44 @@ def _history(note: RecipeNote) -> dict[str, Any]:
         "cookingPatterns": list(history.cooking_patterns),
         "autoUpdated": history.auto_updated,
     }
+
+
+def _pending_cook_dates(note: RecipeNote, logged_dates: tuple[str, ...]) -> tuple[str, ...]:
+    """The PWA-logged cook dates the tracker has not counted yet.
+
+    A cook is counted exactly when `last_cooked` has reached its date, so
+    "pending" is `log_date > last_cooked` and nothing else. Two consequences are
+    deliberate:
+
+    - **A `None` `last_cooked` makes every logged date pending.** The tracker has
+      never run on this note, so it has counted nothing, and reporting an empty
+      pending list there would assert a sync that did not happen.
+    - **Equal is not pending.** A cook on the same day as `last_cooked` is
+      already in the count — that is what "last cooked on this day" means — so
+      `>` and not `>=`. Getting this wrong would report a permanently pending
+      cook on the one recipe most likely to be up to date.
+
+    **Both dates are `YYYY-MM-DD` strings and are compared as strings.** That is
+    sound only because both are produced by code that writes ISO dates:
+    `log_date` is the Cooking Log's own `log_date`, validated on the way in, and
+    `last_cooked` is PyYAML's resolution of a `date`-shaped scalar. Lexicographic
+    order on ISO dates is chronological order; re-parsing either one here would
+    add a second date parser to disagree with the first.
+
+    **What this cannot see, stated rather than hidden:** a renamed recipe. The
+    receipts carry the basename the cook was logged under, so renaming a note
+    orphans its receipts and this returns an empty list while `cooking_count`
+    stays stale. That is a real blind spot, and the honest response is §9.12's
+    existing `⚠ 已重命名` drift check rather than a fuzzy basename match here —
+    recipeTracker itself resolves outlinks by substring
+    (`l.path.includes(recipe)`, recipeTracker.md:42), so a loose match would
+    inherit that looseness and attribute another recipe's cooks to this one.
+    """
+    last_cooked = note.history.last_cooked
+    if last_cooked is None:
+        return logged_dates
+    newest_counted = last_cooked.isoformat()
+    return tuple(log_date for log_date in logged_dates if log_date > newest_counted)
 
 
 def _find(snapshot: RecipeSnapshot, note_name: str) -> RecipeNote | None:

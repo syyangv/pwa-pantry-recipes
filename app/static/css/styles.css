@@ -593,6 +593,33 @@ code {
   overflow-wrap: anywhere;
 }
 
+/* The staleness warning. Deliberately the loudest thing in the history block:
+   the nine fields above it are correct-looking and out of date at the same time,
+   and a warning that reads like the muted metadata beside it would be the one
+   nobody reads. Amber, not red — nothing has failed, and a recipe you cooked
+   yesterday is not an error. */
+.history-stale {
+  margin: 10px 0;
+  padding: 10px 12px;
+  border: 1px solid var(--warn-border);
+  border-left-width: 4px;
+  border-radius: var(--radius-sm);
+  background: var(--warn-bg);
+}
+
+.history-stale__head {
+  margin: 0 0 6px;
+  font-weight: 600;
+  color: var(--warn-fg);
+}
+
+.history-stale__body {
+  margin: 2px 0 0;
+  font-size: 0.85rem;
+  color: var(--fg-muted);
+  overflow-wrap: anywhere;
+}
+
 /* The note body, VERBATIM. `pre-wrap` keeps the vault's own line breaks and
  * indentation while still wrapping on a phone; the bytes come from
  * `textContent`, so a step can never become markup. */

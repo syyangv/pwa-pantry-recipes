@@ -30,6 +30,14 @@
   --accent-fg: #ffffff;
   --danger: #c92a2a;
   --danger-fg: #ffffff;
+  /* Warning = "stale, not broken". Deliberately not the danger pair: a recipe
+   * you cooked yesterday being one cook behind is an inconvenience, and painting
+   * it in the same red as a failed write would spend the app's loudest colour on
+   * the most common and least urgent state. */
+  --warn: #8a5a00;
+  --warn-fg: #6b4600;
+  --warn-bg: #fdf6e3;
+  --warn-border: #d9a441;
   --skeleton: #ececef;
   --radius: 12px;
   --radius-sm: 8px;
@@ -100,6 +108,13 @@
     --accent-fg: #131318;
     --danger: #ff6b6b;
     --danger-fg: #131318;
+    /* Dark warn is lighter and warmer, matching how --danger lightens here: a
+     * mid amber on #1c1c21 is a ~3:1 smear, so the foreground carries the
+     * contrast and the border carries the edge. */
+    --warn: #f0c36a;
+    --warn-fg: #f0c36a;
+    --warn-bg: #241d10;
+    --warn-border: #6b5320;
     --skeleton: #1f1f23;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3);
 

@@ -83,6 +83,13 @@ CREATE INDEX IF NOT EXISTS ix_meal_lists_slot_position
 -- correct — the daily-note wikilink is (F13).
 CREATE TABLE IF NOT EXISTS cook_log_receipts (
     id                       INTEGER PRIMARY KEY AUTOINCREMENT,
+    -- A BARE BASENAME ('盐焗鸡'), not a vault-relative path. `_require_recipe_note`
+    -- refuses `/` and every wikilink metacharacter, and the client sends the name
+    -- D2 makes the wikilink text. `ingredient_mappings.recipe_note` above is
+    -- therefore NOT comparable to this column: that one is written from
+    -- `RecipeNote.note_path` and does carry the path. The per-recipe staleness
+    -- aggregate joins on the basename because the tracker resolves daily-note
+    -- outlinks by wikilink text, which is the basename.
     recipe_note              TEXT    NOT NULL,
     log_date                 TEXT    NOT NULL,   -- 'YYYY-MM-DD'
     relative_path            TEXT    NOT NULL,   -- '日记/2026/2026-09-27.md'

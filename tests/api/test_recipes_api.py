@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import json
 import os
+import sqlite3
 import stat
 from collections.abc import Iterator
 from pathlib import Path
@@ -1019,7 +1020,7 @@ def test_the_detail_recipe_carries_the_list_keys_plus_steps_and_history(
 ) -> None:
     recipe = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
 
-    assert set(recipe) == LIST_RECIPE_KEYS | {"steps", "history"}
+    assert set(recipe) == LIST_RECIPE_KEYS | {"steps", "history", "pendingCookDates"}
     assert set(recipe["history"]) == {
         "firstCooked",
         "lastCooked",
@@ -1041,6 +1042,206 @@ def test_the_detail_recipe_carries_the_list_keys_plus_steps_and_history(
     assert recipe["steps"] == "\n1. 热锅。\n2. 炒蛋盛出。\n3. 炒番茄，回锅。\n"
     # The date is a projection, not a re-parse, and the two agree.
     assert recipe["lastCooked"] == recipe["history"]["lastCooked"]
+    # Nothing has been logged through the PWA in this fixture, so there is
+    # nothing pending. An empty list here is a real answer, not a default: the
+    # key is present and empty rather than absent, so a client cannot tell it
+    # from one it failed to receive.
+    assert recipe["pendingCookDates"] == []
+
+
+# ---------------------------------------------------------------------------
+# `pendingCookDates`: how far `cooking_count` is behind.
+#
+# The nine tracker-owned fields are recomputed ONLY when the note is opened in
+# Obsidian, so a recipe cooked through this PWA shows a `cooking_count` that is
+# wrong until the user opens the note — with nothing on the surface saying so.
+# These tests pin the one comparison that makes it visible: a logged cook is
+# pending exactly when `last_cooked` has not reached its date.
+# ---------------------------------------------------------------------------
+
+
+def _seed_receipts(runtime_root: Path, rows: tuple[tuple[str, str], ...]) -> None:
+    """Insert `cook_log_receipts` rows directly, as `(recipe_note, log_date)`.
+
+    Written straight to SQLite rather than through `POST /api/cook-logs`, because
+    the write path needs a daily note to exist and this is about the *read* of a
+    ledger that already has rows. The two columns this query reads are the only
+    ones given values; the rest take their schema defaults.
+    """
+    db_path = runtime_root / "data" / "recipes.sqlite3"
+    connection = sqlite3.connect(db_path)
+    try:
+        connection.executemany(
+            "INSERT INTO cook_log_receipts (recipe_note, log_date, relative_path,"
+            " note_revision) VALUES (?, ?, '日记/2026/does-not-matter.md', 'sha256:x')",
+            rows,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_a_cook_logged_after_the_newest_counted_one_is_pending(
+    client: TestClient, runtime_root: Path
+) -> None:
+    """`MAIN_RECIPE`'s fixture has `last_cooked: 2026-09-20`."""
+    _seed_receipts(runtime_root, ((MAIN_RECIPE, "2026-09-27"),))
+
+    recipe = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
+
+    assert recipe["pendingCookDates"] == ["2026-09-27"]
+
+
+def test_a_cook_on_or_before_last_cooked_is_not_pending(
+    client: TestClient, runtime_root: Path
+) -> None:
+    """`>` and not `>=`, and this is the test that says why.
+
+    A cook dated the same day as `last_cooked` is *in* the count — that is what
+    "last cooked on this day" means. Using `>=` would report a permanently
+    pending cook on precisely the recipe most likely to be up to date, which is
+    the kind of always-wrong annotation people learn to ignore.
+    """
+    _seed_receipts(
+        runtime_root,
+        (
+            (MAIN_RECIPE, "2026-03-01"),  # == first_cooked, long counted
+            (MAIN_RECIPE, "2026-09-20"),  # == last_cooked, the boundary
+            (MAIN_RECIPE, "2026-09-21"),  # one day past: pending
+        ),
+    )
+
+    recipe = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
+
+    assert recipe["pendingCookDates"] == ["2026-09-21"]
+
+
+def test_pending_dates_come_back_ascending(
+    client: TestClient, runtime_root: Path
+) -> None:
+    _seed_receipts(
+        runtime_root,
+        (
+            (MAIN_RECIPE, "2026-10-02"),
+            (MAIN_RECIPE, "2026-09-25"),
+            (MAIN_RECIPE, "2026-09-28"),
+        ),
+    )
+
+    recipe = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
+
+    assert recipe["pendingCookDates"] == ["2026-09-25", "2026-09-28", "2026-10-02"]
+
+
+def test_another_recipes_receipts_are_never_this_recipes_pending(
+    client: TestClient, runtime_root: Path
+) -> None:
+    """The join is on the exact basename, so a neighbour's cooks cannot leak in."""
+    _seed_receipts(
+        runtime_root,
+        (
+            ("盐焗鸡", "2026-10-01"),
+            ("盐焗鸡 副本", "2026-10-02"),
+            (MAIN_RECIPE, "2026-10-03"),
+        ),
+    )
+
+    recipe = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
+
+    assert recipe["pendingCookDates"] == ["2026-10-03"]
+
+
+def test_a_recipe_the_tracker_never_ran_on_has_every_logged_cook_pending(
+    runtime_root: Path,
+) -> None:
+    """A `None` `last_cooked` makes ALL of them pending, not none of them.
+
+    The tracker has never run on this note, so it has counted nothing. Reporting
+    an empty pending list there would assert a sync that did not happen — the
+    precise shape of the plausible-looking wrong answer this key exists to
+    replace, reached by inverting the comparison.
+
+    Built on its own client rather than the shared `client` fixture because the
+    note has to exist *before* the recipe index's first snapshot: the index is TTL
+    cached, so a note written after boot is simply not in it.
+    """
+    never_cooked = "没做过"
+    write_recipe(
+        runtime_root / "vault",
+        never_cooked,
+        "---\n材料:\n  - 番茄\n---\n# 步骤\n1. 炒。\n".encode(),
+    )
+    write_pantry_note(runtime_root / "vault")
+
+    with client_for(make_settings(runtime_root)) as test_client:
+        # After boot, not before: the schema is created by the lifespan, and the
+        # note above had to be written before it for the index to hold it. Those
+        # two orderings are opposite, which is the whole reason this test builds
+        # its own client instead of using the shared one.
+        _seed_receipts(
+            runtime_root,
+            ((never_cooked, "2026-01-02"), (never_cooked, "2026-09-27")),
+        )
+        recipe = test_client.get(f"/api/recipes/{never_cooked}").json()["recipe"]
+
+    assert recipe["history"]["lastCooked"] is None
+    assert recipe["history"]["cookingCount"] is None
+    assert recipe["pendingCookDates"] == ["2026-01-02", "2026-09-27"]
+
+
+def test_the_list_route_does_not_carry_the_staleness_key(client: TestClient) -> None:
+    """The per-recipe ledger read is a detail-only cost, asserted as an absence.
+
+    A list load would otherwise run one receipts query per recipe to render a
+    panel nobody opened. `LIST_RECIPE_KEYS` is exact, so this is really a second
+    reader of that same constant — stated separately because the reason (cost on
+    a route that cannot show it) is not visible in a set comparison.
+    """
+    rows = client.get("/api/recipes").json()["recipes"]
+    assert rows, "the list must not be empty for this assertion to mean anything"
+    for row in rows:
+        assert "pendingCookDates" not in row
+        assert "history" not in row
+
+
+def test_an_unpublished_cook_log_writer_is_503_and_never_a_stale_count(
+    runtime_root: Path,
+) -> None:
+    """Fail closed on the ledger rather than publishing an empty pending list.
+
+    An unreadable ledger is not evidence of a synced tracker. Answering `[]`
+    would be indistinguishable from "nothing is behind", which is the one answer
+    that is definitely wrong whenever the 503 is right.
+    """
+    write_recipe(runtime_root / "vault", MAIN_RECIPE)
+    write_pantry_note(runtime_root / "vault")
+    with client_for(make_settings(runtime_root)) as test_client:
+        del test_client.app.state.cook_log_writer
+        response = test_client.get(f"/api/recipes/{MAIN_RECIPE}")
+
+    assert response.status_code == 503
+    assert response.json()["code"] == "resource_unavailable"
+    assert "recipe" not in response.json()
+
+
+def test_a_missing_recipe_is_still_404_when_the_writer_is_unpublished(
+    runtime_root: Path,
+) -> None:
+    """404 outranks 503: "this recipe does not exist" is true either way.
+
+    The writer lookup is deliberately *after* the index lookup. Were it before,
+    an unrelated missing collaborator would answer a question about a recipe that
+    was never there, and the 404 contract that every other name test pins would
+    quietly depend on lifespan wiring.
+    """
+    write_recipe(runtime_root / "vault", MAIN_RECIPE)
+    write_pantry_note(runtime_root / "vault")
+    with client_for(make_settings(runtime_root)) as test_client:
+        del test_client.app.state.cook_log_writer
+        response = test_client.get("/api/recipes/不存在")
+
+    assert response.status_code == 404
+    assert response.json()["code"] == RECIPE_NOT_FOUND
 
 
 @pytest.mark.parametrize("name", ["不存在", "%E4%B8%8D%E5%AD%98%E5%9C%A8", "empty", "a" * 200])

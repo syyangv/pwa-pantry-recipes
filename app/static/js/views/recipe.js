@@ -137,17 +137,127 @@ function appTimezone() {
   return (session && session.appTimezone) || null;
 }
 
-/** One `label: value` line, skipped when the server sent nothing. */
-function field(label, value) {
+/** One `label: value` line, skipped when the server sent nothing.
+ *
+ * `format` composes the displayed text from the raw one. It exists so a derived
+ * value — the tracker's age, say — is composed *before* the node is built rather
+ * than written into it afterwards: patching `textContent` on a node that is
+ * already in the tree is a second mutation of the same fact, and it is the shape
+ * that lets a stale value survive a re-render.
+ */
+function field(label, value, format) {
   if (value === null || value === undefined || value === '') return null;
-  const text = Array.isArray(value) ? value.join('、') : String(value);
+  // An EMPTY LIST is nothing too. `cookingPatterns: []` is a real payload — the
+  // tracker wrote the key and no pattern qualified — and joining it to `''` with
+  // `、` would render a labelled row with an empty value, which reads as "the app
+  // lost this" rather than "there was nothing to say".
+  if (Array.isArray(value) && value.length === 0) return null;
+  const joined = Array.isArray(value) ? value.join('、') : String(value);
   return el('div', { class: 'field' }, [
     el('span', { class: 'field__label', text: label }),
-    el('span', { class: 'field__value', text }),
+    el('span', { class: 'field__value', text: format ? format(joined) : joined }),
   ]);
 }
 
-function historyPanel(history = {}) {
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/**
+ * Whole calendar days from `stamp` to `today`, or `null` if either is unreadable.
+ *
+ * `today` is the caller's already-localised `YYYY-MM-DD` (`todayIn(appTimezone())`),
+ * so this function does no timezone work at all — it subtracts two date indices.
+ * That is why it is pure and takes `today` as an argument: a view test pins the
+ * bucket against a fixed date instead of racing the wall clock.
+ *
+ * **Calendar days, not a duration.** "3 天前" for a cook logged at 23:55 and
+ * read at 00:04 is the answer a person means; an elapsed-hours figure would say
+ * "0 天前" and then a number of hours, and the number of hours is a fact about
+ * when the phone was picked up.
+ *
+ * `null` covers three unreadable cases and never becomes `NaN`. `auto_updated` is
+ * the tracker's own free text — a space-separated `YYYY-MM-DD HH:mm`, which is
+ * not the `T` a bare `Date.parse` wants — so it is read by hand. A stamp in the
+ * future is also `null`: a clock-skew bug rendered as `-1 天前` would be a wrong
+ * fact wearing a real one's clothes.
+ */
+export function ageInDays(stamp, today) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(stamp || ''));
+  if (!match) return null;
+  const then = Date.UTC(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  // Compare in UTC on purpose: both sides are already Y-M-D in the app timezone,
+  // so the arithmetic is date-index arithmetic and no offset can shift a day.
+  const parts = /^(\d{4})-(\d{2})-(\d{2})$/.exec(today);
+  if (!parts) return null;
+  const now = Date.UTC(Number(parts[1]), Number(parts[2]) - 1, Number(parts[3]));
+  const days = Math.round((now - then) / DAY_MS);
+  return days >= 0 ? days : null;
+}
+
+/**
+ * The bucket label for a day count, or `''` when there is no count.
+ *
+ * Buckets are deliberately coarse. "45 天" is really 1.5 months, and a label
+ * that slid between units as it aged would be wrong in a way nobody could
+ * check; the exact date is always rendered beside this, so the rounding is
+ * visible rather than hidden. A panel reading "6 个月前 · 2026-03-11" cannot be
+ * wrong in a way that matters; one reading "184 天前" invites a reading of
+ * precision it does not have.
+ */
+export function ageLabel(days) {
+  if (days === null) return '';
+  if (days === 0) return '今天';
+  if (days === 1) return '昨天';
+  if (days < 30) return `${days} 天前`;
+  if (days < 365) return `${Math.floor(days / 30)} 个月前`;
+  const years = Math.floor(days / 365);
+  const months = Math.floor((days % 365) / 30);
+  return months > 0 ? `${years} 年 ${months} 个月前` : `${years} 年前`;
+}
+
+/**
+ * The `⚠ 还没算进次数` block, or `null` when nothing is behind.
+ *
+ * **This is the one part of the panel that is about the app rather than about
+ * the recipe.** The nine fields above are recomputed only when the note is opened
+ * in Obsidian, so after a cook logged here they are correct-looking and stale, and
+ * nothing else on this surface would say so. The remedy is named because the
+ * user has to perform it — open the note — and a warning without a remedy is
+ * just anxiety.
+ *
+ * It is deliberately NOT a count the client invents from `cookingCount`: that
+ * field is the tracker's, and the difference between it and reality is what this
+ * block is reporting, so deriving one from the other would be circular.
+ */
+function stalenessPanel(pendingCookDates, autoUpdated, today) {
+  if (!Array.isArray(pendingCookDates) || pendingCookDates.length === 0) return null;
+  const dates = pendingCookDates.join('、');
+  const days = ageInDays(autoUpdated, today);
+  const lastRun = ageLabel(days);
+  const remedy = lastRun
+    ? `Obsidian 的 recipeTracker 上次跑在 ${autoUpdated}（${lastRun}）。在 Obsidian 里打开这份菜谱，次数才会更新。`
+    : '在 Obsidian 里打开这份菜谱，次数才会更新。';
+  return el('div', { class: 'history-stale', dataset: { role: 'history-stale' } }, [
+    el('p', {
+      class: 'history-stale__head',
+      text: `⚠ 有 ${pendingCookDates.length} 次记录还没算进上面的次数`,
+    }),
+    el('p', { class: 'history-stale__body', text: `在这里记的：${dates}` }),
+    el('p', { class: 'history-stale__body', text: remedy }),
+  ]);
+}
+
+/**
+ * Cooking History, plus the one thing the history itself cannot tell you.
+ *
+ * `pendingCookDates` is the server's comparison, not a client one: it knows which
+ * logged cooks the tracker has not counted, and a client that recomputed that
+ * from `lastCooked` would be re-deriving the rule that is easy to get subtly
+ * wrong (same-day counts as counted). The dates are rendered, never summed, so
+ * what the user reads is the evidence and not a total.
+ */
+function historyPanel(history = {}, pendingCookDates = [], today = '') {
+  const autoUpdated = history.autoUpdated;
+  const stale = stalenessPanel(pendingCookDates, autoUpdated, today);
   const rows = [
     field('第一次做', history.firstCooked),
     field('最近一次', history.lastCooked),
@@ -157,16 +267,26 @@ function historyPanel(history = {}) {
     field('近期活跃', history.recentActivity),
     field('喜欢的季节', history.favoriteSeason),
     field('做法模式', history.cookingPatterns),
-    field('frontmatter 自动更新于', history.autoUpdated),
+    // The stamp AND its age. The date alone is what the tracker wrote and says
+    // nothing about whether it is current; the age is the part the user can act
+    // on. An unparseable stamp renders as the bare date, never as nothing.
+    field('frontmatter 自动更新于', autoUpdated, (raw) => {
+      const days = ageInDays(raw, today);
+      const label = ageLabel(days);
+      return label ? `${raw}（${label}）` : raw;
+    }),
   ].filter(Boolean);
-  if (rows.length === 0) {
+  if (rows.length === 0 && !stale) {
     return emptyState({
       title: '还没有做过这道菜。',
       body: '记一次之后，Obsidian 的 recipeTracker 会在打开这份笔记时把次数写回 frontmatter。',
       dataset: { role: 'empty-history' },
     });
   }
-  return el('div', { class: 'fields', dataset: { role: 'history' } }, rows);
+  return el('div', { class: 'history' }, [
+    rows.length > 0 ? el('div', { class: 'fields', dataset: { role: 'history' } }, rows) : null,
+    stale,
+  ]);
 }
 
 /**
@@ -650,6 +770,9 @@ export function mount(root, params = {}) {
         },
         onReady: (body) => {
           const recipe = (body && body.recipe) || {};
+          // One "today" for the whole render, so the history's staleness age and
+          // the cook-log badge's date can never disagree about which day it is.
+          const today = todayIn(appTimezone());
           const slots = scoredSlots(recipe.ingredients || [], strict);
           title.textContent = recipe.noteName || name;
           head.textContent = '';
@@ -677,11 +800,13 @@ export function mount(root, params = {}) {
             }),
           );
           historySlot.textContent = '';
-          historySlot.appendChild(historyPanel(recipe.history || {}));
+          historySlot.appendChild(
+            historyPanel(recipe.history || {}, recipe.pendingCookDates || [], today),
+          );
           if (typeof resumeTop === 'number' && resumeTop > 0 && window.scrollY !== resumeTop) {
             window.scrollTo(0, resumeTop);
           }
-          refreshBadge(todayIn(appTimezone()));
+          refreshBadge(today);
         },
         onError: (error) => {
           head.textContent = '';

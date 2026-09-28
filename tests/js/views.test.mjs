@@ -59,9 +59,8 @@ const { initRouter } = await import('../../app/static/js/router.js');
 const intents = await import('../../app/static/js/domain-intents.js');
 const api = await import('../../app/static/js/api.js');
 const { mount: mountHome } = await import('../../app/static/js/views/home.js');
-const { mount: mountRecipe, MEALS, OFFLINE_REASON, TRACKER_BADGE, todayIn } = await import(
-  '../../app/static/js/views/recipe.js'
-);
+const { mount: mountRecipe, MEALS, OFFLINE_REASON, TRACKER_BADGE, todayIn, ageInDays, ageLabel } =
+  await import('../../app/static/js/views/recipe.js');
 
 const { emptyState, errorState, loadPanel, sourceUnavailableState, isSourceUnavailable } = panels;
 
@@ -758,6 +757,168 @@ test('the detail renders headline, chips, tools, verbatim steps, and the history
   assert.ok(history.includes('4'));
   assert.ok(history.includes('冬季'));
   assert.ok(history.includes('2026-09-14 22:02'));
+  unmount();
+  dom.restore();
+});
+
+/* --------------------------------------------------------------------------
+   7b. Tracker staleness: the nine fields are recomputed ONLY when the note is
+   opened in Obsidian, so after a cook logged here they are correct-looking and
+   out of date at the same time. `pendingCookDates` is the server's comparison
+   and the panel's job is to say so, name the dates, and name the remedy.
+   -------------------------------------------------------------------------- */
+
+/* `ageInDays` / `ageLabel` are pure and take `today` as an argument precisely so
+ * these are testable without a clock. A view test that asserted "14 天前" would
+ * pass today and rot the day after; asserting the bucket against a FIXED today
+ * cannot rot at all. */
+test('ageInDays reads the tracker stamp by hand and refuses what it cannot parse', () => {
+  // The space-separated `YYYY-MM-DD HH:mm` is the whole reason: `Date.parse`
+  // wants a `T`, and this is a string the tracker wrote.
+  assert.equal(ageInDays('2026-09-14 22:02', '2026-09-28'), 14);
+  assert.equal(ageInDays('2026-09-27', '2026-09-28'), 1);
+  assert.equal(ageInDays('2026-09-28', '2026-09-28'), 0);
+  // A month boundary is date-index arithmetic, so it cannot slip a day.
+  assert.equal(ageInDays('2026-08-28', '2026-09-28'), 31);
+  assert.equal(ageInDays('2025-02-28', '2025-03-01'), 1);
+  // 2024 is a leap year, and a hardcoded 365 would be wrong here.
+  assert.equal(ageInDays('2024-02-29', '2024-03-01'), 1);
+  // Every "cannot read it" answer is `null`, never NaN and never a number. A
+  // cosmetic field must not put `NaN 天前` on the screen.
+  assert.equal(ageInDays('', '2026-09-28'), null);
+  assert.equal(ageInDays('yesterday', '2026-09-28'), null);
+  assert.equal(ageInDays('2026-09-14 22:02', 'not-a-date'), null);
+  assert.equal(ageInDays(null, '2026-09-28'), null);
+  // A stamp from the FUTURE is not a small age, it is an unreadable one: a
+  // `-1 天前` on screen would be a clock-skew bug rendered as a fact.
+  assert.equal(ageInDays('2026-10-01', '2026-09-28'), null);
+});
+
+test('ageLabel buckets coarsely, so the label stays true as it ages', () => {
+  assert.equal(ageLabel(0), '今天');
+  assert.equal(ageLabel(1), '昨天');
+  assert.equal(ageLabel(14), '14 天前');
+  assert.equal(ageLabel(29), '29 天前');
+  // 30 days is a month, not "30 天前": the buckets change unit on purpose.
+  assert.equal(ageLabel(30), '1 个月前');
+  assert.equal(ageLabel(200), '6 个月前');
+  assert.equal(ageLabel(364), '12 个月前');
+  assert.equal(ageLabel(365), '1 年前');
+  assert.equal(ageLabel(400), '1 年 1 个月前');
+  assert.equal(ageLabel(730), '2 年前');
+  // Unparseable in, nothing out. A blank suffix beats a wrong number.
+  assert.equal(ageLabel(null), '');
+});
+
+test('a pending cook renders the warning, the dates, and the remedy', async () => {
+  const dom = install();
+  setResponder((url) => {
+    if (url.includes('/api/session')) return json(sessionBody());
+    if (url.includes('/api/cook-logs')) {
+      return json({ date: '2026-09-28', relativePath: '日记/2026/2026-09-28.md', noteRevision: 'sha256:note', entries: [] });
+    }
+    return json(detailBody({ pendingCookDates: ['2026-09-25', '2026-10-02'] }));
+  });
+  const unmount = mountRecipe(dom.root, { basename: '盐焗鸡' });
+  await settle();
+
+  const stale = dom.byData('history-stale');
+  assert.equal(stale.length, 1, 'the warning must render when something is pending');
+  const text = textOf(stale[0]);
+  // The COUNT is stated, because "some of it is behind" is not actionable…
+  assert.ok(text.includes('2'), `the pending count must be visible: ${text}`);
+  // …and the DATES are stated, because the count alone is not evidence.
+  assert.ok(text.includes('2026-09-25'), text);
+  assert.ok(text.includes('2026-10-02'), text);
+  // The remedy is named, because a warning without one is just anxiety: the
+  // number only moves when the note is opened in Obsidian.
+  assert.ok(text.includes('Obsidian'), text);
+  assert.ok(text.includes('打开'), text);
+
+  // The history fields are still there underneath — the warning ADDS to the
+  // panel, it does not replace it.
+  assert.equal(dom.byData('history').length, 1);
+  assert.ok(textOf(dom.byData('history')[0]).includes('做过次数'));
+
+  unmount();
+  dom.restore();
+});
+
+test('nothing pending renders no warning at all', async () => {
+  const dom = install();
+  respondRecipe();
+  const unmount = mountRecipe(dom.root, { basename: '盐焗鸡' });
+  await settle();
+
+  assert.equal(dom.byData('history-stale').length, 0, 'no pending, no warning');
+  assert.equal(dom.byData('history').length, 1, 'and the history is untouched');
+
+  unmount();
+  dom.restore();
+});
+
+test('a pending cook on a never-cooked recipe does not claim it was never cooked', async () => {
+  const dom = install();
+  setResponder((url) => {
+    if (url.includes('/api/session')) return json(sessionBody());
+    if (url.includes('/api/cook-logs')) {
+      return json({ date: '2026-09-28', relativePath: '日记/2026/2026-09-28.md', noteRevision: 'sha256:note', entries: [] });
+    }
+    return json(
+      detailBody({
+        history: {
+          firstCooked: null,
+          lastCooked: null,
+          cookingCount: null,
+          cookingFrequency: null,
+          cookingYears: [],
+          recentActivity: null,
+          favoriteSeason: null,
+          cookingPatterns: [],
+          autoUpdated: null,
+        },
+        pendingCookDates: ['2026-09-27'],
+      }),
+    );
+  });
+  const unmount = mountRecipe(dom.root, { basename: '盐焗鸡' });
+  await settle();
+
+  // "还没有做过这道菜" is now a FALSE claim — there is a receipt saying
+  // otherwise. The empty state is the one thing in this panel that can be
+  // contradicted outright, so it yields to the pending warning.
+  assert.equal(dom.byData('empty-history').length, 0);
+  assert.equal(dom.byData('history-stale').length, 1, 'the pending cook is still reported');
+  assert.equal(dom.byData('history').length, 0, 'no field has a value to show');
+
+  unmount();
+  dom.restore();
+});
+
+test('an empty pattern list renders no row, rather than a label with no value', async () => {
+  const dom = install();
+  setResponder((url) => {
+    if (url.includes('/api/session')) return json(sessionBody());
+    if (url.includes('/api/cook-logs')) {
+      return json({ date: '2026-09-28', relativePath: '日记/2026/2026-09-28.md', noteRevision: 'sha256:note', entries: [] });
+    }
+    return json(
+      detailBody({ history: { ...detailBody().recipe.history, cookingPatterns: [] } }),
+    );
+  });
+  const unmount = mountRecipe(dom.root, { basename: '盐焗鸡' });
+  await settle();
+
+  const labels = [...dom.byData('history')[0].querySelectorAll('.field__label')].map(
+    (node) => node.textContent,
+  );
+  // `[]` is a real payload — the key is there and nothing qualified — and a row
+  // reading `做法模式` with an empty value looks like data loss.
+  assert.ok(!labels.includes('做法模式'), `an empty list must render no row: ${labels}`);
+  // The rows that DO have values are unaffected.
+  assert.ok(labels.includes('第一次做'), labels.join('|'));
+  assert.ok(labels.includes('做法模式') === false);
+
   unmount();
   dom.restore();
 });
