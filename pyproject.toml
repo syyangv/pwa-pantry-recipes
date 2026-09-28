@@ -52,6 +52,7 @@ app = [
     "static/icons/*",
 ]
 "app.recipes" = ["lexicon/*.yaml"]
+"app.pantry" = ["line_overrides.yaml"]
 "app.db" = ["schema.sql"]
 
 [tool.pytest.ini_options]

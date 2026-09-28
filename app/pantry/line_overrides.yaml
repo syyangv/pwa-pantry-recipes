@@ -1,0 +1,55 @@
+# The Stock Join's manual escape hatch. Loaded once at import by
+# `app/pantry/stock.py`; every failure mode raises `ConfigurationError` and the
+# app refuses to start, because a silently unreadable file here is
+# indistinguishable from "nothing to repair".
+#
+# THIS FILE IS LOAD-BEARING, NOT A NICETY. The Stock Join has no tier ladder
+# beyond exact name -> basename -> this file, and no re-resolution pass, because
+# there is no materialized stock table to re-resolve against. A line that all
+# three miss is simply absent from `in_stock_ids`, so the recipe depending on it
+# renders `chip--have-been-buying` while the item is on the shelf. The
+# `unjoined` bucket and `stockUnjoinedCount` make the miss visible; **this file
+# is the only thing that fixes it without editing the user's vault**, which this
+# app must never do. Two of the frozen note's 45 product lines miss without it.
+#
+# Schema. `version` is the schema revision, not the data revision: a loader that
+# does not recognise it refuses to start rather than misreading the file.
+# `overrides` is a mapping and nothing else — an entry is one line, because a
+# repair is a mechanical act and a repair that takes four lines does not get
+# made.
+#
+#   keys:   the NORMALIZED Pantry.md line name. That is
+#           `normalize_ingredient()` of the line's cleaned text, NFKC-normalized,
+#           trimmed, and casefolded — so a raw line like
+#           `Sanpellegrino CIAO! Peach Sparkling Water, 24-Pack` will NOT match:
+#           its product core is `CIAO! Peach Sparkling Water 24-Pack`, and that
+#           folded value is the key. The loader refuses any key that is not
+#           already in that form, so a pasted raw line fails at startup rather
+#           than becoming an override that can never fire. To find the key of a
+#           new miss, read `StockJoinMiss.core` — it is the same string — or
+#           `tests/pantry/test_stock_join.py`, which prints the frozen note's.
+#
+#   values: a `canonical_name` to look up in the LIVE catalog at read time.
+#           **Not an `items.id`, deliberately.** `items.id` is AUTOINCREMENT and
+#           a producer re-import can renumber it (§9.8's "never store a Pantry
+#           Item id in a lexicon file" rule, verbatim). Resolving a name at read
+#           time means a renumbering is followed automatically; keying by id
+#           would silently point the override at a different product.
+#           A name may also be written as the product core it reduces to.
+#
+# Adding an entry is reviewed source, not a hotfix. One per measured miss, no
+# speculative entries, no aliases: a "just in case" line is a line that hides
+# the next real miss behind a repair nobody verified.
+version: 1
+overrides:
+  # 蟹粉鱼肉狮子头 冷冻 — the catalog row is `禾苑 蟹粉鱼肉狮子头` (id 108). The
+  # trailing 冷冻 is a condition token, not a size and not a brand, so
+  # normalize_ingredient() has no rule that removes it and the basename tier
+  # misses. A §5a.1 rename artifact: the note kept the word, the catalog did not.
+  "蟹粉鱼肉狮子头 冷冻": "禾苑 蟹粉鱼肉狮子头"
+  # ciao! peach sparkling water 24-pack — the catalog row is
+  # `Sanpellegrino CIAO! Peach Sparkling Water` (id 48); `Sanpellegrino` strips as
+  # a lexicon brand and `24-Pack` is not a size the stripper recognizes, so the
+  # core carries a suffix the catalog row does not have. No catalog row resolves
+  # this line at all without the entry.
+  "ciao! peach sparkling water 24-pack": "Sanpellegrino CIAO! Peach Sparkling Water"

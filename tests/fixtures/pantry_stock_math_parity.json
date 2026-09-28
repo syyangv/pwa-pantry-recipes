@@ -1,0 +1,10 @@
+{
+  "count": 40,
+  "excludedParents": 4,
+  "generatedFrom": "Logistics/库存/Pantry.md",
+  "helperCount": 40,
+  "helperPath": "Helper/scripts/pantry_snapshot.py",
+  "helperTotal": 166.9,
+  "noteSha256": "6a231469ab208483b5dfef0b6720ef46e205b23e21b1d2a50352ddc77dc20aea",
+  "total": 166.9
+}

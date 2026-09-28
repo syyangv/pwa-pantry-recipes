@@ -27,6 +27,13 @@ right. What is asserted here:
 5. **The script's own expected numbers are the committed snapshot's numbers.**
    Compared function to function, so editing `EXPECTED_*` without regenerating
    fails here instead of waiting for the next real re-import to notice.
+6. **The `💵` parity gate compares two implementations and refuses to freeze a
+   disagreement** — the only job in this script that reads something this
+   repository does not own. The "other side" is a stub script written into
+   `tmp_path`, so the refusal is proved with no vault and no `Helper/`
+   directory, and the production script's own `--dry-run` guarantee is asserted
+   structurally (the flag is passed, and it is the flag that stops the real
+   script rewriting the user's snapshot note).
 
 Everything runs against `tmp_path` copies, so this file needs no sibling
 repository, no vault, and no network — it is a CI-resident test of a developer
@@ -36,6 +43,7 @@ tool, which is the only way a safety property in a script gets enforced at all.
 from __future__ import annotations
 
 import ast
+import hashlib
 import importlib.util
 import json
 import os
@@ -53,6 +61,8 @@ from app.pantry.catalog import build_snapshot
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 SCRIPT: Final = REPO_ROOT / "scripts" / "snapshot_pantry_catalog.py"
 SNAPSHOT: Final = REPO_ROOT / "tests" / "fixtures" / "pantry_items_snapshot.json"
+PARITY: Final = REPO_ROOT / "tests" / "fixtures" / "pantry_stock_math_parity.json"
+PANTRY_NOTE: Final = REPO_ROOT / "tests" / "fixtures" / "pantry" / "Pantry.md"
 
 # The producer's schema, three columns wide on purpose: the point of these
 # fixtures is the script's *contract*, and a 178-row catalog is not needed to
@@ -96,7 +106,13 @@ def _write_db(path: Path, rows: tuple[tuple[Any, ...], ...] = _SEED) -> Path:
 
 
 def _run(
-    *args: str, db: Path, out: Path, job: str = "catalog", vault: Path | None = None
+    *args: str,
+    db: Path,
+    out: Path,
+    job: str = "catalog",
+    vault: Path | None = None,
+    helper: Path | None = None,
+    parity_out: Path | None = None,
 ) -> subprocess.CompletedProcess[str]:
     """The script as a developer runs it: a fresh process, `cwd` at the repo root.
 
@@ -106,11 +122,11 @@ def _run(
     exit code a shell sees is the contract a human or a pre-commit hook reads.
 
     `--job` is always passed, never left to the `all` default, and that is the
-    point: `all` runs the recipes job too, so a run without it inherits the vault
-    — and a machine without the vault would fail a catalog assertion for a reason
-    that has nothing to do with the catalog. The CLI keeps `all` as its default
-    because "are my frozen inputs current?" is the question a developer usually
-    has; a test asks a narrower one and has to say so.
+    point: `all` runs the recipes and stock jobs too, so a run without it
+    inherits the vault — and a machine without the vault would fail a catalog
+    assertion for a reason that has nothing to do with the catalog. The CLI keeps
+    `all` as its default because "are my frozen inputs current?" is the question a
+    developer usually has; a test asks a narrower one and has to say so.
     """
     command = [
         sys.executable,
@@ -124,6 +140,10 @@ def _run(
     ]
     if vault is not None:
         command += ["--vault", str(vault)]
+    if helper is not None:
+        command += ["--helper", str(helper)]
+    if parity_out is not None:
+        command += ["--parity-out", str(parity_out)]
     command += list(args)
     return subprocess.run(
         command,
@@ -470,3 +490,248 @@ def test_the_diff_is_printed_rather_than_assumed(module: Any) -> None:
     assert module.unified(None, "a\n")
 
 
+
+
+# --- 6. The 💵 parity gate ---------------------------------------------------
+#
+# The other two implementations of the per-unit math live outside this
+# repository, so this job is the whole of §13.16's procedural mitigation. Its
+# test therefore has to prove the *refusal*, not the arithmetic: a gate that
+# writes on disagreement is the failure F1's parity clause exists to prevent.
+#
+# The "other side" is a stub. It prints exactly what the real
+# `pantry_snapshot.py --dry-run` prints, so the parsing and the comparison are
+# the script's own; what it does not do is read the vault, which is what keeps
+# this file runnable in CI (F14's rule, extended to the note and the Helper
+# script).
+
+
+HELPER_STUB: Final = '''#!/usr/bin/env python3
+"""A stand-in for `Helper/scripts/pantry_snapshot.py`, for the parity gate.
+
+Prints the same line the real script's `--dry-run` prints. The real one is not
+used here because it resolves the vault from its own `__file__`, and a CI test
+must not read the user's pantry.
+"""
+import sys
+
+if "--dry-run" not in sys.argv:
+    raise SystemExit("this stub only implements --dry-run")
+print("📦 {count} 项 · 💵 ${total:.2f} (2026-09-27 09:41)")
+'''
+
+
+@pytest.fixture
+def parity_vault(tmp_path: Path) -> Path:
+    """A vault holding a byte-identical copy of the frozen pantry note."""
+    vault = tmp_path / "parity-vault"
+    target = vault / "Logistics" / "库存" / "Pantry.md"
+    target.parent.mkdir(parents=True)
+    target.write_bytes(PANTRY_NOTE.read_bytes())
+    return vault
+
+
+def _stub_helper(tmp_path: Path, count: int, total: float) -> Path:
+    path = tmp_path / "pantry_snapshot_stub.py"
+    path.write_text(HELPER_STUB.format(count=count, total=total), encoding="utf-8")
+    return path
+
+
+def _run_stock(
+    *args: str, db: Path, vault: Path, helper: Path, out: Path
+) -> subprocess.CompletedProcess[str]:
+    return _run(
+        *args,
+        db=db,
+        out=out,
+        job="stock",
+        vault=vault,
+        helper=helper,
+        parity_out=out,
+    )
+
+
+def test_the_stock_job_refuses_to_freeze_when_the_two_implementations_disagree(
+    tmp_path: Path, db: Path, parity_vault: Path, out: Path
+) -> None:
+    """The load-bearing behaviour: disagreement blocks the write, not warns it.
+
+    The stub reports one cent less than the PWA computes. That is the smallest
+    possible divergence and the most likely to slip through a comparison with a
+    tolerance in it, which is why the tolerance is zero and why the refusal is
+    asserted on the *file* — the fixture must not exist afterwards, whatever the
+    exit code says.
+    """
+    helper = _stub_helper(tmp_path, 40, 166.89)
+    result = _run_stock("--regenerate", db=db, vault=parity_vault, helper=helper, out=out)
+    assert result.returncode == 1, result.stdout
+    assert "disagrees" in result.stderr
+    assert "$166.89" in result.stderr and "$166.90" in result.stderr
+    assert not out.exists(), "a parity break still wrote the fixture"
+
+
+def test_the_stock_job_agrees_and_freezes_both_sides(
+    tmp_path: Path, db: Path, parity_vault: Path, out: Path
+) -> None:
+    """Agreement writes a fixture recording *both* numbers and the note's sha256.
+
+    Both sides, not just this app's: the other implementation is not in this
+    repository's test suite, so the number it reported is the only surviving
+    record of what was compared against. The sha is what makes it comparable at
+    all — a total is a claim about particular bytes of a note that is edited from
+    Obsidian constantly.
+    """
+    helper = _stub_helper(tmp_path, 40, 166.90)
+    written_run = _run_stock("--regenerate", db=db, vault=parity_vault, helper=helper, out=out)
+    assert written_run.returncode == 0, written_run.stderr
+    written = json.loads(out.read_text(encoding="utf-8"))
+    assert (written["count"], written["total"], written["excludedParents"]) == (40, 166.9, 4)
+    assert (written["helperCount"], written["helperTotal"]) == (40, 166.9)
+    assert written["noteSha256"] == hashlib.sha256(PANTRY_NOTE.read_bytes()).hexdigest()
+    assert "40 项" in _run_stock(db=db, vault=parity_vault, helper=helper, out=out).stdout
+    # The second run, with no flags, must find nothing to do.
+    again = _run_stock(db=db, vault=parity_vault, helper=helper, out=out)
+    assert again.returncode == 0
+    assert "up to date" in again.stdout
+
+
+def test_the_stock_job_writes_nothing_by_default(
+    tmp_path: Path, db: Path, parity_vault: Path, out: Path
+) -> None:
+    """Same contract as the catalog job: the default mode compares and refuses."""
+    helper = _stub_helper(tmp_path, 40, 166.90)
+    result = _run_stock(db=db, vault=parity_vault, helper=helper, out=out)
+    assert result.returncode == 1, result.stdout
+    assert not out.exists()
+    assert "would write" in result.stderr
+
+
+def test_a_stray_stock_run_cannot_rewrite_the_committed_parity_fixture(
+    tmp_path: Path, db: Path, parity_vault: Path
+) -> None:
+    """The committed file is protected exactly as the catalog snapshot is.
+
+    A run that would change the committed bytes — and a *disagreeing* helper on
+    top of that, so the two guards are tested together — leaves the bytes alone.
+    """
+    committed = tmp_path / "committed.json"
+    committed.write_text(PARITY.read_text(encoding="utf-8"), encoding="utf-8")
+    before = committed.read_bytes()
+    disagreeing = _run_stock(
+        "--regenerate",
+        db=db,
+        vault=parity_vault,
+        helper=_stub_helper(tmp_path, 40, 1.0),
+        out=committed,
+    )
+    assert disagreeing.returncode == 1
+    assert committed.read_bytes() == before
+
+
+def test_the_stock_job_refuses_when_the_join_shape_moved(db: Path, parity_vault: Path) -> None:
+    """A five-row catalog makes the join's measured shape move, and that blocks too.
+
+    A second, independent gate on the same run: even with the money math agreed,
+    a regeneration that would move the pinned 3/40/2/0 tier split is a change to
+    every golden join expectation, and it has to be a reviewed edit.
+    """
+    small = _write_db(db.parent / "small2" / "pantry_items.db", _SEED)
+    helper = _stub_helper(db.parent, 40, 166.90)
+    target = db.parent / "nope.json"
+    result = _run(
+        "--regenerate",
+        db=small,
+        out=db.parent / "snapshot.json",
+        job="stock",
+        vault=parity_vault,
+        helper=helper,
+        parity_out=target,
+    )
+    assert result.returncode == 1, result.stdout
+    assert "stock join's measured shape moved" in result.stderr
+    assert not target.exists()
+
+
+def test_a_missing_source_is_an_error_for_the_named_job_and_a_notice_for_all(
+    module: Any, tmp_path: Path, db: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Asking for the stock job and not getting it is a failure; `all` degrades.
+
+    The asymmetry is deliberate. `--job stock` is a request to verify parity, and
+    answering "fine" without verifying anything would be the tool lying. The
+    default `all` sweep on a machine with no vault says so on stdout and
+    continues, because a hard failure there would only teach everyone to ignore
+    this script's output.
+
+    The `explicit=False` half calls the function rather than the CLI on purpose:
+    driving `all` end to end would run the catalog and recipes jobs first, and
+    those are gated on the real catalog and the real vault, so the property under
+    test would be somebody else's failure.
+    """
+    empty_vault = tmp_path / "no-vault"
+    empty_vault.mkdir()
+    out = tmp_path / "parity.json"
+    explicit = _run_stock(db=db, vault=empty_vault, helper=tmp_path / "absent.py", out=out)
+    assert explicit.returncode == 1
+    assert "no " in explicit.stderr and "skipping" not in explicit.stderr
+    assert not out.exists()
+
+    assert (
+        module.run_stock(
+            empty_vault,
+            tmp_path / "absent.py",
+            out,
+            regenerate=False,
+            explicit=False,
+            db_path=None,
+        )
+        == 0
+    )
+    assert "skipping the stock job" in capsys.readouterr().out
+
+
+def test_the_helper_is_run_with_dry_run_so_the_vault_snapshot_is_never_rewritten() -> None:
+    """`--dry-run` is the difference between a fixture tool and a writer.
+
+    The real `pantry_snapshot.py` without that flag rewrites
+    `Logistics/库存/Pantry 快照.md` in the user's vault. A regeneration tool must
+    never write to the vault, so the flag is asserted at the call site — parsed
+    rather than grepped, so the docstring cannot satisfy it by mentioning the
+    thing it forbids.
+    """
+    import ast
+
+    tree = ast.parse(SCRIPT.read_text(encoding="utf-8"))
+    constants = {
+        node.value for node in ast.walk(tree) if isinstance(node, ast.Constant)
+    }
+    assert "--dry-run" in constants, "the helper is invoked without --dry-run"
+    subprocess_calls = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and node.func.attr == "run"
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "subprocess"
+    ]
+    assert len(subprocess_calls) == 1, "a second subprocess call would need the same review"
+
+
+def test_the_committed_parity_fixture_matches_a_regeneration_of_the_frozen_note(
+    module: Any, tmp_path: Path, db: Path
+) -> None:
+    """`EXPECTED_STOCK_JOIN` cannot drift from the artifact it describes.
+
+    Same discipline as `test_the_scripts_expected_numbers_are_the_committed_
+    snapshots`: the pinned tier split is a function of the frozen note and the
+    frozen catalog, and recomputing it here means editing the constant without
+    re-measuring fails in CI rather than at the next real regeneration.
+    """
+    measured = module.measure_stock_join(PANTRY_NOTE, db)
+    assert measured == module.EXPECTED_STOCK_JOIN, module.measurement_drift(
+        measured, module.EXPECTED_STOCK_JOIN
+    )
+    # And the committed parity file agrees with the two implementations' figure.
+    record = json.loads(PARITY.read_text(encoding="utf-8"))
+    assert (record["count"], record["total"]) == (40, 166.9)

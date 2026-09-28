@@ -9,7 +9,14 @@ catalog is a lifetime purchase history with no consumption state, so a row
 existing there says nothing about stock — `红苋菜苗` (139) and `新鲜小叶茼蒿` (70)
 are both in the catalog and neither is currently held.
 
-`stock` does not exist yet. The Stock Join, `line_overrides.yaml`, and the
-per-unit `💵` money math belong to a later ticket, and nothing in this package
-should be read as a partial stock layer.
+`stock` is the other half: the live `Logistics/库存/Pantry.md` answers *"do I
+have it right now?"* and `stock.py` joins each open line to the catalog's
+rename-stable `pantry_item_id` through a three-tier normalized-name join
+(exact, basename, then the committed `line_overrides.yaml`). That join is
+deliberately weaker than the recipe→ingredient join and has no tier ladder or
+re-resolution pass, so a line it misses is absent from `in_stock_ids` and
+surfaces in its own `unjoined` bucket instead of being dropped silently. It also
+fails closed: a missing, unreadable, or unparseable pantry note raises rather
+than degrading to "nothing held", because the alternative deflate every chip on
+every recipe to a plausible-looking wrong answer.
 """

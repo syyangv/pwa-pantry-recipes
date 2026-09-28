@@ -66,7 +66,9 @@ app/auth.py          identity / Origin / CSRF / Host guards; CSRF token store
 app/pwa_version.py   VENDORED pwa-infra — do not edit
 app/db/              the owned SQLite layer: schema.sql, aiosqlite connect,
                      pragmas, numbered migrations (init_db)
-app/pantry/          the read-only PantryCatalog over pantry_items.db `items`
+app/pantry/          the read-only PantryCatalog over pantry_items.db `items`,
+                     plus PantryStockIndex: the live Pantry.md, the three-tier
+                     Stock Join, and line_overrides.yaml
 app/recipes/         the recipe index + note parser, the ingredient value
                      parser, the product-core normalizer, and lexicon/brands.yaml
 app/vault/           atomic_write (AtomicNoteStore), frontmatter, sections,
@@ -79,9 +81,10 @@ scripts/             the example LaunchAgent plist + generate_icons.py
 tests/conftest.py    tmp vault + tmp data dir + seeded pantry catalog
 tests/api/           the auth guards, the session contract, CSRF
 tests/db/            migrations and pragmas
-tests/pantry/        the catalog
+tests/pantry/        the catalog, the Stock Join, the per-unit money parity
 tests/recipes/       reader, ingredients, normalize, brand lexicon
-tests/vault/         atomic_write, frontmatter, sections, daily_paths
+tests/vault/         atomic_write, frontmatter, sections, daily_paths, the
+                     Pantry.md parser and the stock-facing line it feeds
 tests/scaffold/      the convergence gate, route table, static shell, icons
 tests/js/            node --test gates for the boot contract + SHELL_ASSETS
 tests/js/logic/      node --test gates for the three logic modules

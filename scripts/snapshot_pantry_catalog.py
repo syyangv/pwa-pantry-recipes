@@ -4,6 +4,7 @@
     .venv/bin/python scripts/snapshot_pantry_catalog.py --check          # the default
     .venv/bin/python scripts/snapshot_pantry_catalog.py --regenerate     # write, after review
     .venv/bin/python scripts/snapshot_pantry_catalog.py --job recipes    # one job only
+    .venv/bin/python scripts/snapshot_pantry_catalog.py --job stock      # the 💵 parity gate
 
 **Why the default writes nothing.** These fixtures are the CI anchor for the
 golden matcher test, and CI never runs this script. If a stray run could rewrite
@@ -47,6 +48,29 @@ of contents, which is *not* one of the 16 (`tests/recipes/test_reader.py` assert
 both halves). This script never deletes a committed note — a note the vault
 dropped is reported for a human to remove, not removed by a script.
 
+**The third job is the `💵` parity gate (F1), and it is the only one that reads
+both sides of a computation this app does not own.** The per-unit money math
+exists three times: the `existingPantryValue` dataviewjs in `Pantry.md`,
+`Helper/scripts/pantry_snapshot.py`, and `app.vault.pantry.untagged_inventory`.
+Only the third is in this repository's test suite, so `--job stock` computes the
+untagged, open, non-unit-parent total **twice** — once with the PWA's rule over
+the note's bytes, once by running `pantry_snapshot.py --dry-run` in a
+subprocess and parsing its `📦 N 项 · 💵 $X.XX` line — and **refuses to emit** a
+refreshed `tests/fixtures/pantry_stock_math_parity.json` when the two disagree.
+A parity break therefore blocks the regeneration instead of being merged
+silently, which is §13.16's stated and *procedural* mitigation: it is caught at
+regeneration time by a human, deliberately, and it is not caught automatically
+and will not be.
+
+That job is the one place in this script that shells out. It runs the helper
+with `sys.executable` and a `--dry-run` flag, from a caller-chosen path, and
+never writes to the vault: `pantry_snapshot.py` without `--dry-run` rewrites
+`Logistics/库存/Pantry 快照.md`, and passing the flag is the whole reason this is
+safe to run. The committed fixture records *both* sides' numbers and the note's
+sha256, so a later reader can see what was compared rather than only what this
+app believes. CI never runs this job — F14's rule applies to the live vault and
+the live `Helper/` script as much as to the live catalog.
+
 **Read-only on both inputs.** The catalog is opened through
 `app.pantry.catalog.open_read_only()`, the same `file:<path>?mode=ro` URI plus
 `PRAGMA query_only` the app itself uses, so a regeneration run cannot write the
@@ -68,9 +92,12 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import hashlib
 import json
 import os
+import re
 import shutil
+import subprocess
 import sys
 from collections.abc import Sequence
 from pathlib import Path
@@ -81,6 +108,8 @@ if str(_REPO_ROOT) not in sys.path:  # runnable as `python scripts/…` from any
     sys.path.insert(0, str(_REPO_ROOT))
 
 from app.pantry.catalog import build_snapshot, open_read_only  # noqa: E402
+from app.pantry.stock import is_unit_row, join_stock  # noqa: E402
+from app.vault.pantry import parse_pantry, untagged_inventory  # noqa: E402
 
 #: The two frozen inputs and their live sources' defaults. `PANTRY_ITEMS_DB` and
 #: `OBSIDIAN_VAULT_PATH` override the producer default, so a machine that keeps
@@ -96,6 +125,35 @@ DEFAULT_RECIPES_ROOT: Final = os.environ.get("RECIPES_ROOT") or "Hobbies/做饭/
 
 SNAPSHOT_PATH: Final = _REPO_ROOT / "tests" / "fixtures" / "pantry_items_snapshot.json"
 RECIPES_FIXTURE_DIR: Final = _REPO_ROOT / "tests" / "fixtures" / "real_recipes"
+#: F1's third frozen input: the agreed per-unit money total, and the two
+#: implementations it was agreed between.
+PARITY_PATH: Final = _REPO_ROOT / "tests" / "fixtures" / "pantry_stock_math_parity.json"
+
+#: The vault-relative pantry note — the app's own `PANTRY_NOTE_RELATIVE`
+#: default, repeated here so a regeneration run does not depend on this
+#: repository's own `Settings` (which would need a full environment to build).
+PANTRY_NOTE_RELATIVE: Final = "Logistics/库存/Pantry.md"
+#: The sibling implementation of the same `💵` math.
+DEFAULT_HELPER: Final = DEFAULT_VAULT / "Helper" / "scripts" / "pantry_snapshot.py"
+#: `pantry_snapshot.py --dry-run` prints `📦 40 项 · 💵 $166.90 (2026-09-27 09:41)`.
+#: Only the count and the amount are read; the trailing timestamp is the
+#: snapshot's own clock and would make the output non-reproducible if pinned.
+HELPER_OUTPUT: Final = re.compile(r"(\d+)\s*项\s*·\s*💵\s*\$([\d,]+\.\d{2})")
+
+#: The Stock Join's measured shape on the same note, as of this commit. Same
+#: discipline as `EXPECTED_*` above, for the same reason: a re-import or a
+#: normalizer change that moves a golden expectation has to be a deliberate,
+#: reviewed edit. 50 listed rows, 5 of them bare `k/N` units, so 45 product
+#: lines: 3 exact, 40 basename, 2 override, 0 unresolved.
+EXPECTED_STOCK_JOIN: Final[dict[str, int]] = {
+    "listedRows": 50,
+    "unitRows": 5,
+    "lineCount": 45,
+    "exactTier": 3,
+    "basenameTier": 40,
+    "overrideTier": 2,
+    "unjoined": 0,
+}
 
 #: The five columns, in the order `_SELECT_ITEMS` projects them. Everything the
 #: snapshot freezes is here, which is also exactly what `catalog_revision` hashes.
@@ -410,6 +468,205 @@ def run_recipes(vault: Path, recipes_root: str, out_dir: Path, *, regenerate: bo
     return 1 if any("absent from the vault" in problem for problem in problems) else 0
 
 
+# --- the stock job: F1's per-unit 💵 parity gate ----------------------------
+
+
+def pwa_stock_figure(note: Path) -> tuple[int, float, int]:
+    """`(count, total, excluded_parents)` from the PWA's own rule.
+
+    `untagged_inventory()` is the one implementation in this repository, and
+    `tests/pantry/test_stock_math.py` pins its three shape cases. Reading it
+    through the public parser rather than re-deriving the arithmetic is the
+    point: a second copy of the math in this script would be a third thing to
+    keep in parity, and the whole job exists to compare *two* sides, not three.
+    """
+    figure = untagged_inventory(parse_pantry(note.read_bytes()))
+    return figure.count, figure.total, figure.excluded_parents
+
+
+def helper_stock_figure(helper: Path) -> tuple[int, float]:
+    """`(count, total)` from `pantry_snapshot.py --dry-run`, in a subprocess.
+
+    The helper reaches into the vault by absolute path derived from its own
+    location, so it is *run* rather than imported — importing it would execute
+    nothing useful and re-implementing its `compute()` would make the comparison
+    meaningless (a copy of the thing it is checking proves nothing). `--dry-run`
+    is not optional here: without it the script rewrites
+    `Logistics/库存/Pantry 快照.md`, and a fixture-regeneration tool must never
+    write to the vault.
+    """
+    result = subprocess.run(
+        [sys.executable, str(helper), "--dry-run"],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"{helper} --dry-run exited {result.returncode}: {result.stderr.strip()}"
+        )
+    found = HELPER_OUTPUT.search(result.stdout)
+    if found is None:
+        raise RuntimeError(f"could not read a figure out of {helper}: {result.stdout.strip()!r}")
+    return int(found.group(1)), float(found.group(2).replace(",", ""))
+
+
+def encode_parity(
+    note: Path,
+    count: int,
+    total: float,
+    excluded_parents: int,
+    helper: tuple[int, float],
+    helper_label: str,
+) -> str:
+    """The parity fixture, with **both** sides recorded and the note pinned.
+
+    `noteSha256` is what makes the fixture mean something later: a total is only
+    comparable against the bytes it came from, and the note is edited constantly
+    from Obsidian. `helperPath` is recorded vault-relative so a reader knows
+    which of the two other implementations was run.
+    """
+    payload = {
+        "generatedFrom": PANTRY_NOTE_RELATIVE,
+        "noteSha256": hashlib.sha256(note.read_bytes()).hexdigest(),
+        "count": count,
+        "total": round(total, 2),
+        "excludedParents": excluded_parents,
+        "helperPath": helper_label,
+        "helperCount": helper[0],
+        "helperTotal": round(helper[1], 2),
+    }
+    return json.dumps(payload, ensure_ascii=False, indent=2, sort_keys=True) + "\n"
+
+
+def _is_within(path: Path, root: Path) -> bool:
+    return path == root or root in path.parents
+
+
+def _render_source(path: Path, *roots: Path) -> str:
+    """A path as the shortest of `roots` that contains it, else as it is.
+
+    A regeneration run on the developer's own machine must not write their
+    absolute home directory into a committed fixture. The vault is tried first
+    because `Helper/scripts/pantry_snapshot.py` is the meaningful name there,
+    and the repo second so a path into this checkout still reads as relative.
+    """
+    for root in roots:
+        if _is_within(path, root):
+            return str(path.relative_to(root))
+    return str(path)
+
+
+def run_stock(
+    vault: Path,
+    helper: Path,
+    out_path: Path,
+    *,
+    regenerate: bool,
+    explicit: bool,
+    db_path: Path | None = None,
+) -> int:
+    """Verify parity, then freeze — or refuse to freeze — the money figure."""
+    note = vault / PANTRY_NOTE_RELATIVE
+    print(f"stock source: {note}")
+    print(f"parity other side: {helper}")
+    for source in (note, helper):
+        if not source.is_file():
+            message = f"no {source} to compare against"
+            if explicit:
+                # Asked for this job by name and it cannot run: that is an
+                # error, not a skip. Answering "fine" would make `--job stock`
+                # look like it verified something.
+                print(f"{message}; set OBSIDIAN_VAULT_PATH / --helper", file=sys.stderr)
+                return 1
+            # Part of the default `all` sweep on a machine that has no vault:
+            # a notice, because a hard failure here would train everyone to
+            # stop reading this tool's output.
+            print(f"{message}; skipping the stock job (pass --job stock to require it)")
+            return 0
+
+    count, total, excluded_parents = pwa_stock_figure(note)
+    mine = (count, round(total, 2))
+    theirs = helper_stock_figure(helper)
+    theirs = (theirs[0], round(theirs[1], 2))
+    print(
+        f"  PWA:            {mine[0]} 项 · 💵 ${mine[1]:.2f}"
+        f"  (excluded parents {excluded_parents})"
+    )
+    print(f"  pantry_snapshot: {theirs[0]} 项 · 💵 ${theirs[1]:.2f}")
+
+    if db_path is not None and db_path.is_file():
+        measured = measure_stock_join(note, db_path)
+        print("  stock join measured:")
+        for key, value in measured.items():
+            print(f"    {key} = {value}")
+        if measured != EXPECTED_STOCK_JOIN:
+            print(
+                "the stock join's measured shape moved; refusing to freeze: update "
+                "EXPECTED_STOCK_JOIN and the golden tests in the same commit",
+                file=sys.stderr,
+            )
+            return 1
+
+    if mine != theirs:
+        print(
+            "the per-unit 💵 math disagrees between this app and pantry_snapshot.py; "
+            "refusing to freeze a figure that is not agreed",
+            file=sys.stderr,
+        )
+        print(f"  PWA: {mine[0]} 项 · ${mine[1]:.2f}", file=sys.stderr)
+        print(f"  helper: {theirs[0]} 项 · ${theirs[1]:.2f}", file=sys.stderr)
+        return 1
+
+    candidate = encode_parity(
+        note, count, total, excluded_parents, theirs, _render_source(helper, vault, _REPO_ROOT)
+    )
+    committed = out_path.read_text(encoding="utf-8") if out_path.is_file() else None
+    print(f"diff {out_path}:")
+    for line in unified(committed, candidate):
+        print(f"  {line}")
+    print()
+    if not regenerate:
+        if committed == candidate:
+            print("up to date; nothing to do (pass --regenerate to write)")
+            return 0
+        print("would write; pass --regenerate to do it", file=sys.stderr)
+        return 1
+    if committed == candidate:
+        print("up to date; wrote nothing")
+        return 0
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(candidate, encoding="utf-8")
+    print(f"wrote {out_path} ({mine[0]} 项 · ${mine[1]:.2f}, agreed with {helper.name})")
+    return 0
+
+
+def measure_stock_join(note: Path, db_path: Path) -> dict[str, int]:
+    """The Stock Join's measured shape on `note`, as data.
+
+    The other thing a regeneration has to re-derive: whether the join still
+    carries the note the way this commit's golden test says it does. A new
+    catalog row, a lexicon change, or a normalizer change can all move those
+    numbers without anything being wrong, which is exactly why they are literals
+    a maintainer updates in the same commit as the tests.
+    """
+    catalog = build_snapshot(read_items(db_path))
+    sections = parse_pantry(note.read_bytes()).sections
+    join = join_stock(catalog, sections)
+    return {
+        "listedRows": sum(len(section.items) for section in sections),
+        "unitRows": sum(
+            1 for section in sections for item in section.items if is_unit_row(item.text)
+        ),
+        "lineCount": join.line_count,
+        "exactTier": join.exact_tier_count,
+        "basenameTier": join.basename_tier_count,
+        "overrideTier": join.override_tier_count,
+        "unjoined": join.unjoined_count,
+    }
+
+
 # --- the CLI ----------------------------------------------------------------
 
 
@@ -433,9 +690,9 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--job",
-        choices=("all", "catalog", "recipes"),
+        choices=("all", "catalog", "recipes", "stock"),
         default="all",
-        help="which frozen input to work on (default: both)",
+        help="which frozen input to work on (default: all three)",
     )
     parser.add_argument(
         "--db",
@@ -448,6 +705,18 @@ def main(argv: list[str] | None = None) -> int:
         type=Path,
         default=SNAPSHOT_PATH,
         help="the snapshot file to compare against / write",
+    )
+    parser.add_argument(
+        "--parity-out",
+        type=Path,
+        default=PARITY_PATH,
+        help="the frozen per-unit money parity file to compare against / write",
+    )
+    parser.add_argument(
+        "--helper",
+        type=Path,
+        default=DEFAULT_HELPER,
+        help="the sibling pantry_snapshot.py the 💵 math is compared against",
     )
     parser.add_argument(
         "--vault",
@@ -489,6 +758,18 @@ def main(argv: list[str] | None = None) -> int:
     if args.job in ("all", "recipes"):
         status = run_recipes(
             args.vault, args.recipes_root, args.recipes_out, regenerate=args.regenerate
+        )
+        if status:
+            return status
+
+    if args.job in ("all", "stock"):
+        status = run_stock(
+            args.vault,
+            args.helper,
+            args.parity_out,
+            regenerate=args.regenerate,
+            explicit=args.job == "stock",
+            db_path=args.db,
         )
         if status:
             return status
