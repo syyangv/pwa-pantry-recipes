@@ -3,18 +3,24 @@
 > **Status (2026-09-28): the deploy was authorized in-session and executed.**
 > `install_launchagent.sh --apply --bootstrap` has been run and
 > `com.syang.pwa-pantry-recipes` is `state = running`; the Serve route on `:8452`
-> exists and proxies to `127.0.0.1:8007`. Two things are still open and are not
-> cosmetic: the converge gate **exits 3** when run from the serving host (§7b),
-> and the participant-identity validation in §8 is **not done** — it has **never
-> been performed**. Read both before describing this deploy as verified.
-> Rollback is unchanged and is at the end of each section.
+> exists and proxies to `127.0.0.1:8007`. One thing is still open and is not
+> cosmetic: the converge gate **exits 3** when run from the serving host (§9b),
+> and the participant-identity validation in §8 has since been performed **on
+> the user's attestation** — a phone (`mieiphone`, `syyangv@`) loaded the app
+> through the proxy on 2026-09-28. It is a **user report, not a
+> machine-verified result**; §8 records its provenance and its limits in full.
+> Read both before describing this deploy as verified.
 >
 > **Exit 3 is not a pass and does not mean the deploy is broken.** It is the
-> gate's new, separate answer for "this condition could not be evaluated from
-> the machine I am standing on". Every request this deploy has ever made over
-> the network was **refused**: the deployed origin has so far only ever been
-> observed *failing closed*, and no observer has seen an authenticated 200
-> through the proxy.
+> gate's separate answer for "this condition could not be evaluated from the
+> machine I am standing on", and from the serving node it is the **correct and
+> permanent** answer. Every request the *gate* makes over the network is
+> **refused**, because a self-originated request has no remote peer for Serve to
+> attribute an identity to: the deployed origin has only ever been observed
+> *failing closed* **from this vantage point**. That is now not the whole story —
+> one authenticated 200 has been seen, by the user, from a phone.
+>
+> Rollback is unchanged and is at the end of each section.
 
 The plan itself is `docs/spec/2026-09-27-pantry-recipes.md` §12 and
 `~/projects/pwa-template/docs/pwa-template.md` §1a, §1c, §1d, §3e. This runbook
@@ -27,7 +33,7 @@ create a half-deployed state, and the reason each one is where it is.
 |---|---|
 | `scripts/pwa-pantry-recipes.example.plist` | A template, and the source of the installed plist. Renders, lints, and is asserted against `app/config.py` by `tests/deploy/test_launchagent_template.py`. Rendered by the installer, not installed by hand. |
 | `scripts/install_launchagent.sh` | Three stages. **All three have been run** (2026-09-28), the third under explicit in-session authorization. |
-| `scripts/converge_gate.py` | The release gate. Runs against a live service; verified in full against a loopback dev server and proved able to fail on all nine conditions. **Exits 3 against the deployed pair from the serving host — see §7b.** |
+| `scripts/converge_gate.py` | The release gate. Runs against a live service; verified in full against a loopback dev server and proved able to fail on all nine conditions. **Exits 3 against the deployed pair from the serving host — see §9b.** |
 | `scripts/converge-smoke.json` | The release-specific half of gate condition 4. Edited every release. |
 | `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` | **Installed** 2026-09-28. |
 | `com.syang.pwa-pantry-recipes` in `launchctl` | **Loaded**, `state = running`. |
@@ -323,41 +329,92 @@ to the release that carries those changes, and that is what `a303d4a` is:
 `fb2577e`, not `a303d4a`. Both rotations are history; the live value is
 `v0.7.1`.)
 
-## 8. Validation from a participant identity — the closing step, **NEVER DONE**
+## 8. Validation from a participant identity — origin check done, user-attested
 
-**This check has never been performed. It is not done, not deferred, and not
-approximated.** Nothing in this repository should be read as evidence that an
-authenticated request through the Tailscale Serve proxy has ever succeeded,
-because no such request has ever succeeded here. Every network request the
-2026-09-28 deploy made was **refused** — the deployed origin has only ever been
-observed *failing closed*.
+**Provenance, stated first because it decides how much this section is worth.**
+The check below was performed by **the user**, on a phone, on 2026-09-28. It was
+**not** observed by the agent that wrote this entry, and it was **not** observed
+by any tool, script, gate run, or test in this repository. There is no log line,
+no captured response, and no exit code behind it. It is a **user attestation**:
+a person opened a URL on a device and reported what they saw. Nothing in this
+repository should be read as machine-verifying it, and it is recorded here as
+exactly what it is — one human report, uncorroborated by instrumentation.
 
-It is the last step of the release sequence and it is the only one that
-exercises the identity chain past the proxy. Conditions 0–1 and the local halves
-of 2–8 run from a shell on the serving host; §7b's `VANTAGE-LIMITED` result is
-what remains when the rest of the sequence is done from the wrong vantage point.
-This section is the only thing that can clear it, and **no loopback or desktop
-check substitutes for it**: the host's own browser shares the host's tailnet
-position and its loopback, which is exactly what §8 rules out.
+| Field | Value |
+|---|---|
+| Performed by | **the user** (attestation, not an agent or a tool) |
+| Date | 2026-09-28 |
+| Device | `mieiphone` |
+| Tailnet identity | `syyangv@` |
+| Tailnet address | `100.99.212.85` |
+| URL opened | `https://home-macbook-air.tailcd6e49.ts.net:8452` |
+| Reported result | **"the app loads"** |
 
-What remains to be done, from a phone off the host's network:
+**The report is exactly that, and the record does not grow it.** The user
+reported that the app loads. They did **not** report a displayed PWA version or
+`CACHE_VERSION`, a headline `n/total`, a chip tier, a recipe count, a
+`stockJoinState`, or any particular rendered value. None of those may be inferred
+from "it loads", and none is claimed here.
 
-- the PWA origin `:8452` **succeeds** (this exercises the whole injected-identity
-  chain, which nothing so far has);
-- unrelated HTTPS ports (8443, 8445–8451) **fail**;
-- SSH **fails**.
+**What that does establish.** It establishes the positive half of this section:
+an authenticated request through the Tailscale Serve proxy **succeeded**. That is
+the fact this section was written for, and until now nothing had ever
+established it — every network request in the deploy session had been *refused*,
+so the deployed origin had only ever been observed **failing closed**. The
+distinction is load-bearing, because a `401 identity_missing` cannot render the
+app: for the app to load at all, the proxy must have injected a `Tailscale-User-Login`
+the backend accepted, which is precisely the injected-identity chain §8 exists to
+exercise. The deployed origin is therefore no longer known only by its refusals.
 
-Then, and only then, re-run the gate from that host so conditions 2–8 are
-evaluated rather than `VANTAGE-LIMITED`, and record the exit code here.
+**What it does not establish — and the gate's own answer is unchanged.** "The app
+loads" is a statement about reachability and identity, not about *convergence*.
+It does not show that the deployed `sw.js` carries the current `CACHE_VERSION`,
+that the deployed shell references the versioned assets, or that the deployed
+`/api/version` agrees with the local one, and it is not the gate re-run this
+section asks for at the end. So conditions **2, 4, 5, 6, 7 and 8** — and the
+deployed half of **3** — are still not evaluated, the gate still reports seven
+`VANTAGE-LIMITED` conditions, and the gate still **exits 3**.
 
-The tailnet has online phones logged in as `syyangv@` (`mieiphone`,
-`100.99.212.85`), which is the identity the deployed `TAILSCALE_OWNER_LOGIN`
-expects, so the check is finishable by the user in one step from a phone. It was
-not finishable from a shell on the serving host, and it was not done.
+**Still outstanding from this section's original list.** Two of the three
+original items were negative checks and are **not** covered by what was
+reported, and are recorded as still unperformed rather than assumed:
 
-**Recorded state: NOT PERFORMED.** Until it is, the deploy is unverified on its
-success path, and `VANTAGE-LIMITED` in a gate run is a statement about the
-observer rather than a statement about the deploy.
+- unrelated HTTPS ports (8443, 8445–8451) **fail** — not checked;
+- SSH **fails** — not checked.
+
+Both are worth doing and neither is implied by the app loading. The positive
+check is the one that could not be done from the serving host; these two can be,
+and they are cheap.
+
+### Why the gate exits 3 here, permanently, and why that is the correct answer
+
+**This is the one verification the gate structurally cannot perform, and no
+amount of re-running it from this machine will change that.** The gate runs **on
+the serving node**. Tailscale Serve attributes an identity to a **remote peer**;
+a request that originates from the node doing the serving has **no remote peer to
+attribute it to**, so the proxy injects nothing and the backend correctly answers
+`401 identity_missing` (see §9b for the four-row evidence, including the row that
+settles it — sending the *correct* identity changes nothing, so the header is not
+being rejected, it is not arriving). The deployed half of every condition that
+consults the origin is therefore **unobservable from where the gate stands**.
+
+**Exit 3 is the correct permanent answer for this single-node deploy topology.
+It is a fact about the topology, not a defect to clear.** The alternatives are
+both worse, and deliberately so: collapsing 3 into 0 would assert a convergence
+that nobody observed, and collapsing it into 2 would file an unfixable-from-here
+problem under the one exit code whose documented remedy is "pass the flag".
+Getting from 3 to 0 requires **a different machine** — a phone on the tailnet,
+running the gate — not a different argument. On a single-node Serve deployment
+there is no configuration that produces 0, and an engineer who reads exit 3 as
+"still broken" will go looking for a bug that is not there.
+
+So the durable state is: **the release is deployed and reachable, the
+participant-identity check passed on the user's attestation, and `exit 3` from the
+serving node is the correct and permanent answer.** The gate's verdict and this
+section's result are not in conflict; they are answers to two different questions,
+and §9b's point that `VANTAGE-LIMITED` is a statement about the observer rather
+than about the deploy is the whole of it.
+
 
 ## 9. Where the auth posture stops
 
@@ -383,8 +440,8 @@ service, that flag is the only gate between a mutation and the vault.
 
 **The gate has two origins, and the deployed one is not observable from here.**
 Conditions 2–8 are `VANTAGE-LIMITED` and the run exits 3: they were evaluated,
-and the deployed origin refused every identity the gate can present. See §7b for
-the detection and §9b for the evidence.
+and the deployed origin refused every identity the gate can present. See §9b for
+the detection and the evidence.
 
 ## 9b. Why the gate exits 3 from the serving host
 
@@ -539,14 +596,24 @@ expecting the wrong posture.
 `app/auth.py` is real and it wraps every response. The identity, Origin, CSRF,
 Host, content-type and body-size guards are shipped, tested, installed and
 running. What was authorized and done: `bootstrap` started the service and
-`tailscale serve` put it on a tailnet-only surface. What is **not** done is
-`§8`'s participant-identity validation, which means the deploy has only ever been
-observed **failing closed** — every request made over the network in the deploy
-session was refused. That is the safe direction to be wrong in, and it is still
-being wrong in it. The decision that remains the user's is whether to complete
-§8 from a phone, which is the only thing left that would let conditions 2–8 be
-evaluated against a real second origin, and which is the only thing that could
-turn a `VANTAGE-LIMITED` run into a `CONVERGED` one.
+`tailscale serve` put it on a tailnet-only surface.
+
+**§8's participant-identity check has since been performed, on the user's
+attestation** (2026-09-28, `mieiphone`, `syyangv@`, `100.99.212.85`, `:8452`):
+the app loads, so the injected-identity chain works through the proxy. It is a
+**user report, not a machine-verified result** — no tool in this repo observed
+it, and §8 records its provenance and its limits in full. The deploy is therefore
+no longer known **only** by its refusals: an authenticated request through Serve
+has succeeded once, on a phone.
+
+**`VANTAGE-LIMITED` is still the correct and permanent verdict from this host,
+and it is not a remaining defect.** Conditions 2, 4–8 and the deployed half of 3
+are unobservable from the serving node, so the gate exits 3, and no change to
+this single-node topology changes that — it needs a *different machine*, not a
+different argument (§8). What remains genuinely open to the user is narrow and
+is listed in §8: the two negative checks (unrelated HTTPS ports and SSH must
+fail), and — if a `CONVERGED` line is ever wanted in a log — running the gate
+itself from the phone.
 
 Two ledger facts changed in the port-manager repo on 2026-09-28 (`ebb7291`) and
 are recorded here so this runbook is not the only place they are written down:

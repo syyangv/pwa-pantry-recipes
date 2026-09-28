@@ -93,8 +93,14 @@ That is the honest answer and it is not a pass: Tailscale Serve injects no
 identity for a request that originates from the node doing the serving, so the
 deployed origin refuses the correct owner login exactly as it refuses a forged
 one, and conditions 2-8 report `VANTAGE-LIMITED` with the request that would
-settle them. The deploy's success path has still never been observed; see
-`docs/runbook/deployment.md` §8.
+settle them. **3 is the correct and permanent answer for a single-node deploy**,
+not a defect to clear — reaching 0 needs a *different machine*, not a different
+argument. The user has separately reported, from a phone, that the app loads
+through the proxy, so the deploy's success path is not wholly unobserved; but
+that is a **user attestation, no gate or tool observed it**, it is a different
+observer on a different machine, and it says nothing about the deployed
+`CACHE_VERSION`, assets or timestamps — so it does not move this gate off 3.
+See `docs/runbook/deployment.md` §8.
 
 `--no-listener-check` exists for a pre-`kickstart` run, where the honest answer
 is "the new code is not running yet", not "the listener is missing".

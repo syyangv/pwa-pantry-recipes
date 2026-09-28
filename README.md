@@ -23,14 +23,17 @@ note.
 > serving host (conditions 2–8 come back `VANTAGE-LIMITED`, because Serve
 > attributes no identity to a self-originated request and the deployed origin
 > therefore answers `401 identity_missing` to every identity the gate can
-> present), and the runbook's **participant-identity check has never been
-> performed** — it needs a phone, and so no observer has ever seen an
-> authenticated 200 from the deployed origin.
-> Every request this deploy made over the network was refused, so the deployed
-> origin has only ever been observed **failing closed**. That is the safe
-> direction to be wrong in. See [Deployment](#deployment) and
-> [`docs/runbook/deployment.md`](docs/runbook/deployment.md); both gaps are
-> stated in [What does not work yet](#what-does-not-work-yet).
+> present). The runbook's **participant-identity check has been performed** — a
+> phone (`mieiphone`, `syyangv@`, `100.99.212.85`) loaded the app through the
+> proxy on 2026-09-28 — but it is a **user attestation, not a machine-verified
+> result**: no tool in this repo observed it, and it establishes reachability
+> and identity, not convergence. Every request **the gate** makes over the
+> network is still refused, so from the serving node the deployed origin is
+> still only ever observed **failing closed** and the gate still exits 3, which
+> is the correct and permanent answer for a single-node deploy. See
+> [Deployment](#deployment) and
+> [`docs/runbook/deployment.md`](docs/runbook/deployment.md); what remains open
+> is in [What does not work yet](#what-does-not-work-yet).
 
 ## Architecture
 
@@ -337,24 +340,28 @@ can check against the tree, not as a claim about intent.
   The fix is to run the gate from a host that is not the serving node. What must
   not happen is what was available and was refused: passing `--baseline`, or
   editing a condition to agree.
-- **The participant-identity check has NEVER been performed — this is the real
-  remaining gap.** `docs/runbook/deployment.md` §8 requires a phone off the
-  host's own network: the PWA port succeeds, unrelated HTTPS ports fail, SSH
-  fails. The deploy session had no phone reachable from it, so this was not done
-  and is recorded as not done rather than approximated. Consequently **no
-  observer has ever seen an authenticated 200 from the deployed origin**, and
-  the whole identity chain past the proxy is unexercised. A loopback check does
-  not substitute: it shares the host's tailnet position and its loopback, which
-  is the exact thing §8 rules out. The tailnet does contain online phones
-  (`mieiphone`, `100.99.212.85`, logged in as `syyangv@`), so this is finishable
-  in one step by the user from a phone — it was not finishable from a shell.
-- **The deployed service has only ever been observed failing closed.** Every
-  request this deploy made over the network was refused, which is the safe
-  direction, but it means the success path — a participant opening the PWA and
-  getting data — is unverified. A `VANTAGE-LIMITED` run is a statement about
-  the *observer*, never a statement that the deploy is fine. Loopback with the owner login does return `200`
-  with a full `/health` payload (vault readable, `pantry_items.db` 178 rows, 16
-  recipes), so the app is healthy; it is the *exposed* surface that is unproven.
+- **The participant-identity check has been performed, on the user's
+  attestation — and two of its three items are still open.**
+  `docs/runbook/deployment.md` §8 asked for a phone off the host's own network:
+  the PWA port succeeds, unrelated HTTPS ports fail, SSH fails. On 2026-09-28
+  the user did the first from `mieiphone` (`syyangv@`, `100.99.212.85`) and
+  reported that **the app loads**, so the identity chain past the proxy is now
+  exercised once and an authenticated 200 has been seen. This is a **user report,
+  not a machine-verified result** — no tool here observed it — and it establishes
+  reachability and identity, not convergence. The two negative checks (unrelated
+  HTTPS ports, SSH) were not part of what was reported and are still open. A
+  loopback check still does not substitute for the positive one: it shares the
+  host's tailnet position and its loopback, which is the exact thing §8 rules out.
+- **The deployed service has only ever been observed failing closed *by the
+  gate*.** Every request the gate made over the network was refused, because a
+  self-originated request has no remote peer for Serve to attribute an identity
+  to — which is also why the gate exits 3, permanently, from this host. The one
+  authenticated success came from a different observer on a different machine. A
+  `VANTAGE-LIMITED` run is a statement about the *observer*, never a statement
+  that the deploy is fine. Loopback with the owner login does return `200` with a
+  full `/health` payload (vault readable, `pantry_items.db` 178 rows, 16 recipes),
+  so the app is healthy; it is the *converged exposed* surface that remains
+  unobserved by machine.
 - **`scripts/converge-smoke.json` is a one-release artifact.** It is populated for
   v0.6.0 and nothing rewrites it. A release that forgets to edit it asserts that
   *last* release's fields still exist, which is weaker than it looks; the gate
