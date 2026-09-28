@@ -14,8 +14,10 @@
          script, so the shell stays CSP-clean. -->
     <meta name="app-version" content="__APP_VERSION__">
     <link rel="manifest" href="/manifest.webmanifest">
-    <!-- iOS Home Screen metadata. /icons/ is a placeholder in this scaffold;
-         the real icon-180-apple.png must be generated before installing. -->
+    <!-- iOS Home Screen metadata. icon-180-apple.png is committed and generated
+         by scripts/generate_icons.py; it is unversioned, so a later icon change
+         needs the Home Screen app removed and re-added (iOS caches manifest
+         metadata longer than page content). -->
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">

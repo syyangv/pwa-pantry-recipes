@@ -77,6 +77,10 @@ jobs:
               "app/static/js/main.js",
               "app/static/js/pwa/update-manager.js",
               "app/static/js/pwa/waking-banner.js",
+              "app/static/icons/icon-192.png",
+              "app/static/icons/icon-512.png",
+              "app/static/icons/icon-monochrome-512.png",
+              "app/static/icons/icon-180-apple.png",
           ]
           missing = [name for name in required if name not in names]
           assert not missing, missing
