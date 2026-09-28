@@ -317,12 +317,38 @@ response key and an un-rotated `CACHE_VERSION` all still `FAIL` and still exit
 `1`. `tests/deploy/test_converge_gate_vantage.py` asserts those four inside an
 already-vantage-limited world.
 
-**The release sequence is:** bump `CACHE_VERSION` → add new static files to
-`SHELL_ASSETS` → **edit `scripts/converge-smoke.json`** → commit → push →
-`launchctl kickstart -k gui/$(id -u)/com.syang.pwa-pantry-recipes` → verify
-`/api/version` matches `CACHE_VERSION` and the `X-PWA-Backend-Started-At` header
-is newer than every changed startup-loaded file → only then reinstall the Home
-Screen PWA (iOS caches manifest metadata longer than page content).
+**The release sequence is:** bump `CACHE_VERSION` **in the same commit as the
+`app/static/**` change it belongs to** (one constant, one line — never a
+per-file `?v=` sweep; the reason is `pwa-wardrobe` PR `0fe6c1a`, which shipped a
+static change unrotated and left the user on the old UI with a green build) → add
+new static files to `SHELL_ASSETS` → **edit `scripts/converge-smoke.json`** →
+commit → push → `launchctl kickstart -k gui/$(id -u)/com.syang.pwa-pantry-recipes`
+→ run **both** release checks below → only then reinstall the Home Screen PWA
+(iOS caches manifest metadata longer than page content).
+
+**Two release checks, and the order matters.** The **floor** is the fleet-wide
+standard, `pwa-template/scripts/release_check.py` (pwa-template §3b.1), invoked
+by path the way the pre-commit hook invokes `vendor.py` — it verifies
+source/local/deployed versions, the `no-store` contract on `/api/version`, shell
+asset pins, precache entries, manifest icons, and one
+`X-PWA-Backend-Started-At` across origins:
+
+```bash
+python3 ~/projects/pwa-template/scripts/release_check.py \
+  --project . --local-origin http://127.0.0.1:8007 \
+  --header 'Tailscale-User-Login: syyangv@github' \
+  --shell-pin /css/styles.css --shell-pin /js/main.js \
+  --precache-entry /manifest.webmanifest --health-path /health --local-only
+```
+
+The **ceiling** is `scripts/converge_gate.py`, which adds what the shared script
+deliberately does not: cache-rotation (a static change with no rotation fails the
+deploy), `SHELL_ASSETS`-vs-shell completeness, resume-trigger and busy-guard
+checks, the release smoke file, and `classify_vantage`. The shared script reports
+this repo's Tailscale 401 as a plain failure because it cannot tell "refused
+because of my vantage" from "broken deploy"; `converge_gate.py` detects that and
+answers `VANTAGE-LIMITED`, exit `3`. Both exit-code contracts: `0` converged, `1`
+a real failure, `2` under-specified — and **`2` and `3` are not soft passes.**
 
 `kickstart -k` is for a **code** change. A plist edit needs `launchctl bootout`
 followed by `launchctl bootstrap`; a kickstart re-reads the binary and ignores
@@ -331,8 +357,8 @@ settings running and reports success. After any restart, prove the listener with
 `port_manager.py inspect 8007` — `launchctl print` showing `state = running`
 proves a process is alive, not that the socket is listening.
 
-**The converge gate is `scripts/converge_gate.py`, and it is the release check,
-not a checklist.** Eleven checks — the ten numbered conditions `0`–`9` plus the
+**The converge gate is `scripts/converge_gate.py`, and it is the ceiling, not a
+checklist.** Eleven checks — the ten numbered conditions `0`–`9` plus the
 `0b` identity precondition — stdlib-only, and four exit codes of which
 **only `0` is a pass**: `0` converged · `1` a real failure · `2` a condition
 could not be evaluated because the invocation was under-specified (a missing
