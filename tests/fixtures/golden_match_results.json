@@ -1,0 +1,2199 @@
+{
+  "generatedAt": "2026-09-28",
+  "generatedFrom": {
+    "candidateRows": 176,
+    "catalogRows": 178,
+    "catalogSnapshot": "tests/fixtures/pantry_items_snapshot.json",
+    "realRecipes": "tests/fixtures/real_recipes"
+  },
+  "recipes": {
+    "Easy Fragrant Fried Rice": {
+      "allMaterialsResolved": false,
+      "duplicateMaterialItemIds": [],
+      "headline": "1/4 ingredients found — missing: 鸡蛋, 包菜, 米饭",
+      "headlineStrict": "6/10 ingredients found — missing: 鸡蛋, 包菜, 米饭   (严格模式（含调料）: 青柠)",
+      "materials": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "Cascadian Farm Broccoli Florets Organic, 10 Oz",
+              "family": "1.2",
+              "pantryCategory": "1.2",
+              "pantryItemId": 14,
+              "reason": "matched",
+              "rejectedBy": [],
+              "relation": "synonym_exact"
+            },
+            {
+              "canonicalName": "365 by Whole Foods Market, Organic Broccoli Florets, 16 oz, (Frozen)",
+              "family": "1.2",
+              "pantryCategory": "1.2v",
+              "pantryItemId": 118,
+              "reason": "matched",
+              "rejectedBy": [],
+              "relation": "synonym_exact"
+            },
+            {
+              "canonicalName": "Forward Greens Micro Broccoli, 2 OZ",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 154,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family"
+              ],
+              "relation": "synonym_token"
+            }
+          ],
+          "confidence": 0.7,
+          "index": 0,
+          "matchMethod": "synonym",
+          "matchTier": 6,
+          "pantryItemId": 14,
+          "parseMethod": "emoji_only",
+          "parsedName": "西兰花",
+          "rawValue": "🥦"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "爆浆咸蛋黄肉松流沙可頌 140 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 86,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "咔啰咔曼 咸味蛋黄酥蛋卷 218 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 89,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "友臣 肉松小贝蛋糕 (美国版) 280 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 148,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "Love Me Sweet 港式酥皮蛋挞 12颗 （原味*4， 芋头*4， 麻薯*4） 冷冻 25.4 盎司",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 163,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "柴米 传统工艺 软心皮蛋 6枚装 65 克",
+              "family": "2",
+              "pantryCategory": "2",
+              "pantryItemId": 174,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            }
+          ],
+          "confidence": 0.0,
+          "index": 1,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "鸡蛋",
+          "rawValue": "🥚"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 2,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "包菜",
+          "rawValue": "包菜"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 3,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "米饭",
+          "rawValue": "🍚"
+        }
+      ],
+      "materialsFound": 1,
+      "materialsTotal": 4,
+      "missingMaterials": [
+        "鸡蛋",
+        "包菜",
+        "米饭"
+      ],
+      "missingSeasonings": [
+        "青柠"
+      ],
+      "notePath": "fake/Easy Fragrant Fried Rice.md",
+      "seasonings": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "柴米 蒜香蒸茄子 300 克",
+              "family": "1.2",
+              "pantryCategory": "1.2",
+              "pantryItemId": 72,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "token_contains"
+            },
+            {
+              "canonicalName": "乐事 2026FIFA世界杯限定联名薯片蒜蓉面包味",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 110,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 0,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "蒜",
+          "rawValue": "🧄"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "小巷口 老上海蟹壳黄 葱香馅 冷冻 360 克",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 160,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 1,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "葱",
+          "rawValue": "葱"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 2,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "姜",
+          "rawValue": "🫚"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 3,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "emoji_alt",
+          "parsedName": "小米椒",
+          "rawValue": "🌶️/小米椒"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 4,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "鱼露",
+          "rawValue": "鱼露"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 5,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "青柠",
+          "rawValue": "🍋‍🟩"
+        }
+      ],
+      "seasoningsFound": 5,
+      "seasoningsTotal": 6
+    },
+    "Paradiso三明治": {
+      "allMaterialsResolved": false,
+      "duplicateMaterialItemIds": [],
+      "headline": "0/6 ingredients found — missing: Mortadella, 开心果酱, Stracciatella, 香料, Arugula, focaccia",
+      "headlineStrict": "0/6 ingredients found — missing: Mortadella, 开心果酱, Stracciatella, 香料, Arugula, focaccia",
+      "materials": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 0,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "Mortadella",
+          "rawValue": "Mortadella"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 1,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "开心果酱",
+          "rawValue": "开心果酱"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 2,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_alt",
+          "parsedName": "Stracciatella",
+          "rawValue": "🧀/Stracciatella"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 3,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "alt_pair",
+          "parsedName": "香料",
+          "rawValue": "香料/Basil"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 4,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "Arugula",
+          "rawValue": "Arugula"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 5,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_alt",
+          "parsedName": "focaccia",
+          "rawValue": "🍞/focaccia"
+        }
+      ],
+      "materialsFound": 0,
+      "materialsTotal": 6,
+      "missingMaterials": [
+        "Mortadella",
+        "开心果酱",
+        "Stracciatella",
+        "香料",
+        "Arugula",
+        "focaccia"
+      ],
+      "missingSeasonings": [],
+      "notePath": "fake/Paradiso三明治.md",
+      "seasonings": [],
+      "seasoningsFound": 0,
+      "seasoningsTotal": 0
+    },
+    "凉拌黑木耳": {
+      "allMaterialsResolved": false,
+      "duplicateMaterialItemIds": [],
+      "headline": "0/1 ingredients found — missing: 黑木耳",
+      "headlineStrict": "6/8 ingredients found — missing: 黑木耳   (严格模式（含调料）: 芝麻)",
+      "materials": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 0,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_alt",
+          "parsedName": "黑木耳",
+          "rawValue": "🍄/黑木耳"
+        }
+      ],
+      "materialsFound": 0,
+      "materialsTotal": 1,
+      "missingMaterials": [
+        "黑木耳"
+      ],
+      "missingSeasonings": [
+        "芝麻"
+      ],
+      "notePath": "fake/凉拌黑木耳.md",
+      "seasonings": [
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 0,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "emoji_alt",
+          "parsedName": "小米椒",
+          "rawValue": "🌶️/小米椒"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "柴米 蒜香蒸茄子 300 克",
+              "family": "1.2",
+              "pantryCategory": "1.2",
+              "pantryItemId": 72,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "token_contains"
+            },
+            {
+              "canonicalName": "乐事 2026FIFA世界杯限定联名薯片蒜蓉面包味",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 110,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 1,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "蒜",
+          "rawValue": "🧄"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 2,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "醋",
+          "rawValue": "醋"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 3,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "生抽",
+          "rawValue": "生抽"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "臻品德 芝麻酱烧饼 10只入 1.54 磅",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 20,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "basename_prefix"
+            },
+            {
+              "canonicalName": "好丽友 高笑美芝麻饼干 216 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 25,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "token_contains"
+            },
+            {
+              "canonicalName": "思念 黑芝麻开心果玉汤圆 冷冻 200 克",
+              "family": "1.2",
+              "pantryCategory": "1.2d",
+              "pantryItemId": 66,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "token_contains"
+            },
+            {
+              "canonicalName": "芝麻烧饼",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 102,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "basename_prefix"
+            }
+          ],
+          "confidence": 0.0,
+          "index": 4,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "芝麻",
+          "rawValue": "芝麻"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "臻品德 芝麻酱烧饼 10只入 1.54 磅",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 20,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "好丽友 高笑美芝麻饼干 216 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 25,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "思念 黑芝麻开心果玉汤圆 冷冻 200 克",
+              "family": "1.2",
+              "pantryCategory": "1.2d",
+              "pantryItemId": 66,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "芝麻烧饼",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 102,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 5,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "芝麻油",
+          "rawValue": "芝麻油"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 6,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "香菜",
+          "rawValue": "香菜"
+        }
+      ],
+      "seasoningsFound": 6,
+      "seasoningsTotal": 7
+    },
+    "微波菜菜": {
+      "allMaterialsResolved": false,
+      "duplicateMaterialItemIds": [],
+      "headline": "1/3 ingredients found — missing: 香菇, 娃娃菜",
+      "headlineStrict": "1/3 ingredients found — missing: 香菇, 娃娃菜",
+      "materials": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "AeroFarms Kale Microgreens, 2 OZ",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 56,
+              "reason": "matched",
+              "rejectedBy": [],
+              "relation": "basename_prefix"
+            }
+          ],
+          "confidence": 0.9,
+          "index": 0,
+          "matchMethod": "note_basename",
+          "matchTier": 4,
+          "pantryItemId": 56,
+          "parseMethod": "bare",
+          "parsedName": "Kale",
+          "rawValue": "Kale"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 1,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "香菇",
+          "rawValue": "香菇"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 2,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "娃娃菜",
+          "rawValue": "娃娃菜"
+        }
+      ],
+      "materialsFound": 1,
+      "materialsTotal": 3,
+      "missingMaterials": [
+        "香菇",
+        "娃娃菜"
+      ],
+      "missingSeasonings": [],
+      "notePath": "fake/微波菜菜.md",
+      "seasonings": [],
+      "seasoningsFound": 0,
+      "seasoningsTotal": 0
+    },
+    "拌空心菜": {
+      "allMaterialsResolved": true,
+      "duplicateMaterialItemIds": [],
+      "headline": "1/1 ingredients found",
+      "headlineStrict": "5/6 ingredients found   (严格模式（含调料）: 芝麻)",
+      "materials": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "空心菜嫩苗 0.95-1.05 磅",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 83,
+              "reason": "matched",
+              "rejectedBy": [],
+              "relation": "basename_prefix"
+            }
+          ],
+          "confidence": 0.7,
+          "index": 0,
+          "matchMethod": "synonym",
+          "matchTier": 6,
+          "pantryItemId": 83,
+          "parseMethod": "bare",
+          "parsedName": "空心菜",
+          "rawValue": "空心菜"
+        }
+      ],
+      "materialsFound": 1,
+      "materialsTotal": 1,
+      "missingMaterials": [],
+      "missingSeasonings": [
+        "芝麻"
+      ],
+      "notePath": "fake/拌空心菜.md",
+      "seasonings": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "臻品德 芝麻酱烧饼 10只入 1.54 磅",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 20,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "basename_prefix"
+            },
+            {
+              "canonicalName": "好丽友 高笑美芝麻饼干 216 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 25,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "token_contains"
+            },
+            {
+              "canonicalName": "思念 黑芝麻开心果玉汤圆 冷冻 200 克",
+              "family": "1.2",
+              "pantryCategory": "1.2d",
+              "pantryItemId": 66,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "token_contains"
+            },
+            {
+              "canonicalName": "芝麻烧饼",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 102,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "basename_prefix"
+            }
+          ],
+          "confidence": 0.0,
+          "index": 0,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "芝麻",
+          "rawValue": "芝麻"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 1,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "生抽",
+          "rawValue": "生抽"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "柴米 蒜香蒸茄子 300 克",
+              "family": "1.2",
+              "pantryCategory": "1.2",
+              "pantryItemId": 72,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "token_contains"
+            },
+            {
+              "canonicalName": "乐事 2026FIFA世界杯限定联名薯片蒜蓉面包味",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 110,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 2,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "蒜",
+          "rawValue": "🧄"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "臻品德 芝麻酱烧饼 10只入 1.54 磅",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 20,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "好丽友 高笑美芝麻饼干 216 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 25,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "思念 黑芝麻开心果玉汤圆 冷冻 200 克",
+              "family": "1.2",
+              "pantryCategory": "1.2d",
+              "pantryItemId": 66,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "芝麻烧饼",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 102,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 3,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "芝麻油",
+          "rawValue": "芝麻油"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "小巷口 老上海蟹壳黄 葱香馅 冷冻 360 克",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 160,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 4,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "葱",
+          "rawValue": "葱"
+        }
+      ],
+      "seasoningsFound": 4,
+      "seasoningsTotal": 5
+    },
+    "炒红苋菜": {
+      "allMaterialsResolved": true,
+      "duplicateMaterialItemIds": [],
+      "headline": "1/1 ingredients found",
+      "headlineStrict": "3/3 ingredients found",
+      "materials": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "红苋菜苗 0.95-1.05 磅",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 139,
+              "reason": "matched",
+              "rejectedBy": [],
+              "relation": "basename_prefix"
+            }
+          ],
+          "confidence": 0.7,
+          "index": 0,
+          "matchMethod": "synonym",
+          "matchTier": 6,
+          "pantryItemId": 139,
+          "parseMethod": "bare",
+          "parsedName": "红苋菜",
+          "rawValue": "红苋菜"
+        }
+      ],
+      "materialsFound": 1,
+      "materialsTotal": 1,
+      "missingMaterials": [],
+      "missingSeasonings": [],
+      "notePath": "fake/炒红苋菜.md",
+      "seasonings": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "柴米 蒜香蒸茄子 300 克",
+              "family": "1.2",
+              "pantryCategory": "1.2",
+              "pantryItemId": 72,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "token_contains"
+            },
+            {
+              "canonicalName": "乐事 2026FIFA世界杯限定联名薯片蒜蓉面包味",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 110,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 0,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "蒜",
+          "rawValue": "🧄"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 1,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "鸡精",
+          "rawValue": "鸡精"
+        }
+      ],
+      "seasoningsFound": 2,
+      "seasoningsTotal": 2
+    },
+    "烤土豆": {
+      "allMaterialsResolved": false,
+      "duplicateMaterialItemIds": [],
+      "headline": "0/1 ingredients found — missing: 土豆",
+      "headlineStrict": "0/1 ingredients found — missing: 土豆",
+      "materials": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "好丽友 呀!土豆 薯条 里脊牛排味 70 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 62,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.0,
+          "index": 0,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "土豆",
+          "rawValue": "🥔"
+        }
+      ],
+      "materialsFound": 0,
+      "materialsTotal": 1,
+      "missingMaterials": [
+        "土豆"
+      ],
+      "missingSeasonings": [],
+      "notePath": "fake/烤土豆.md",
+      "seasonings": [],
+      "seasoningsFound": 0,
+      "seasoningsTotal": 0
+    },
+    "烤小辣椒": {
+      "allMaterialsResolved": false,
+      "duplicateMaterialItemIds": [],
+      "headline": "0/1 ingredients found — missing: Shishito",
+      "headlineStrict": "2/3 ingredients found — missing: Shishito",
+      "materials": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 0,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_alt",
+          "parsedName": "Shishito",
+          "rawValue": "🌶️/Shishito"
+        }
+      ],
+      "materialsFound": 0,
+      "materialsTotal": 1,
+      "missingMaterials": [
+        "Shishito"
+      ],
+      "missingSeasonings": [],
+      "notePath": "fake/烤小辣椒.md",
+      "seasonings": [
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 0,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "生抽",
+          "rawValue": "生抽"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 1,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "醋",
+          "rawValue": "醋"
+        }
+      ],
+      "seasoningsFound": 2,
+      "seasoningsTotal": 2
+    },
+    "烤红薯": {
+      "allMaterialsResolved": false,
+      "duplicateMaterialItemIds": [],
+      "headline": "0/1 ingredients found — missing: 红薯",
+      "headlineStrict": "0/1 ingredients found — missing: 红薯",
+      "materials": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 0,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "红薯",
+          "rawValue": "🍠"
+        }
+      ],
+      "materialsFound": 0,
+      "materialsTotal": 1,
+      "missingMaterials": [
+        "红薯"
+      ],
+      "missingSeasonings": [],
+      "notePath": "fake/烤红薯.md",
+      "seasonings": [],
+      "seasoningsFound": 0,
+      "seasoningsTotal": 0
+    },
+    "烤鲭鱼": {
+      "allMaterialsResolved": true,
+      "duplicateMaterialItemIds": [],
+      "headline": "1/1 ingredients found",
+      "headlineStrict": "2/3 ingredients found   (严格模式（含调料）: 青柠)",
+      "materials": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "Frozen Mackerel Boneless Protion-cut 5P 10.58 盎司",
+              "family": "1.2",
+              "pantryCategory": "1.2m",
+              "pantryItemId": 22,
+              "reason": "matched",
+              "rejectedBy": [],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.85,
+          "index": 0,
+          "matchMethod": "normalized_exact",
+          "matchTier": 5,
+          "pantryItemId": 22,
+          "parseMethod": "wikilink",
+          "parsedName": "Mackerel",
+          "rawValue": "[[Mackerel]]"
+        }
+      ],
+      "materialsFound": 1,
+      "materialsTotal": 1,
+      "missingMaterials": [],
+      "missingSeasonings": [
+        "青柠"
+      ],
+      "notePath": "fake/烤鲭鱼.md",
+      "seasonings": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 0,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "青柠",
+          "rawValue": "🍋‍🟩"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 1,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "黑胡椒",
+          "rawValue": "黑胡椒"
+        }
+      ],
+      "seasoningsFound": 1,
+      "seasoningsTotal": 2
+    },
+    "烤鸡翅": {
+      "allMaterialsResolved": true,
+      "duplicateMaterialItemIds": [],
+      "headline": "1/1 ingredients found",
+      "headlineStrict": "2/2 ingredients found",
+      "materials": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "Chicken Wings",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 166,
+              "reason": "matched",
+              "rejectedBy": [],
+              "relation": "synonym_exact"
+            }
+          ],
+          "confidence": 0.7,
+          "index": 0,
+          "matchMethod": "synonym",
+          "matchTier": 6,
+          "pantryItemId": 166,
+          "parseMethod": "emoji_alt",
+          "parsedName": "鸡翅",
+          "rawValue": "🐔/鸡翅"
+        }
+      ],
+      "materialsFound": 1,
+      "materialsTotal": 1,
+      "missingMaterials": [],
+      "missingSeasonings": [],
+      "notePath": "fake/烤鸡翅.md",
+      "seasonings": [
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 0,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "新奥尔良腌料",
+          "rawValue": "新奥尔良腌料"
+        }
+      ],
+      "seasoningsFound": 1,
+      "seasoningsTotal": 1
+    },
+    "煮菜菜": {
+      "allMaterialsResolved": true,
+      "duplicateMaterialItemIds": [],
+      "headline": "2/2 ingredients found",
+      "headlineStrict": "2/2 ingredients found",
+      "materials": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "空心菜嫩苗 0.95-1.05 磅",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 83,
+              "reason": "matched",
+              "rejectedBy": [],
+              "relation": "basename_prefix"
+            }
+          ],
+          "confidence": 0.7,
+          "index": 0,
+          "matchMethod": "synonym",
+          "matchTier": 6,
+          "pantryItemId": 83,
+          "parseMethod": "bare",
+          "parsedName": "空心菜",
+          "rawValue": "空心菜"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "新鲜小叶茼蒿 1 磅",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 70,
+              "reason": "matched",
+              "rejectedBy": [],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.7,
+          "index": 1,
+          "matchMethod": "synonym",
+          "matchTier": 6,
+          "pantryItemId": 70,
+          "parseMethod": "bare",
+          "parsedName": "茼蒿",
+          "rawValue": "茼蒿"
+        }
+      ],
+      "materialsFound": 2,
+      "materialsTotal": 2,
+      "missingMaterials": [],
+      "missingSeasonings": [],
+      "notePath": "fake/煮菜菜.md",
+      "seasonings": [],
+      "seasoningsFound": 0,
+      "seasoningsTotal": 0
+    },
+    "番茄炒蛋": {
+      "allMaterialsResolved": false,
+      "duplicateMaterialItemIds": [],
+      "headline": "0/2 ingredients found — missing: 鸡蛋, 番茄",
+      "headlineStrict": "2/4 ingredients found — missing: 鸡蛋, 番茄",
+      "materials": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "爆浆咸蛋黄肉松流沙可頌 140 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 86,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "咔啰咔曼 咸味蛋黄酥蛋卷 218 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 89,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "友臣 肉松小贝蛋糕 (美国版) 280 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 148,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "Love Me Sweet 港式酥皮蛋挞 12颗 （原味*4， 芋头*4， 麻薯*4） 冷冻 25.4 盎司",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 163,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "柴米 传统工艺 软心皮蛋 6枚装 65 克",
+              "family": "2",
+              "pantryCategory": "2",
+              "pantryItemId": 174,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            }
+          ],
+          "confidence": 0.0,
+          "index": 0,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "鸡蛋",
+          "rawValue": "🥚"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 1,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "番茄",
+          "rawValue": "🍅"
+        }
+      ],
+      "materialsFound": 0,
+      "materialsTotal": 2,
+      "missingMaterials": [
+        "鸡蛋",
+        "番茄"
+      ],
+      "missingSeasonings": [],
+      "notePath": "fake/番茄炒蛋.md",
+      "seasonings": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "小巷口 老上海蟹壳黄 葱香馅 冷冻 360 克",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 160,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 0,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "葱",
+          "rawValue": "葱"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 1,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "醋",
+          "rawValue": "醋"
+        }
+      ],
+      "seasoningsFound": 2,
+      "seasoningsTotal": 2
+    },
+    "盐焗鸡": {
+      "allMaterialsResolved": false,
+      "duplicateMaterialItemIds": [],
+      "headline": "0/1 ingredients found — missing: 带皮鸡腿",
+      "headlineStrict": "5/6 ingredients found — missing: 带皮鸡腿",
+      "materials": [
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 0,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_alt",
+          "parsedName": "带皮鸡腿",
+          "rawValue": "🐔/带皮鸡腿"
+        }
+      ],
+      "materialsFound": 0,
+      "materialsTotal": 1,
+      "missingMaterials": [
+        "带皮鸡腿"
+      ],
+      "missingSeasonings": [],
+      "notePath": "fake/盐焗鸡.md",
+      "seasonings": [
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 0,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "窑鸡粉",
+          "rawValue": "窑鸡粉"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 1,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "生抽",
+          "rawValue": "生抽"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 2,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "姜",
+          "rawValue": "🫚"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "小巷口 老上海蟹壳黄 葱香馅 冷冻 360 克",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 160,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 3,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "葱",
+          "rawValue": "葱"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 4,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "老抽",
+          "rawValue": "老抽"
+        }
+      ],
+      "seasoningsFound": 5,
+      "seasoningsTotal": 5
+    },
+    "花蛤拌饭": {
+      "allMaterialsResolved": false,
+      "duplicateMaterialItemIds": [],
+      "headline": "1/4 ingredients found — missing: Clam, 香菇, Shishito",
+      "headlineStrict": "6/10 ingredients found — missing: Clam, 香菇, Shishito   (严格模式（含调料）: 芝麻)",
+      "materials": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "YABA 花蛤肉 冷冻 12 盎司",
+              "family": "1.2",
+              "pantryCategory": "1.2m",
+              "pantryItemId": 143,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "Umji's 蛤蜊拌饭套餐 212 克",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 161,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            }
+          ],
+          "confidence": 0.0,
+          "index": 0,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "Clam",
+          "rawValue": "Clam"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 1,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_alt",
+          "parsedName": "香菇",
+          "rawValue": "🍄/香菇"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 2,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_alt",
+          "parsedName": "Shishito",
+          "rawValue": "🌶️/Shishito"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "空心菜嫩苗 0.95-1.05 磅",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 83,
+              "reason": "matched",
+              "rejectedBy": [],
+              "relation": "basename_prefix"
+            }
+          ],
+          "confidence": 0.7,
+          "index": 3,
+          "matchMethod": "synonym",
+          "matchTier": 6,
+          "pantryItemId": 83,
+          "parseMethod": "bare",
+          "parsedName": "空心菜",
+          "rawValue": "空心菜"
+        }
+      ],
+      "materialsFound": 1,
+      "materialsTotal": 4,
+      "missingMaterials": [
+        "Clam",
+        "香菇",
+        "Shishito"
+      ],
+      "missingSeasonings": [
+        "芝麻"
+      ],
+      "notePath": "fake/花蛤拌饭.md",
+      "seasonings": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "小巷口 老上海蟹壳黄 葱香馅 冷冻 360 克",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 160,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 0,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "葱",
+          "rawValue": "葱"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "臻品德 芝麻酱烧饼 10只入 1.54 磅",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 20,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "basename_prefix"
+            },
+            {
+              "canonicalName": "好丽友 高笑美芝麻饼干 216 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 25,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "token_contains"
+            },
+            {
+              "canonicalName": "思念 黑芝麻开心果玉汤圆 冷冻 200 克",
+              "family": "1.2",
+              "pantryCategory": "1.2d",
+              "pantryItemId": 66,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "token_contains"
+            },
+            {
+              "canonicalName": "芝麻烧饼",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 102,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "basename_prefix"
+            }
+          ],
+          "confidence": 0.0,
+          "index": 1,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "芝麻",
+          "rawValue": "芝麻"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "臻品德 芝麻酱烧饼 10只入 1.54 磅",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 20,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "好丽友 高笑美芝麻饼干 216 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 25,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "思念 黑芝麻开心果玉汤圆 冷冻 200 克",
+              "family": "1.2",
+              "pantryCategory": "1.2d",
+              "pantryItemId": 66,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "芝麻烧饼",
+              "family": "1.1",
+              "pantryCategory": "1.1",
+              "pantryItemId": 102,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 2,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "芝麻油",
+          "rawValue": "芝麻油"
+        },
+        {
+          "candidates": [
+            {
+              "canonicalName": "柴米 蒜香蒸茄子 300 克",
+              "family": "1.2",
+              "pantryCategory": "1.2",
+              "pantryItemId": 72,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "token_contains"
+            },
+            {
+              "canonicalName": "乐事 2026FIFA世界杯限定联名薯片蒜蓉面包味",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 110,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary",
+                "category_family"
+              ],
+              "relation": "token_contains"
+            }
+          ],
+          "confidence": 0.6,
+          "index": 3,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "蒜",
+          "rawValue": "🧄"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 4,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "alt_pair",
+          "parsedName": "调味酱油",
+          "rawValue": "调味酱油/蒸鱼豉油"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 5,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "韩式辣椒粉",
+          "rawValue": "韩式辣椒粉"
+        }
+      ],
+      "seasoningsFound": 5,
+      "seasoningsTotal": 6
+    },
+    "茶碗蒸": {
+      "allMaterialsResolved": false,
+      "duplicateMaterialItemIds": [],
+      "headline": "0/2 ingredients found — missing: 鸡蛋, 香菇",
+      "headlineStrict": "1/3 ingredients found — missing: 鸡蛋, 香菇",
+      "materials": [
+        {
+          "candidates": [
+            {
+              "canonicalName": "爆浆咸蛋黄肉松流沙可頌 140 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 86,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "咔啰咔曼 咸味蛋黄酥蛋卷 218 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 89,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "友臣 肉松小贝蛋糕 (美国版) 280 克",
+              "family": "4",
+              "pantryCategory": "4",
+              "pantryItemId": 148,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "Love Me Sweet 港式酥皮蛋挞 12颗 （原味*4， 芋头*4， 麻薯*4） 冷冻 25.4 盎司",
+              "family": "1.2",
+              "pantryCategory": "1.2s",
+              "pantryItemId": 163,
+              "reason": "segment_boundary",
+              "rejectedBy": [
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            },
+            {
+              "canonicalName": "柴米 传统工艺 软心皮蛋 6枚装 65 克",
+              "family": "2",
+              "pantryCategory": "2",
+              "pantryItemId": 174,
+              "reason": "category_family",
+              "rejectedBy": [
+                "category_family",
+                "segment_boundary"
+              ],
+              "relation": "synonym_token"
+            }
+          ],
+          "confidence": 0.0,
+          "index": 0,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_only",
+          "parsedName": "鸡蛋",
+          "rawValue": "🥚"
+        },
+        {
+          "candidates": [],
+          "confidence": 0.0,
+          "index": 1,
+          "matchMethod": "unresolved",
+          "matchTier": 8,
+          "pantryItemId": null,
+          "parseMethod": "emoji_alt",
+          "parsedName": "香菇",
+          "rawValue": "🍄/香菇"
+        }
+      ],
+      "materialsFound": 0,
+      "materialsTotal": 2,
+      "missingMaterials": [
+        "鸡蛋",
+        "香菇"
+      ],
+      "missingSeasonings": [],
+      "notePath": "fake/茶碗蒸.md",
+      "seasonings": [
+        {
+          "candidates": [],
+          "confidence": 0.6,
+          "index": 0,
+          "matchMethod": "staples",
+          "matchTier": 7,
+          "pantryItemId": null,
+          "parseMethod": "bare",
+          "parsedName": "dashi",
+          "rawValue": "dashi"
+        }
+      ],
+      "seasoningsFound": 1,
+      "seasoningsTotal": 1
+    }
+  },
+  "schemaVersion": 1,
+  "summary": {
+    "allMaterialsResolvedRecipes": 5,
+    "distinctMaterialNames": 25,
+    "distinctMaterialNamesResolved": 7,
+    "distinctSeasoningNames": 19,
+    "distinctSeasoningNamesStaples": 17,
+    "duplicateSlotConflicts": 0,
+    "materialNames": {
+      "Arugula": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/Paradiso三明治.md#4"
+        ]
+      },
+      "Clam": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/花蛤拌饭.md#0"
+        ]
+      },
+      "Kale": {
+        "confidence": 0.9,
+        "matchMethod": "note_basename",
+        "matchTier": 4,
+        "pantryItemId": 56,
+        "slots": [
+          "fake/微波菜菜.md#0"
+        ]
+      },
+      "Mackerel": {
+        "confidence": 0.85,
+        "matchMethod": "normalized_exact",
+        "matchTier": 5,
+        "pantryItemId": 22,
+        "slots": [
+          "fake/烤鲭鱼.md#0"
+        ]
+      },
+      "Mortadella": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/Paradiso三明治.md#0"
+        ]
+      },
+      "Shishito": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/烤小辣椒.md#0",
+          "fake/花蛤拌饭.md#2"
+        ]
+      },
+      "Stracciatella": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/Paradiso三明治.md#2"
+        ]
+      },
+      "focaccia": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/Paradiso三明治.md#5"
+        ]
+      },
+      "包菜": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/Easy Fragrant Fried Rice.md#2"
+        ]
+      },
+      "土豆": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/烤土豆.md#0"
+        ]
+      },
+      "娃娃菜": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/微波菜菜.md#2"
+        ]
+      },
+      "带皮鸡腿": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/盐焗鸡.md#0"
+        ]
+      },
+      "开心果酱": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/Paradiso三明治.md#1"
+        ]
+      },
+      "番茄": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/番茄炒蛋.md#1"
+        ]
+      },
+      "空心菜": {
+        "confidence": 0.7,
+        "matchMethod": "synonym",
+        "matchTier": 6,
+        "pantryItemId": 83,
+        "slots": [
+          "fake/拌空心菜.md#0",
+          "fake/煮菜菜.md#0",
+          "fake/花蛤拌饭.md#3"
+        ]
+      },
+      "米饭": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/Easy Fragrant Fried Rice.md#3"
+        ]
+      },
+      "红苋菜": {
+        "confidence": 0.7,
+        "matchMethod": "synonym",
+        "matchTier": 6,
+        "pantryItemId": 139,
+        "slots": [
+          "fake/炒红苋菜.md#0"
+        ]
+      },
+      "红薯": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/烤红薯.md#0"
+        ]
+      },
+      "茼蒿": {
+        "confidence": 0.7,
+        "matchMethod": "synonym",
+        "matchTier": 6,
+        "pantryItemId": 70,
+        "slots": [
+          "fake/煮菜菜.md#1"
+        ]
+      },
+      "西兰花": {
+        "confidence": 0.7,
+        "matchMethod": "synonym",
+        "matchTier": 6,
+        "pantryItemId": 14,
+        "slots": [
+          "fake/Easy Fragrant Fried Rice.md#0"
+        ]
+      },
+      "香料": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/Paradiso三明治.md#3"
+        ]
+      },
+      "香菇": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/微波菜菜.md#1",
+          "fake/花蛤拌饭.md#1",
+          "fake/茶碗蒸.md#1"
+        ]
+      },
+      "鸡翅": {
+        "confidence": 0.7,
+        "matchMethod": "synonym",
+        "matchTier": 6,
+        "pantryItemId": 166,
+        "slots": [
+          "fake/烤鸡翅.md#0"
+        ]
+      },
+      "鸡蛋": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/Easy Fragrant Fried Rice.md#1",
+          "fake/番茄炒蛋.md#0",
+          "fake/茶碗蒸.md#0"
+        ]
+      },
+      "黑木耳": {
+        "confidence": 0.0,
+        "matchMethod": "unresolved",
+        "matchTier": 8,
+        "pantryItemId": null,
+        "slots": [
+          "fake/凉拌黑木耳.md#0"
+        ]
+      }
+    },
+    "materialResolvedSlots": 9,
+    "materialSlotCount": 32,
+    "materialUnresolvedSlots": 23,
+    "methodFireCountsByDistinctMaterialName": {
+      "exact_id": 0,
+      "exact_name": 0,
+      "fuzzy_normalized": 0,
+      "normalized_exact": 1,
+      "note_basename": 1,
+      "staples": 0,
+      "synonym": 5,
+      "unparseable": 0,
+      "unresolved": 18,
+      "variant_alias": 0
+    },
+    "recipeCount": 16,
+    "resolveReport": {
+      "conflicts": [],
+      "duplicateSlotConflicts": 0,
+      "reconsidered": 32,
+      "resolved": 9,
+      "staleReset": 0,
+      "stillUnresolved": 23
+    },
+    "seasoningFoundSlotsStrict": 34,
+    "seasoningNames": {
+      "dashi": "staples",
+      "姜": "staples",
+      "小米椒": "staples",
+      "新奥尔良腌料": "staples",
+      "生抽": "staples",
+      "窑鸡粉": "staples",
+      "老抽": "staples",
+      "芝麻": "unresolved",
+      "芝麻油": "staples",
+      "葱": "staples",
+      "蒜": "staples",
+      "调味酱油": "staples",
+      "醋": "staples",
+      "青柠": "unresolved",
+      "韩式辣椒粉": "staples",
+      "香菜": "staples",
+      "鱼露": "staples",
+      "鸡精": "staples",
+      "黑胡椒": "staples"
+    },
+    "seasoningSlotCount": 39,
+    "staleResets": 0,
+    "tierFireCountsByDistinctMaterialName": {
+      "0": 0,
+      "1": 0,
+      "2": 0,
+      "3": 0,
+      "4": 1,
+      "5": 1,
+      "6": 5,
+      "7": 0,
+      "8": 18
+    }
+  }
+}
