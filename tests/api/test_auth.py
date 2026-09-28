@@ -33,6 +33,7 @@ from app.auth import (
     MAX_IDENTITY_CHARS,
     MAX_REQUEST_BYTES,
     SECURITY_HEADERS,
+    normalize_identity,
 )
 from app.config import Settings
 from app.main import APP_VERSION, create_app
@@ -332,11 +333,22 @@ def test_trusted_mode_missing_identity_rejects_every_surface(
         "owner@test.invalid.evil.com",
         "owner@test.invalid\x00",
         "x" * (MAX_IDENTITY_CHARS + 1),
+        # Sent as bytes because httpx will not put a non-ASCII `str` on the
+        # wire; the app decodes it back to latin-1 "JosÃ©".
+        "José".encode(),
     ],
-    ids=("attacker", "inner-space", "case-mismatch", "suffix", "nul-byte", "oversized"),
+    ids=(
+        "attacker",
+        "inner-space",
+        "case-mismatch",
+        "suffix",
+        "nul-byte",
+        "oversized",
+        "non-ascii",
+    ),
 )
 def test_trusted_mode_wrong_or_malformed_identity_is_denied(
-    prod_client: TestClient, login: str
+    prod_client: TestClient, login: str | bytes
 ) -> None:
     response = prod_client.get("/api/session", headers={"Tailscale-User-Login": login})
     assert response.status_code == 401
@@ -361,6 +373,56 @@ def test_trusted_mode_multiple_identity_headers_are_invalid(prod_client: TestCli
         headers=[("Tailscale-User-Login", OWNER), ("Tailscale-User-Login", ATTACKER)],
     )
     assert (response.status_code, _assert_envelope(response)["code"]) == (401, "identity_invalid")
+
+
+def test_trusted_mode_non_ascii_identity_is_a_4xx_not_a_server_error(
+    prod_client: TestClient,
+) -> None:
+    # Unauthenticated and attacker-controlled: anything that can reach the port
+    # can send this header. Starlette decodes it as latin-1, so the value arrives
+    # as a `str` with a code point above U+007F, which `hmac.compare_digest`
+    # refuses with `TypeError: comparing strings with non-ASCII characters is not
+    # supported`. Unfiltered, that is a 500 on every request, from every actor.
+    response = prod_client.get(
+        "/api/session", headers={"Tailscale-User-Login": "José".encode()}
+    )
+    assert (response.status_code, _assert_envelope(response)["code"]) == (
+        401,
+        "identity_invalid",
+    )
+    assert response.headers["cache-control"] == "no-store"
+
+
+def test_trusted_mode_non_ascii_identity_is_rejected_before_the_comparison() -> None:
+    # The filter, on its own: `identity_invalid` is only reachable when
+    # `normalize_identity` refuses the value. Were the non-ASCII filter dropped,
+    # the encoded comparison would mismatch and answer `identity_denied`
+    # instead, which is the wrong (and less specific) 401.
+    for value in ("José", "josé@test.invalid", "JosÃ©", "\x80", "ÿ"):
+        assert normalize_identity(value) is None, value
+    assert normalize_identity(OWNER) == OWNER
+    assert normalize_identity(f" \t{OWNER}\t ") == OWNER
+
+
+def test_a_non_ascii_owner_login_is_a_4xx_not_a_server_error(runtime_root: Path) -> None:
+    # Layer 2, reachable end to end: the *stored* side of the comparison is
+    # operator config and is not covered by `normalize_identity`, so a
+    # non-ASCII `TAILSCALE_OWNER_LOGIN` reaches `hmac.compare_digest` even
+    # with the filter in place. Encoding both operands is what makes this a
+    # 401 rather than a 500; without it this test raises TypeError.
+    settings = make_settings(
+        runtime_root,
+        TRUST_TAILSCALE_HEADERS="true",
+        TAILSCALE_OWNER_LOGIN="josé@test.invalid",
+    )
+    with client_for(settings) as client:
+        response = client.get(
+            "/api/session", headers={"Tailscale-User-Login": "jose@test.invalid"}
+        )
+    assert (response.status_code, _assert_envelope(response)["code"]) == (
+        401,
+        "identity_denied",
+    )
 
 
 # --- 4. Read-only mode: F18, no write allowlist --------------------------
@@ -566,6 +628,48 @@ def test_repeated_csrf_headers_are_invalid(dev_client: TestClient) -> None:
     spec.headers.extend([("X-CSRF-Token", token), ("X-CSRF-Token", token)])
     response = _post(dev_client, spec, token)
     assert (response.status_code, _assert_envelope(response)["code"]) == (403, "csrf_invalid")
+
+
+@pytest.mark.parametrize("forged", ["é", "José", "JosÃ©"], ids=("latin1", "utf8", "mojibake"))
+def test_a_non_ascii_csrf_token_is_a_4xx_not_a_server_error(
+    dev_client: TestClient, forged: str
+) -> None:
+    # The `X-CSRF-Token` value is decoded as latin-1, so a non-ASCII byte
+    # reaches `CsrfTokenStore.verify` as a high code point, past the
+    # length/emptiness bound, and used to make `hmac.compare_digest` raise.
+    spec = Spec()
+    spec.with_csrf = False
+    spec.headers.append(("X-CSRF-Token", forged.encode()))
+    response = _post(dev_client, spec, "unused")
+    assert (response.status_code, _assert_envelope(response)["code"]) == (
+        403,
+        "csrf_invalid",
+    )
+
+
+def test_verify_refuses_a_non_ascii_token_even_when_the_store_holds_one(
+    dev_settings: Settings,
+) -> None:
+    # The filter, on its own: the token alphabet is `secrets.token_urlsafe(32)`,
+    # so a non-ASCII entry cannot be issued, and `verify` must refuse one
+    # directly rather than rely on the comparison. Poison the store with a
+    # non-ASCII entry and assert the filter still answers: without it the
+    # encoded comparison matches and `verify` says True.
+    store = create_app(dev_settings).state.csrf
+    store._tokens["é"] = time.monotonic()
+    assert store.verify("é") is False
+
+
+def test_verify_compares_bytes_so_a_non_ascii_candidate_cannot_raise(
+    dev_settings: Settings,
+) -> None:
+    # Layer 2, on its own: `hmac.compare_digest` raises `TypeError` when
+    # *either* operand is a non-ASCII `str`, so filtering the untrusted token
+    # is not sufficient. A non-ASCII stored candidate with a well-formed token
+    # is a plain mismatch, never an exception.
+    store = create_app(dev_settings).state.csrf
+    store._tokens["é"] = time.monotonic()
+    assert store.verify("forged-token") is False
 
 
 # --- 6. Origin -----------------------------------------------------------

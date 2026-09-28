@@ -110,7 +110,14 @@ def normalize_identity(value: str) -> str | None:
     cleaned = value.strip(" \t")
     if not cleaned or len(cleaned) > MAX_IDENTITY_CHARS:
         return None
-    if any(ord(character) < 32 or character == "\x7f" for character in cleaned):
+    # One rule: the value must be printable ASCII. Control characters are
+    # refused, and so is anything above U+007F — Starlette decodes headers as
+    # latin-1, so a non-ASCII byte arrives as a high code point, and
+    # `hmac.compare_digest` raises `TypeError` on a `str` that has one. Both
+    # fields are ASCII by construction (a Tailscale login is an email or a
+    # username, a CSRF token is `secrets.token_urlsafe(32)`), so rejecting
+    # non-ASCII here costs nothing and keeps a 4xx where a 500 belongs.
+    if any(ord(character) < 32 or ord(character) > 127 for character in cleaned):
         return None
     return cleaned
 
@@ -147,7 +154,15 @@ class IdentityPolicy:
             identity = normalize_identity(values[0])
             if identity is None:
                 return False, 401, "identity_invalid"
-            if not hmac.compare_digest(identity, self._owner):
+            # Bytes, not `str`: `hmac.compare_digest` raises `TypeError` on a
+            # `str` with any code point above U+007F — on *either* side — so the
+            # comparison itself has to be incapable of raising, not just its
+            # input filtered. Otherwise the next field compared here re-opens
+            # the same 500, and this one still can: `self._owner` is operator
+            # config that `normalize_identity` never sees, so a non-ASCII
+            # `TAILSCALE_OWNER_LOGIN` reaches this line. Encoded, that is a
+            # plain mismatch and a 401 `identity_denied`.
+            if not hmac.compare_digest(identity.encode(), self._owner.encode()):
                 return False, 401, "identity_denied"
             return True, 0, ""
         for name in IDENTITY_HEADERS:
@@ -183,10 +198,19 @@ class CsrfTokenStore:
     def verify(self, token: str) -> bool:
         if not token or len(token) > MAX_CSRF_TOKEN_CHARS:
             return False
+        # Same rule as `normalize_identity`, and for the same reason: a
+        # non-ASCII header value would make `hmac.compare_digest` raise, and the
+        # token alphabet is `secrets.token_urlsafe(32)`, i.e. ASCII only.
+        if not token.isascii():
+            return False
         now = time.monotonic()
         self._prune(now)
         for candidate, created in self._tokens.items():
-            if hmac.compare_digest(token, candidate) and now - created <= self._ttl:
+            # Bytes, not `str`: see `IdentityPolicy.check`.
+            if (
+                hmac.compare_digest(token.encode(), candidate.encode())
+                and now - created <= self._ttl
+            ):
                 return True
         return False
 
