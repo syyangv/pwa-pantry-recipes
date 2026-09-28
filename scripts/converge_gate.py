@@ -114,7 +114,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Final
 from urllib.parse import urlsplit
@@ -474,7 +474,8 @@ def classify_vantage(
         "identity-absent",
         local,
         f"{origin} answered HTTP 401 {IDENTITY_MISSING} to every identity this gate can present — "
-        f"{'; '.join(refusals)} — so the request carries no identity to compare, and {local_evidence}",
+        f"{'; '.join(refusals)} — so the request carries no identity to compare, and "
+        f"{local_evidence}",
     )
 
 
@@ -702,7 +703,7 @@ def parse_started_at(value: str) -> datetime:
     rewrote it, so both are accepted rather than one being a surprise."""
     text = value.strip()
     if text.isdigit():
-        return datetime.fromtimestamp(int(text), tz=timezone.utc)
+        return datetime.fromtimestamp(int(text), tz=UTC)
     return datetime.fromisoformat(text.replace("Z", "+00:00"))
 
 
@@ -760,7 +761,12 @@ def check_listener(options: Options) -> None:
             check=False,
         )
     except OSError as error:
-        options.add("0 listener", "socket is listening", UNPROVEN, f"could not run port_manager: {error}")
+        options.add(
+            "0 listener",
+            "socket is listening",
+            UNPROVEN,
+            f"could not run port_manager: {error}",
+        )
         return
     output = (completed.stdout + completed.stderr).strip()
     if "no visible TCP listener" in output or completed.returncode != 0:
@@ -771,7 +777,12 @@ def check_listener(options: Options) -> None:
             f"port {options.port} has no visible TCP listener: {output.splitlines()[:1]}",
         )
         return
-    options.add("0 listener", "socket is listening", PASS, f"port {options.port}: {output.splitlines()[0]}")
+    options.add(
+        "0 listener",
+        "socket is listening",
+        PASS,
+        f"port {options.port}: {output.splitlines()[0]}",
+    )
 
 
 def check_identity(options: Options) -> bool:
@@ -826,7 +837,12 @@ def check_source_version(options: Options) -> str | None:
     try:
         source = read_source_version(options.repo_root)
     except (OSError, ValueError) as error:
-        options.add("1 source-version", "sw.js CACHE_VERSION == local /api/version", UNPROVEN, str(error))
+        options.add(
+            "1 source-version",
+            "sw.js CACHE_VERSION == local /api/version",
+            UNPROVEN,
+            str(error),
+        )
         return None
     response = options.fetch(f"{options.local_origin}/api/version")
     if response.status != 200:
@@ -909,8 +925,8 @@ def check_deployed_version(options: Options) -> str | None:
             "2 deployed-version",
             "local /api/version == deployed /api/version",
             FAIL,
-            f"local {local_version!r} != deployed {deployed_version!r} — the Serve route is proxying "
-            "a different backend than the one just restarted",
+            f"local {local_version!r} != deployed {deployed_version!r} — the Serve route is "
+            "proxying a different backend than the one just restarted",
         )
         return deployed_version
     options.add(
@@ -941,7 +957,7 @@ def check_backend_freshness(options: Options) -> None:
             "3 backend-freshness",
             "X-PWA-Backend-Started-At newer than every changed startup-loaded file",
             FAIL,
-            f"the local /api/version response carries no X-PWA-Backend-Started-At header",
+            "the local /api/version response carries no X-PWA-Backend-Started-At header",
         )
         return
     try:
@@ -979,7 +995,8 @@ def check_backend_freshness(options: Options) -> None:
             elif deployed_header != local_header:
                 problems.append(
                     f"local started at {local_header!r} but the deployed origin reports "
-                    f"{deployed_header!r} — two different processes, so at least one was not restarted"
+                    f"{deployed_header!r} — two different processes, so at least one was not "
+                    "restarted"
                 )
     else:
         unproven.append(
@@ -1017,8 +1034,8 @@ def check_backend_freshness(options: Options) -> None:
             VANTAGE,
             vantage_note(
                 options,
-                f"the local half was evaluated and the backend started at {local_header}, newer than "
-                f"every named startup-loaded file",
+                f"the local half was evaluated and the backend started at {local_header}, "
+                f"newer than every named startup-loaded file",
             )
             + f" (not evaluated: {'; '.join(vantage)})"
             + (f"; still unproven: {'; '.join(unproven)}" if unproven else ""),
@@ -1052,7 +1069,7 @@ def _startup_loaded_mtimes(
         for path in sorted(options.repo_root.glob(pattern)):
             if not path.is_file():
                 continue
-            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc)
+            mtime = datetime.fromtimestamp(path.stat().st_mtime, tz=UTC)
             if mtime > cutoff:
                 stale.append((path.relative_to(options.repo_root).as_posix(), mtime))
 
@@ -1067,7 +1084,9 @@ def _startup_loaded_mtimes(
             ("daily_notes_root", options.daily_notes_root),
         ):
             if not relative:
-                unproven.append(f"no --{label.replace('_', '-')}, so that index input was NOT compared")
+                unproven.append(
+                    f"no --{label.replace('_', '-')}, so that index input was NOT compared"
+                )
                 continue
             base = options.vault / relative
             if not base.exists():
@@ -1081,7 +1100,7 @@ def _startup_loaded_mtimes(
             )
             if newest is None:
                 continue
-            mtime = datetime.fromtimestamp(newest.stat().st_mtime, tz=timezone.utc)
+            mtime = datetime.fromtimestamp(newest.stat().st_mtime, tz=UTC)
             if mtime > cutoff:
                 stale.append(
                     (
@@ -1119,7 +1138,12 @@ def check_release_smoke(options: Options) -> None:
     try:
         spec = json.loads(spec_path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as error:
-        options.add("4 release-smoke", "release-specific live API smoke check", FAIL, f"unreadable spec: {error}")
+        options.add(
+            "4 release-smoke",
+            "release-specific live API smoke check",
+            FAIL,
+            f"unreadable spec: {error}",
+        )
         return
     endpoints = spec.get("endpoints") or []
     if not endpoints:
@@ -1159,7 +1183,12 @@ def check_release_smoke(options: Options) -> None:
             problems.extend(_missing_keys(origin_label, path, response.json(), endpoint))
             verified += len(endpoint.get("top_level_keys", []))
     if problems:
-        options.add("4 release-smoke", "release-specific live API smoke check", FAIL, "; ".join(problems))
+        options.add(
+            "4 release-smoke",
+            "release-specific live API smoke check",
+            FAIL,
+            "; ".join(problems),
+        )
         return
     if vantage:
         options.add(
@@ -1179,7 +1208,8 @@ def check_release_smoke(options: Options) -> None:
         "4 release-smoke",
         "release-specific live API smoke check",
         PASS,
-        f"{checked} declared keys present across {len(origins)} origin(s) and {len(endpoints)} endpoints",
+        f"{checked} declared keys present across {len(origins)} origin(s) and "
+        f"{len(endpoints)} endpoints",
     )
 
 
@@ -1206,11 +1236,15 @@ def _missing_keys(label: str, path: str, payload: Any, endpoint: Mapping[str, An
         for child_key, child_item_keys in nested.items():
             children = items[0].get(child_key) if isinstance(items[0], dict) else None
             if not isinstance(children, list) or not children:
-                missing.append(f"{label} {path} {array_key}[0].{child_key} is not a non-empty array")
+                missing.append(
+                    f"{label} {path} {array_key}[0].{child_key} is not a non-empty array"
+                )
                 continue
             for key in child_item_keys:
                 if not isinstance(children[0], dict) or key not in children[0]:
-                    missing.append(f"{label} {path} {array_key}[0].{child_key}[0] has no key {key!r}")
+                    missing.append(
+                        f"{label} {path} {array_key}[0].{child_key}[0] has no key {key!r}"
+                    )
     return missing
 
 
@@ -1252,13 +1286,13 @@ def check_cache_rotation(options: Options, version: str | None) -> None:
             problems.append(f"{label} /sw.js carries no CACHE_VERSION constant")
         elif version is None:
             unproven.append(
-                f"{label} /sw.js serves CACHE_VERSION {served.group(1)!r} but the SOURCE could not be read, "
-                "so the two were not compared"
+                f"{label} /sw.js serves CACHE_VERSION {served.group(1)!r} but the SOURCE could "
+                "not be read, so the two were not compared"
             )
         elif served.group(1) != version:
             problems.append(
-                f"{label} /sw.js serves CACHE_VERSION {served.group(1)!r}, source says {version!r} — "
-                "an installed PWA would be handed the previous exact-versioned bundle"
+                f"{label} /sw.js serves CACHE_VERSION {served.group(1)!r}, source says {version!r} "
+                "— an installed PWA would be handed the previous exact-versioned bundle"
             )
 
     rotated, notes = _mutable_static_changes(options, version)
@@ -1266,7 +1300,12 @@ def check_cache_rotation(options: Options, version: str | None) -> None:
     unproven.extend(notes)
 
     if problems:
-        options.add("5 cache-rotation", "CACHE_VERSION rotated and served identically", FAIL, "; ".join(problems))
+        options.add(
+            "5 cache-rotation",
+            "CACHE_VERSION rotated and served identically",
+            FAIL,
+            "; ".join(problems),
+        )
         return
     if vantage:
         # The rotation half of this condition is a fact about the *repository*,
@@ -1340,7 +1379,12 @@ def _mutable_static_changes(options: Options, version: str | None) -> tuple[list
         return [], [f"{options.repo_root} is not a git working tree"]
     try:
         if options.baseline_commit:
-            options.git("cat-file", "-e", f"{options.baseline_commit}^{{commit}}", cwd=options.repo_root)
+            options.git(
+                "cat-file",
+                "-e",
+                f"{options.baseline_commit}^{{commit}}",
+                cwd=options.repo_root,
+            )
             anchor = options.baseline_commit
             where = f"--baseline {anchor[:12]}"
         else:
@@ -1355,8 +1399,8 @@ def _mutable_static_changes(options: Options, version: str | None) -> tuple[list
             ).strip()
             if not anchor:
                 return [], [
-                    "no commit in this history ever rotated CACHE_VERSION; the bump is uncommitted, "
-                    "or the clone is too shallow to contain it"
+                    "no commit in this history ever rotated CACHE_VERSION; the bump is "
+                    "uncommitted, or the clone is too shallow to contain it"
                 ]
             where = f"the commit that last rotated CACHE_VERSION ({anchor[:12]})"
         changed = options.git(
@@ -1375,7 +1419,8 @@ def _mutable_static_changes(options: Options, version: str | None) -> tuple[list
     if stale:
         return (
             [
-                "CACHE_VERSION was NOT rotated even though these mutable frontend files changed since "
+                "CACHE_VERSION was NOT rotated even though these mutable frontend files "
+                "changed since "
                 + where
                 + ": "
                 + ", ".join(sorted(stale))
@@ -1389,7 +1434,12 @@ def check_shell_assets(options: Options, version: str | None) -> None:
     """6 — the served HTML references the same versioned assets as the SW cache
     name (§3e 5, §3b's "row that bites you")."""
     if version is None:
-        options.add("6 shell-assets", "HTML versioned assets == SHELL_ASSETS", UNPROVEN, "no source version")
+        options.add(
+            "6 shell-assets",
+            "HTML versioned assets == SHELL_ASSETS",
+            UNPROVEN,
+            "no source version",
+        )
         return
     try:
         shell_assets = set(read_shell_assets(options.repo_root, version))
@@ -1415,13 +1465,19 @@ def check_shell_assets(options: Options, version: str | None) -> None:
         for ref in sorted(refs):
             if not ref.endswith(f"?v={version}"):
                 problems.append(
-                    f"{label} / pins {ref} but CACHE_VERSION is {version} — the browser HTTP cache can "
-                    "serve the previous exact-versioned bundle while the shell reports the new version"
+                    f"{label} / pins {ref} but CACHE_VERSION is {version} — the browser HTTP "
+                    "cache can serve the previous exact-versioned bundle while the shell "
+                    "reports the new version"
                 )
             elif ref not in shell_assets:
                 problems.append(f"{label} / references {ref}, which is not in sw.js SHELL_ASSETS")
     if problems:
-        options.add("6 shell-assets", "HTML versioned assets == SHELL_ASSETS", FAIL, "; ".join(problems))
+        options.add(
+            "6 shell-assets",
+            "HTML versioned assets == SHELL_ASSETS",
+            FAIL,
+            "; ".join(problems),
+        )
         return
     if vantage:
         options.add(
@@ -1430,8 +1486,8 @@ def check_shell_assets(options: Options, version: str | None) -> None:
             VANTAGE,
             vantage_note(
                 options,
-                f"every ?v= reference on {', '.join(verified)} is pinned to {version} and present in "
-                "SHELL_ASSETS",
+                f"every ?v= reference on {', '.join(verified)} is pinned to {version} and "
+                "present in SHELL_ASSETS",
             )
             + f" (not evaluated: {'; '.join(vantage)})",
         )
@@ -1452,7 +1508,12 @@ def check_resume_version_check(options: Options, version: str | None) -> None:
     would pass against code the device never receives.
     """
     if version is None:
-        options.add("7 resume-check", "resume triggers a version check", UNPROVEN, "no source version")
+        options.add(
+            "7 resume-check",
+            "resume triggers a version check",
+            UNPROVEN,
+            "no source version",
+        )
         return
     problems: list[str] = []
     vantage: list[str] = []
@@ -1499,12 +1560,22 @@ def check_busy_guard(options: Options, version: str | None) -> None:
     `WAIT_FOR_MESSAGE` is on so the banner's Reload button is what activates the
     new worker (F18)."""
     if version is None:
-        options.add("8 busy-guard", "an open confirmation flow postpones the reload", UNPROVEN, "no source version")
+        options.add(
+            "8 busy-guard",
+            "an open confirmation flow postpones the reload",
+            UNPROVEN,
+            "no source version",
+        )
         return
     try:
         config = read_bootstrap_config(options.repo_root)
     except OSError as error:
-        options.add("8 busy-guard", "an open confirmation flow postpones the reload", UNPROVEN, str(error))
+        options.add(
+            "8 busy-guard",
+            "an open confirmation flow postpones the reload",
+            UNPROVEN,
+            str(error),
+        )
         return
     problems: list[str] = []
     vantage: list[str] = []
@@ -1512,7 +1583,8 @@ def check_busy_guard(options: Options, version: str | None) -> None:
     if config.get("WAIT_FOR_MESSAGE") != "true":
         problems.append(
             f"sw.js CONFIG has WAIT_FOR_MESSAGE={config.get('WAIT_FOR_MESSAGE')!r}, not true; with "
-            "auto-takeover a reload can land between the user tapping 做过了 and the request completing"
+            "auto-takeover a reload can land between the user tapping 做过了 and the "
+            "request completing"
         )
     for label, origin in _origins(options):
         response = options.fetch(f"{origin}/js/pwa/update-manager.js?v={version}")
@@ -1528,7 +1600,12 @@ def check_busy_guard(options: Options, version: str | None) -> None:
             if marker not in body:
                 problems.append(f"{label} update-manager.js does not expose {marker!r}")
     if problems:
-        options.add("8 busy-guard", "an open confirmation flow postpones the reload", FAIL, "; ".join(problems))
+        options.add(
+            "8 busy-guard",
+            "an open confirmation flow postpones the reload",
+            FAIL,
+            "; ".join(problems),
+        )
         return
     if vantage:
         options.add(
@@ -1547,7 +1624,8 @@ def check_busy_guard(options: Options, version: str | None) -> None:
         "8 busy-guard",
         "an open confirmation flow postpones the reload",
         PASS,
-        "WAIT_FOR_MESSAGE is true and the served update manager exposes canApplyUpdate/requestUpdateReload",
+        "WAIT_FOR_MESSAGE is true and the served update manager exposes "
+        "canApplyUpdate/requestUpdateReload",
     )
 
 
@@ -1600,21 +1678,26 @@ def render(results: Sequence[CheckResult]) -> str:
     vantage = [result for result in results if result.status == VANTAGE]
     lines.append("=" * 72)
     if failed:
-        lines.append(f"RESULT: FAILED — {len(failed)} condition(s) failed. Do not reinstall the PWA.")
+        lines.append(
+            f"RESULT: FAILED — {len(failed)} condition(s) failed. Do not reinstall the PWA.",
+        )
     elif unproven:
         lines.append(
             f"RESULT: INCOMPLETE — {len(unproven)} condition(s) could not be evaluated. "
-            "This is NOT a pass: an unevaluated condition is exactly the state a stale backend is in."
+            "This is NOT a pass: an unevaluated condition is exactly the state a stale "
+            "backend is in.",
         )
     elif vantage:
         lines.append(
-            f"RESULT: VANTAGE-LIMITED — {len(vantage)} condition(s) could not be evaluated from this "
-            "host. This is NOT a pass: no version, timestamp, key or asset on the deployed origin has "
-            "been observed, and this exit code asserts no convergence at all."
+            f"RESULT: VANTAGE-LIMITED — {len(vantage)} condition(s) could not be evaluated "
+            "from this host. This is NOT a pass: no version, timestamp, key or asset on the "
+            "deployed origin has been observed, and this exit code asserts no convergence "
+            "at all.",
         )
     else:
         lines.append(
-            "RESULT: CONVERGED — every condition passed. Only now may the Home Screen PWA be reinstalled."
+            "RESULT: CONVERGED — every condition passed. Only now may the Home Screen PWA "
+            "be reinstalled.",
         )
     if vantage:
         # Printed unconditionally, including under FAILED and INCOMPLETE. A run
@@ -1703,7 +1786,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--baseline",
         default=None,
-        help="git commit to use as the CACHE_VERSION rotation anchor instead of the commit that set it",
+        help="git commit to use as the CACHE_VERSION rotation anchor instead of the commit "
+        "that set it",
     )
     parser.add_argument("--vault", default=None, help="vault path, for the §12.3 index inputs")
     parser.add_argument("--recipes-root", default=None)
@@ -1721,7 +1805,8 @@ def build_parser() -> argparse.ArgumentParser:
         "--no-listener-check",
         dest="expect_running",
         action="store_false",
-        help="pre-restart runs: the new code is not running yet, so condition 0 is UNPROVEN not FAIL",
+        help="pre-restart runs: the new code is not running yet, so condition 0 is UNPROVEN "
+        "not FAIL",
     )
     return parser
 

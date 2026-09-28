@@ -85,17 +85,6 @@ force-exclude = true
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
-[tool.ruff.lint.per-file-ignores]
-# A quarantine, not a silencing. `converge_gate.py` carries a 37-error backlog
-# (33 E501, 3 UP017, 1 F541) that could not be fixed in the change that widened
-# this gate to `scripts/`: another agent owned that file, and a concurrent
-# hand-edit of a 1189-line release gate is a write-write race. It is listed here
-# by rule rather than by path alone so a NEW class of error in the same file is
-# still caught, and it is one entry rather than 33 `# noqa` comments, so the
-# backlog is greppable and has a stated removal condition.
-# REMOVE once `ruff check scripts/converge_gate.py` is clean.
-"scripts/converge_gate.py" = ["E501", "UP017", "F541"]
-
 [tool.mypy]
 python_version = "3.12"
 strict = true
