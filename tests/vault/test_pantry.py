@@ -22,7 +22,9 @@ is worse than none, and the two things a false-passing test would hide are the
 per-unit parent exclusion and `derived_status`. Each rule below therefore has a
 test that pins the correct answer *and* the plausible-wrong answer, so the
 assertion is proven to distinguish them, and each is additionally run against a
-deliberately broken copy of the rule in `test_money_math_mutants_are_killed`.
+deliberately broken copy of the rule by
+`test_each_money_rule_is_individually_observable` and
+`test_every_money_mutant_moves_the_frozen_figure` in this module.
 """
 
 from __future__ import annotations
