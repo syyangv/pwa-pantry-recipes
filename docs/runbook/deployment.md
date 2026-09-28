@@ -421,13 +421,16 @@ section asks for at the end. So conditions **2, 4, 5, 6, 7 and 8** — and the
 deployed half of **3** — are still not evaluated, the gate still reports seven
 `VANTAGE-LIMITED` conditions, and the gate still **exits 3**.
 
-### The two negative checks, performed 2026-09-28
+### The two negative checks, both now closed, 2026-09-28
 
 Both were performed on 2026-09-28, **from this Mac — the serving node itself**,
 and that vantage is weaker than the one the positive check above used, so it is
 named per check rather than once. Neither result is a claim about what a remote
 peer sees on the tailnet; §8's own discipline ("a probe from the serving node is
-weaker evidence than one from a phone") is the reason.
+weaker evidence than one from a phone") is the reason. The two also differ in
+*how* they were settled: the HTTPS-ports half was a straight negative probe,
+while the SSH half needed a change to the host first — the user turning macOS
+Remote Login off by hand — and was re-probed afterwards.
 
 **Unrelated HTTPS ports do not serve — VERIFIED, from the serving node.** Ports
 `8444`, `8451`, `8453`, `9000` and `4433` were probed against
@@ -457,48 +460,134 @@ is shown to detect a port that *is* a route.
 > conclusion holds — but the tailnet-ACL layer itself is untested, and only a
 > probe from a phone would test it.
 
-**SSH over the tailnet — NOT VERIFIED, and the check as originally written cannot
-pass on this node.** The configuration half is clean and was verified read-only:
-`tailscale serve status --json` lists TCP forwards on `443`, `8443`, `8445`–`8450`
-and `8452` and **no `22`**; `tailscale debug prefs` reports **`RunSSH = False`**
-(Tailscale SSH is not enabled for this node); and `tailscaled` holds **no**
-listener on the tailnet address's port 22. So Tailscale Serve is not tunnelling
-SSH, which is what the check was aimed at.
+**SSH over the tailnet — PASSED, 2026-09-28, after the user closed Remote Login.**
 
-The behavioural half is a **different and more serious answer than "it failed".**
-`nc` to `<tailnet-hostname>:22` **connected**, and the banner on the wire was
-`SSH-2.0-OpenSSH_9.6` — macOS's own OpenSSH, not tailscaled. `netstat -an` shows
-it bound to `*.22` (wildcard, therefore including `tailscale0`), the application
-firewall reports `State = 0` (disabled) with block-all and stealth mode off, and
-`ssh <tailnet-hostname> true` from this Mac **succeeded** (exit 0). `lsof` shows
-no process on 22 because `/System/Library/LaunchDaemons/ssh.plist` uses
-`inetdCompatibility`, so launchd holds the socket and spawns `sshd` on demand.
+This check **reads passed**, with the method and the date, because the thing it
+was aimed at is now true: the tailnet address `100.87.56.102` **refuses the TCP
+connection on port 22**.
 
-So on this node SSH over the tailnet is not blocked at all — and it is not
-Tailscale that unblocks it, it is a wildcard-bound `sshd` on a Mac with its
-firewall off. **The check "SSH must fail over the tailnet" is therefore recorded
-as NOT PASSED, not as failed and not as passed.** It is a property of the host's
-own SSH configuration, and closing it is a decision about Remote Login on this
-Mac, not a fact this repository can assert. Two sub-points are honest gaps: the
-`systemsetup -getremotelogin` read needs `sudo` and was not obtained, so Remote
-Login's *configured* state is inferred from the successful connect rather than
-read; and the node still advertises `https://tailscale.com/cap/ssh` in its
-`CapMap`, so "the node advertises no SSH capability" is **not** something this
-entry claims.
+| Field | Value |
+|---|---|
+| Check | SSH over the tailnet must fail |
+| Result | **PASSED** — port 22 **refused** |
+| Method | `nc -z -G 2 100.87.56.102 22` → `refused`, **exit 1** (no banner, no handshake) |
+| Remediation | the user ran `sudo systemsetup -setremotelogin off` **themselves** |
+| Date | 2026-09-28 |
+| Observer | the user, in their own terminal — the output and exit code are the evidence |
+| Vantage | **the serving node**, not a remote peer — see the caveat below |
 
-> One side effect, disclosed: that `ssh` probe authenticated, with a local key,
-> to **this Mac's own** `sshd` as the current user. The intent was a refusal
-> probe and the expectation was `refused`; the instruction was not to
-> authenticate to anything, and that probe went further than intended. It reached
-> no remote system and changed no service, but it did add a `known_hosts` entry
-> for `home-macbook-air.tailcd6e49.ts.net`, which was left in place rather than
-> tidied away.
+Unlike the positive check at the top of this section, this one is
+**machine-observed**: there is a command, its output, and an exit code behind
+it, not a report. It is *not* attested the way the phone result is.
+
+Three sudo-free facts were checked in the same pass and agree with the probe:
+`netstat -an -p tcp` shows **no `LISTEN` on 22** at all;
+`lsof -nP -iTCP:22 -sTCP:LISTEN` is **empty**; and `launchctl print-disabled
+system` reports `"com.openssh.sshd" => disabled`, which is the state left behind
+by `systemsetup -setremotelogin off`. The configuration half remains clean and
+unchanged: `tailscale serve status --json` lists TCP forwards on `443`, `8443`,
+`8445`–`8450` and `8452` and **no `22`**, and `tailscale debug prefs` still
+reports **`RunSSH = False`** (Tailscale SSH is not enabled for this node). So
+the refusal is not Tailscale declining to tunnel SSH — it is that there is now
+no `sshd` on this host at all.
+
+**Who closed it, and how — the user, not an agent, and with no privilege
+granted.** The user ran `sudo systemsetup -setremotelogin off` themselves, in
+their own terminal, on 2026-09-28. **No agent ran that command, and no agent
+asked for the capability to.** No `/etc/sudoers.d` entry was created, and none
+was needed or requested: `/etc/sudoers.d` still contains only the two
+pre-existing files (`amphetamine_PowerProtect`, `syang-pmset`), neither of which
+is related, and nothing in this repository refers to a sudoers grant. The user
+was offered the alternative — a narrowly-scoped sudoers entry that would let an
+agent run the command unattended — and **chose the one-line interactive path
+rather than granting a privilege**.
+
+That matches the conclusion the earlier version of this entry reached, and the
+reasoning behind it still stands unchanged: the agent **could not** have run
+this, for three reasons that are not obstacles to be engineered around. `sudo`
+here is **password-gated**; the agent has **no TTY** on which to answer the
+password prompt; and the agent **declined to accept a credential into the session
+transcript**, because a password typed into a transcript is a credential written
+down. Those three are the reason this entry is a record of what a *person* did.
+What changed is not the reasoning — it is that the user then did it by hand,
+which is why the check can now be recorded as passed.
+
+> **The vantage caveat is unchanged, and this is not a stronger claim than the
+> unrelated-ports check beside it.** The probe was made **from the serving
+> node**. Connecting to this node's own `100.x` address never leaves the
+> machine, so it confirms the port is closed but **does not exercise tailnet
+> ACLs from a genuinely remote peer**. The tailnet-ACL layer is still untested,
+> and only a probe from a phone would test it. `passed` here means "port 22
+> refused, as observed from this node" and not "port 22 is refused as a remote
+> peer would find it". The claim is not upgraded by the fix.
+
+**What closing Remote Login did and did not affect.** It was an **inbound**
+toggle on this Mac, and nothing in the deployed stack depended on inbound SSH.
+Checked read-only after the change:
+
+| Dependency on inbound SSH | Finding |
+|---|---|
+| `scripts/` in every PWA (`pwa-pantry-recipes`, `pwa-wardrobe`, `pwa-deals`, `pwa-obsidian-daily`, `pwa-obsidian-editor`, `pwa-obsidian-monthly`, `pwa-face-world-cup`, `pwa-outlook-cal-sync`, `pwa-template`) | **no `ssh`/`scp` invocation anywhere.** The only textual matches are docstrings describing a *retired* `fly ssh console` call in `pwa-wardrobe`, and vendored library code under a nested `.venv` |
+| `~/Library/LaunchAgents/*.plist` | **no agent** references `ssh`, Remote Login, or `com.openssh`. `com.syang.pwa-pantry-recipes` is `state = running`, pid 47250 |
+| `tailscale serve status --json` | **9 Web endpoints / 10 handlers**, every one a **loopback** `http`/`https+insecure` proxy — `127.0.0.1:3000` and `:8786` on `:443`, then `:8003`, `:8789`, `:8000`, `:8004`, `:8002`, `:8005`, `:8006`, `:8007` — and **0 `ssh://` forwards**. Serve proxies over loopback and never used the ssh transport |
+
+So **all 10 Serve routes and every PWA are unaffected**, this app's `:8452`
+route still proxies to `127.0.0.1:8007` exactly as before, and the service was
+neither restarted nor re-proxied to make this work.
+
+**Outbound SSH from this Mac is unchanged**, and structurally it cannot have
+been affected: Remote Login is an *inbound* service, while outbound `ssh` is the
+*client*, and the toggle touched neither `~/.ssh/config`, the private keys, nor
+`~/.ssh/known_hosts`. Spot-checked read-only on 2026-09-28:
+`nc -z -G 5 github.com 22` **succeeded**. The user's own report is that the
+`kindle-dashboard` host, the GCP box (`video-test` → `34.85.238.57`) and the
+university host (`shannon.clps.brown.edu` → `10.9.81.193`, all three present in
+`known_hosts`) still work. At the moment of this check those three did **not**
+answer port 22 from here, so that part of the claim rests on the report plus the
+mechanism above rather than on a fresh probe. The claim made here is the narrow
+and supportable one: **this change did not touch outbound SSH.**
+
+**The three `~/.ssh/authorized_keys` entries are now inert, not deleted.**
+`authorized_keys` was **not edited** — this entry is a record, not a change —
+but with `com.openssh.sshd` disabled there is no `sshd` to read it, so none of
+the three keys can authenticate anything. They are dead configuration rather
+than an attack surface, and they become live again the instant Remote Login is
+switched back on.
+
+**The asymmetry to revisit if that ever happens.** The three entries are not
+equally constrained:
+
+| # | Type | Constraint |
+|---|---|---|
+| 1 | `ssh-ed25519` | `restrict,from="100.64.0.0/10,fd7a:115c:a1e0::/48"` — pinned to the tailnet CIDRs |
+| 2 | `ecdsa-sha2-nistp256` | **unscoped** — no `from=`, no `restrict` |
+| 3 | `ssh-ed25519`, comment `syyangv@gmail.com` | **unscoped** — no `from=`, no `restrict` |
+
+Entries 2 and 3 are precisely the two that entry 1 is not: while port 22 is
+open, either would be accepted from **any** source address that can reach it.
+Remote Login being off makes that moot today. If it is ever re-enabled, bringing
+those two in line with entry 1 — or removing them — is the change to make
+**first**, and it should be made *before* the toggle, not after.
+
+> One side effect from the earlier state of this check, still disclosed: that
+> probe authenticated, with a local key, to **this Mac's own** `sshd` as the
+> current user. The intent was a refusal probe and the expectation was
+> `refused`; the instruction was not to authenticate to anything, and it went
+> further than intended. It reached no remote system and changed no service, but
+> it did add a `known_hosts` entry for
+> `home-macbook-air.tailcd6e49.ts.net`, which was left in place rather than
+> tidied away. With Remote Login off, the same probe now refuses, so the path
+> is closed; that `known_hosts` entry was not removed and would become usable
+> again on re-enable.
 
 **Summary of the section's original three items:** the positive origin check
 passed on the user's attestation from a phone; unrelated HTTPS ports were
-verified not to serve, from the serving node; and the SSH check is **open**, with
-its configuration half clean and its behavioural half answered by a non-Tailscale
-listener.
+verified not to serve, from the serving node; and the SSH check is now
+**closed** — port 22 verified **refused** on 2026-09-28, from the serving node,
+after the user turned Remote Login off by hand with
+`sudo systemsetup -setremotelogin off`. Both negative checks were observed by a
+command rather than attested, and **both carry the same serving-node vantage**:
+neither is a claim about what a remote peer sees.
 
 ### Why the gate exits 3 here, permanently, and why that is the correct answer
 
@@ -736,11 +825,16 @@ answer: it proves the deployed route is a pass-through to this very process, so
 there is no second deployment hiding behind the vantage limit, but it reads no
 deployed response and therefore retires nothing.
 
-What remains genuinely open to the user is narrow and is listed in §8: the
-**SSH** half of the negative participant-identity checks (the unrelated-HTTPS-ports
-half was performed 2026-09-28 from the serving node and is recorded with its
-vantage), and — if a `CONVERGED` line is ever wanted in a log — running the gate
-itself from the phone.
+What remains genuinely open to the user is now one item, and it is not a
+negative check: if a `CONVERGED` line is ever wanted in a log, that means
+**running the gate itself from the phone**. Both negative participant-identity
+checks are **closed** — the unrelated-HTTPS-ports half was verified refused from
+the serving node on 2026-09-28, and the **SSH** half was verified refused on
+`100.87.56.102:22` on 2026-09-28, after the user closed macOS Remote Login
+themselves with `sudo systemsetup -setremotelogin off` (§8, which records the
+method, the operator, and the fact that no sudoers grant was involved). Each
+carries the same serving-node vantage caveat: neither exercises tailnet ACLs
+from a remote peer.
 
 Two ledger facts changed in the port-manager repo on 2026-09-28 (`ebb7291`) and
 are recorded here so this runbook is not the only place they are written down:

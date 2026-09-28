@@ -342,17 +342,24 @@ can check against the tree, not as a claim about intent.
   not happen is what was available and was refused: passing `--baseline`, or
   editing a condition to agree.
 - **The participant-identity check has been performed, on the user's
-  attestation — and two of its three items are still open.**
+  attestation — and both negative checks are now closed, from the serving node.**
   `docs/runbook/deployment.md` §8 asked for a phone off the host's own network:
   the PWA port succeeds, unrelated HTTPS ports fail, SSH fails. On 2026-09-28
   the user did the first from `mieiphone` (`syyangv@`, `100.99.212.85`) and
   reported that **the app loads**, so the identity chain past the proxy is now
   exercised once and an authenticated 200 has been seen. This is a **user report,
   not a machine-verified result** — no tool here observed it — and it establishes
-  reachability and identity, not convergence. The two negative checks (unrelated
-  HTTPS ports, SSH) were not part of what was reported and are still open. A
-  loopback check still does not substitute for the positive one: it shares the
-  host's tailnet position and its loopback, which is the exact thing §8 rules out.
+  reachability and identity, not convergence. The two negative checks were not
+  part of what was reported and are now settled separately: unrelated HTTPS
+  ports were probed and **refused** on 2026-09-28, and **SSH was verified
+  refused on `100.87.56.102:22` on 2026-09-28** after the user turned macOS
+  Remote Login off themselves with `sudo systemsetup -setremotelogin off` — the
+  user, not an agent, and with no `/etc/sudoers.d` grant created or needed. Both
+  were run from the **serving node**, and a probe from this node to its own
+  `100.x` address never leaves the machine, so **neither exercises tailnet ACLs
+  from a genuinely remote peer**; only a probe from a phone would. A loopback
+  check still does not substitute for the positive one: it shares the host's
+  tailnet position and its loopback, which is the exact thing §8 rules out.
 - **The deployed service has only ever been observed failing closed *by the
   gate*.** Every request the gate made over the network was refused, because a
   self-originated request has no remote peer for Serve to attribute an identity
