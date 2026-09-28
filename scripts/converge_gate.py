@@ -23,6 +23,7 @@ it into a pass is how a release ships against a backend that never reloaded.
 The conditions, in the order §12 numbers them:
 
     0  listener          the socket is really listening (not `launchctl print`)
+    0b identity          the local origin answers the gate, and in which posture
     1  source-version    sw.js CACHE_VERSION == local /api/version
     2  deployed-version  local /api/version == deployed /api/version
     3  backend-freshness X-PWA-Backend-Started-At matches on both, and is newer
@@ -1117,7 +1118,10 @@ def exit_code(results: Sequence[CheckResult]) -> int:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="converge_gate.py",
-        description="The release gate: eight conditions, each one able to fail.",
+        description=(
+            "The release gate: nine numbered conditions (0-8) plus the 0b identity "
+            "precondition, each one able to fail."
+        ),
     )
     parser.add_argument("--local-origin", default="http://127.0.0.1:8007")
     parser.add_argument(

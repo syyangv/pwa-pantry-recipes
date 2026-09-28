@@ -28,6 +28,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -309,7 +310,77 @@ def test_the_baseline_has_exactly_the_ten_numbered_conditions(world: World) -> N
     """§12 numbers eight steps, and the two preconditions on them — the socket,
     and whether the gate can talk to the origin at all — are numbered 0 and 0b.
     All ten are pinned here so adding, merging or dropping a check is a
-    deliberate diff rather than an accident."""
+    deliberate diff rather than an accident.
+
+    The identifiers are read back off a **real** run rather than a literal, so
+    this test counts what the gate evaluates instead of restating a list that has
+    to be edited in two places. `0b` is the one condition whose ident is not
+    `<n> <name>`, so the numbering is derived from the digit prefix and `0b` is
+    matched separately."""
+    results, _ = run(world)
+    idents = [result.ident for result in results]
+    numbered = [ident for ident in idents if re.match(r"^\d+ ", ident)]
+    lettered = [ident for ident in idents if re.match(r"^\d+[a-z] ", ident)]
+    assert lettered == ["0b identity"], f"expected exactly the 0b precondition, got {lettered}"
+    assert len(numbered) == 9, f"expected nine numbered conditions, got {numbered}"
+    assert len(idents) == 10, f"expected ten checks in total, got {idents}"
+    # The numbers are consecutive from 0, so a dropped check cannot hide behind a
+    # rename: a merge that kept the count would still fail here.
+    assert [int(ident.split(" ", 1)[0]) for ident in numbered] == list(range(9))
+
+
+def test_the_help_text_counts_the_conditions_the_gate_evaluates(world: World) -> None:
+    """The `--help` description must state the count the gate actually runs.
+
+    It said "eight conditions" while the gate ran ten checks, and nothing
+    caught it, because a wrong count in prose is only a wrong count in prose
+    until someone reads the wrong number. The count is derived from a real run
+    and compared with the number *spelled* in the help text, so the sentence
+    cannot drift away from the code again without a red test.
+
+    Nine is the numbered conditions (`0`-`8`) and ten is those plus the `0b`
+    identity precondition — which is why both are asserted: dropping either
+    number from the description fails here.
+    """
+    help_text = gate.build_parser().format_help()
+    results, _ = run(world)
+    idents = [result.ident for result in results]
+    numbered_count = sum(1 for ident in idents if re.match(r"^\d+ ", ident))
+    total_count = len(idents)
+
+    assert str(numbered_count) in help_text or _number_word(numbered_count) in help_text, (
+        f"--help never states the numbered-condition count ({numbered_count}):\n{help_text}"
+    )
+    assert str(total_count) in help_text or _number_word(total_count) in help_text, (
+        f"--help never states the total check count ({total_count}):\n{help_text}"
+    )
+    # The old, wrong count must be gone — spelled or numeric.
+    assert "eight condition" not in help_text, (
+        "--help still says 'eight conditions', which is not what the gate runs"
+    )
+
+
+def _number_word(value: int) -> str:
+    """`9` -> `'nine'`, so the assertion above accepts either spelling.
+
+    The help text is prose, so a spelled-out number is the natural way to write
+    it; the test must not force an Arabic numeral just to be able to read it
+    back."""
+    words = {
+        1: "one",
+        2: "two",
+        3: "three",
+        4: "four",
+        5: "five",
+        6: "six",
+        7: "seven",
+        8: "eight",
+        9: "nine",
+        10: "ten",
+        11: "eleven",
+        12: "twelve",
+    }
+    return words[value]
 
 
 def test_an_unreachable_origin_is_reported_once_not_ten_times(world: World) -> None:

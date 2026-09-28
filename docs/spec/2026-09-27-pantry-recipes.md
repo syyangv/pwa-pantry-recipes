@@ -1299,9 +1299,10 @@ tests/
 ### 5.1 Bound terms (from `CONTEXT.md`, used exactly)
 
 Pantry Item, Pantry Item Alias, Pantry Category, Pantry Stock, Pantry Unit,
-Recipe, Ingredient, Seasoning (调料), Cooking Tool, Cookable, Cooking Log,
-Cooking Record, Stock Movement, Recipe Cooking History, Server-Owned Root,
-Pantry-Write Contract, Sync Conflict.
+Recipe, Ingredient, Seasoning (调料), Cooking Tool, Cookable,
+Ingredient Mapping, Cooking Log, Cooking Record, Stock Movement,
+Recipe Cooking History, Meal Shortlist, Server-Owned Root, Pantry-Write
+Contract, Sync Conflict.
 
 `Cookable` as `CONTEXT.md` defines it is a *boolean*. **This app does not render
 it, and no response ever publishes it.** D4 forbids a single boolean, so the app
