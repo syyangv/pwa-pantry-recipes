@@ -3968,10 +3968,17 @@ maintenance liability. Both run against a `tmp_path` vault and `tmp_path`
 
 ### 10.6 Type and lint scope
 
-`mypy --strict` on `app` (CI enforces `mypy app`; `pyproject.toml` lists
-`files = ["app", "tests"]` with relaxed overrides for `tests.*`). Every new
-module is fully annotated — the vault primitives are `frozen=True` dataclasses
-with typed byte spans and the new code matches. `ruff` with the existing
+`mypy --strict` on `app`, and nothing else. CI enforces `mypy app` and
+`pyproject.toml`'s `files` is `["app"]`, so the config, the documented commands
+and the gate name one scope: a bare `mypy` in the repo root is the same run.
+`tests/` and `scripts/` are outside it — `mypy app tests` is 119 pre-existing
+errors in 21 files unrelated to this work, and `mypy scripts` is 2 errors in
+`scripts/snapshot_pantry_catalog.py`; both were measured and both were left out
+rather than adopted, because a config that advertises a scope nothing enforces
+is the defect, not the errors. `ruff` is a separate decision and **is** wider
+than `mypy`: `ruff check app tests scripts`. Every new module is fully annotated
+— the vault primitives are `frozen=True` dataclasses with typed byte spans and
+the new code matches. `ruff` with the existing
 `select = ["E","F","I","UP","B"]` and `line-length = 100`.
 
 ---

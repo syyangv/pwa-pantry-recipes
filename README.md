@@ -424,11 +424,19 @@ can check against the tree, not as a claim about intent.
   `direnv`/shell export. Copying `.env.example` to `.env` documents intent and
   configures nothing — and `install_launchagent.sh` deliberately does not create
   one, because a second source of truth for the same values is how they drift.
-- **`mypy` scope is `app` only.** `pyproject.toml`'s `files` list names both
-  `app` and `tests`, but the command this repo documents, runs in `AGENTS.md`,
-  and runs in CI is `mypy app`, so `tests/` and `scripts/` are not
-  type-checked. `scripts/converge_gate.py` in particular is untyped-checked and
-  is gated by its own tests instead.
+- **`mypy` scope is `app`, and the config says so.** `pyproject.toml`'s `files`
+  is `["app"]`, the documented command here and in `AGENTS.md` is `mypy app`, and
+  that is what CI runs — so a bare `mypy` in this directory is the same run as
+  `mypy app` (clean, 38 files) and there is no scope the config advertises and
+  the gate does not check. `tests/` and `scripts/` are **not** type-checked.
+  `files` used to name `app` and `tests`; that claimed a gate the repo never ran
+  (`mypy app tests` is 119 errors in 21 files, all pre-existing and unrelated to
+  this app's work), so the config was narrowed rather than the gate widened. The
+  measurements, and the case for a future `scripts/`, are recorded at the
+  `[tool.mypy]` block itself — the reasoning belongs next to the value it
+  justifies, not in a README that will drift from it. Do not assume `tests/` is
+  type-clean; it is not checked. `scripts/converge_gate.py` in particular is
+  untyped-checked and is gated by its own tests instead.
 - **`scripts/` is linted, with one quarantined file.** The gate is `ruff check
   app tests scripts`, so the deploy scripts are held to the same rules as the
   app. `scripts/converge_gate.py` is the exception: it carries a 37-error

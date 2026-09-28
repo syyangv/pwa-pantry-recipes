@@ -50,8 +50,13 @@ things a Claude Code session gets wrong without being told.
 - **`app/static/icons/` is empty on purpose.** The manifest and the
   `apple-touch-icon` link reference four PNGs that do not exist. That is a known
   gap, not a bug to "fix" by deleting the references.
-- **CI checks `mypy app`, not `mypy app tests`.** `pyproject.toml` lists both
-  under `files`; only `app` is enforced. Do not assume `tests/` is type-clean.
+- **`mypy` scope is `app`, and config, docs and CI agree.** `pyproject.toml`'s
+  `files` is `["app"]`, the command below is `mypy app`, and CI runs
+  `mypy app` — so bare `mypy` is the same run. `tests/` and `scripts/` are not
+  type-checked. It used to be `files = ["app", "tests"]` against a `mypy app` gate
+  (119 pre-existing errors in 21 files); the config was narrowed, not the gate
+  widened, because the defect was the claim rather than the errors. Do not assume
+  `tests/` is type-clean.
 
 ## Before you commit
 
