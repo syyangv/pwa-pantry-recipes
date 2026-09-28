@@ -848,17 +848,13 @@ def test_f5_the_cook_log_is_disabled_offline_and_never_queued(
 # --- The 409 with no message: characterised, not discovered ------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "FINDING, not a contract: views/recipe.js keeps ONE `noteRevision` for a "
-        "write that is per-DATE, so the second cook of a session sends the first "
-        "cook's date's revision against the second cook's date and the server "
-        "answers 409 daily_note_changed. Filed against the recipe view; see the "
-        "ticket. `strict=True` so the fix turns this into an XPASS FAILURE "
-        "rather than leaving a stale expectation behind."
-    ),
-)
+# Was `xfail(strict=True)` from #25: FINDING, not a contract. `views/recipe.js`
+# kept ONE `noteRevision` for a write that is per-DATE, so the second cook of a
+# session sent the first cook's date's revision against the second cook's date
+# and the server answered 409 `daily_note_changed`. The view now keys its
+# revisions by date. The marker came off on the strength of the XPASS, not in
+# place of the fix — `strict=True` was chosen precisely so that this is the only
+# way it could be removed honestly.
 def test_a_second_cook_on_another_date_does_not_carry_the_first_dates_revision(
     app: LoopbackApp, chromium: Any, vault: Path
 ) -> None:
@@ -870,13 +866,14 @@ def test_a_second_cook_on_another_date_does_not_carry_the_first_dates_revision(
     that did not happen. Nothing was edited: the second date's note was written
     by the fixture and never touched.
 
-    **The mechanism.** `views/recipe.js` holds `noteRevision` as a single
-    `let` for the whole mount, and `submit(date, noteRevision)` sends it as the
-    `baseRevision` for whatever date the picker currently holds. A Cooking Log
-    write is a statement about a *date*; a revision is `sha256` of one
-    date's bytes. So once the view has read any revision, every later write —
-    to any date — carries a foreign one, and the server's compare-and-swap
-    correctly refuses it.
+    **The mechanism.** `views/recipe.js` held `noteRevision` as a single `let`
+    for the whole mount, and `submit(date, noteRevision)` sent it as the
+    `baseRevision` for whatever date the picker currently held. A Cooking Log
+    write is a statement about a *date*; a revision is `sha256` of one date's
+    bytes. So once the view had read any revision, every later write — to any
+    date — carried a foreign one, and the server's compare-and-swap correctly
+    refused it. The fix is a `Map` keyed by the date the request is about, so
+    the write carries the revision of **the note it is about to write**.
 
     **Why only a browser finds it.** An API test composes the body itself, so it
     would have to *choose* to send a mismatched revision, and then it is testing
@@ -884,8 +881,23 @@ def test_a_second_cook_on_another_date_does_not_carry_the_first_dates_revision(
     writes across two dates. The mistake is in the composition, and only a real
     client composing two real requests can make it.
 
+    **The first write is asserted to carry a revision, and that is not a
+    relaxation.** This test used to assert `baseRevision: None` for BOTH writes,
+    which was wrong for the first one and contradicted
+    `test_step_4_a_competing_out_of_band_write_makes_the_views_revision_stale`
+    in this same file: the view reads `TODAY`'s note on mount (the badge), and
+    that read is the ONLY thing that can make a later write to `TODAY` *stale*,
+    so §10.5 step 4's `409` requires this first write to carry `TODAY`'s own
+    revision. The two assertions could not both hold. It is now pinned to the
+    byte-exact `sha256` of `TODAY`'s fixture bytes, which is a strictly stronger
+    statement than `None`: it says the base is the right bytes, not merely that
+    there was no base.
+
     Asserted as an xfail so the suite stays honest about what ships: the
-    assertion below is the CORRECT behaviour, and it fails today.
+    assertions below are the CORRECT behaviour, and they failed when this was
+    written. It was marked `strict=True` so that fixing the bug would surface
+    here as a loud XPASS rather than leaving a stale expectation behind — which
+    is what happened, and the marker was removed on the strength of that.
     """
     today_note = vault_dir(vault) / note_path(TODAY)
     other_note = vault_dir(vault) / note_path(OTHER)
@@ -907,9 +919,17 @@ def test_a_second_cook_on_another_date_does_not_carry_the_first_dates_revision(
     finally:
         page.context.close()
 
+    # The FIRST write is about TODAY, and the view read TODAY's note on mount,
+    # so it is a real compare-and-swap against TODAY's own bytes — pinned to the
+    # digest of the fixture note, because a base that is merely *a* revision
+    # would pass for a foreign one.
+    assert bodies[0] == {
+        "recipeNote": RECIPE,
+        "date": TODAY,
+        "baseRevision": "sha256:" + sha256(daily_note(TODAY)),
+    }
     # The second write must carry NO revision, because the view has never read
     # `OTHER`'s note: its own bytes are what it is about to compare against.
-    assert bodies[0] == {"recipeNote": RECIPE, "date": TODAY, "baseRevision": None}
     assert bodies[1] == {"recipeNote": RECIPE, "date": OTHER, "baseRevision": None}, (
         f"the second cook carried the first cook's date's revision: {bodies[1]!r}"
     )

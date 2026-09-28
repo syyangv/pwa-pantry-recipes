@@ -39,6 +39,24 @@
  * sentence for a code the server already worded, and it never reaches into
  * `error.data.message`, which is the same string by a different door.
  *
+ * **The Cooking Log's revision is PER DATE, and it is kept in a per-date map
+ * rather than in one `let` for the mount.** A Cooking Log write is a statement
+ * about a *date* — `POST /api/cook-logs` names one daily note — and a note
+ * revision is `sha256` of one date's bytes. So "the revision this view knows"
+ * is not a scalar, it is one revision per date the view has read, and holding a
+ * single one is a category error that the server's compare-and-swap then
+ * reports to the user as a conflict that did not happen: log a cook for
+ * 2026-03-10, change the date to 2026-03-12, tap 记录 again, and the second
+ * write carried 03-10's revision, so it 409'd and 03-12's note got no link.
+ * Nothing had been edited. The map is what makes the request carry the revision
+ * of **the note it is about to write**, which is the whole of the contract:
+ * `null` for a date this view has never read (there is no base to compare
+ * against, and F4's `retryable` promises exactly that replay will work once the
+ * note exists) and a real revision for a date it has read, so an out-of-band
+ * edit between the read and the write still 409s. A clear-and-refetch on a date
+ * change would reconstruct the same information with a network round trip and a
+ * window in which the write must either block or guess.
+ *
  * **Every in-flight `.disabled = true` is paired with `unstickOnTimeout`** and
  * its `clear()` runs in a `finally`, so a hung fetch re-enables the controls
  * instead of locking the app up. The offline disable is a STATE rather than a
@@ -52,7 +70,12 @@ import {
   parseStrict,
   strictQuery,
 } from '../api.js?v=__APP_VERSION__';
-import { goBack, readViewState, saveViewState } from '../router.js?v=__APP_VERSION__';
+import {
+  currentEntryEpoch,
+  goBack,
+  readViewState,
+  saveViewState,
+} from '../router.js?v=__APP_VERSION__';
 import { isDebugEnabled } from '../prefs.js?v=__APP_VERSION__';
 import { el, trackScroll } from '../dom.js?v=__APP_VERSION__';
 import { chipRow, scoredSlots } from '../chips.js?v=__APP_VERSION__';
@@ -170,7 +193,12 @@ export function mount(root, params = {}) {
   const listeners = [];
   const panels = [];
   let controller = null;
-  let noteRevision = null;
+  /* date -> sha256 of that date's daily note, for the dates THIS view has
+   * actually read or written. Deliberately a Map and not a scalar: see the
+   * per-date note in the header. A date absent from it has never been read, so
+   * the write about to be made is not a compare-and-swap against anything and
+   * says so with `baseRevision: null` rather than with another date's hash. */
+  const noteRevisions = new Map();
   let inFlight = false;
 
   const name = typeof params.basename === 'string' ? params.basename : '';
@@ -188,7 +216,28 @@ export function mount(root, params = {}) {
   // note in router.js: a save from mount() or unmount() would land in the wrong
   // history entry, because the browser has already pushed the destination by
   // the time a hashchange handler runs.
-  const detachScroll = trackScroll(() => saveViewState({ scrollTop: window.scrollY }));
+  //
+  // AND NOT AFTER A TRAVERSAL. Reading the entry before the router touches
+  // anything is not by itself enough: on a Back traversal the browser dispatches
+  // `popstate`, then resets the scroll as it commits the arrival, and that reset
+  // is an ordinary scroll event THIS view's listener is still attached to. So
+  // the outgoing detail view wrote the engine's mid-restore value into the entry
+  // being arrived at, and the router then read the origin's own 640 back as 244
+  // (measured in Chromium: `popstate y=0 hist=640` / `scroll y=244 hist=640` /
+  // `hashchange y=244 hist=244`) — a restore that lands 400px short and, because
+  // `history.state` now holds the wrong number too, stays wrong on a second Back.
+  //
+  // The guard is the entry epoch rather than a detach on `popstate` because
+  // `trackScroll` is rAF-throttled: this comparison happens at the deferred save,
+  // which is always after the traversal's own dispatch, so it is right whichever
+  // order the engine delivers the events in. A detach is defeated outright by a
+  // reset scroll that arrives before `popstate`, and a traversal that never
+  // changes the hash would leave a detached view with no tracking at all.
+  const entryEpoch = currentEntryEpoch();
+  const detachScroll = trackScroll(() => {
+    if (currentEntryEpoch() !== entryEpoch) return;
+    saveViewState({ scrollTop: window.scrollY });
+  });
 
   /* Same reason as home.js: the router restores with `scrollTo` immediately
    * after `mount()`, and a detail view is a loading state at that moment, so a
@@ -262,6 +311,23 @@ export function mount(root, params = {}) {
 
   /* --- the Cooking Log: one tap opens a date picker, then one write ------ */
 
+  /**
+   * The revision of `date`'s daily note, or `null` if this view has never read
+   * or written that date. `null` is not a weakened contract — it is the honest
+   * answer to "I have not seen this note", and the server treats an absent
+   * `baseRevision` as "no compare-and-swap", which is exactly what it should
+   * mean. A revision for a DIFFERENT date would be the opposite: a compare
+   * against bytes this request is not about to replace.
+   */
+  function revisionFor(date) {
+    return date ? noteRevisions.get(date) || null : null;
+  }
+
+  /** Record a revision for the date it belongs to, and only if there is one. */
+  function rememberRevision(date, revision) {
+    if (date && revision) noteRevisions.set(date, revision);
+  }
+
   function openPicker() {
     logError.textContent = '';
     dateInput.value = todayIn(appTimezone());
@@ -281,9 +347,19 @@ export function mount(root, params = {}) {
       // vault-relative path it named — all verbatim — plus a retry of the
       // IDENTICAL request, so a created note is a one-step detour.
       const server = error.data || {};
+      /* `daily_note_missing` publishes no `currentRevision` — F4's envelope for
+       * that code is `{requestId, code, message, date, relativePath, retryable}`
+       * and nothing else — so the retry must take its base from the DATE the
+       * server named, and not from whatever date the view last read. For a note
+       * that was missing, that is `null`: the retry replays the request F4 says
+       * is retryable, and #25 verified the server honours it (201 once the note
+       * exists). A note this view HAD read keeps its own revision, so a
+       * delete-and-recreate still surfaces as a conflict instead of silently
+       * overwriting whatever the user made in between. */
+      const retryDate = server.date || dateInput.value;
       const again = el('button', { type: 'button', class: 'button', text: '再试一次' });
       again.addEventListener('click', () =>
-        submit(server.date || dateInput.value, server.currentRevision || noteRevision),
+        submit(retryDate, server.currentRevision || revisionFor(retryDate)),
       );
       logError.appendChild(
         errorState({
@@ -342,7 +418,11 @@ export function mount(root, params = {}) {
         result.status === 'duplicate'
           ? `这一天已经记过 ${name} 了，日记没有再改。`
           : `已记到 ${result.relativePath}`;
-      noteRevision = result.noteRevision || null;
+      /* Keyed by the date this write was ABOUT, which is the point of the map:
+       * the response's revision is `sha256` of that date's bytes and of no
+       * other. A `duplicate` writes nothing and publishes no revision, and a
+       * cached one is still correct for that date because nothing moved. */
+      rememberRevision(date, result.noteRevision);
       refreshBadge(date);
     } catch (error) {
       if (error.status === 409) {
@@ -353,6 +433,11 @@ export function mount(root, params = {}) {
         // code as the message in that case.
         logError.textContent = '';
         picker.setAttribute('hidden', '');
+        /* The server has just told us what this date's note holds NOW, so that
+         * is the freshest base there is for this date — recorded, and used by
+         * the re-offer below. Recording it costs nothing in strictness: it is
+         * the server's own value for the note this request is about. */
+        rememberRevision(date, (error.data && error.data.currentRevision) || null);
         const again = el('button', { type: 'button', class: 'button', text: '按服务器现状再记一次' });
         again.addEventListener('click', () => {
           logError.textContent = '';
@@ -389,7 +474,15 @@ export function mount(root, params = {}) {
     }
   }
 
-  listen(confirm, 'click', () => submit(dateInput.value || todayIn(appTimezone()), noteRevision));
+  // The one place a Cooking Log write is composed from the picker's date, and
+  // it asks the map about THAT date. Logging a second cook on another day is
+  // the ordinary thing a user does, and before the map this sent the first
+  // day's revision against the second day's note: a 409 naming a conflict that
+  // never happened, and a cook silently lost.
+  listen(confirm, 'click', () => {
+    const date = dateInput.value || todayIn(appTimezone());
+    submit(date, revisionFor(date));
+  });
 
   function applyConnectivity() {
     const offline = navigator.onLine === false;
@@ -491,9 +584,12 @@ export function mount(root, params = {}) {
         onReady: (result) => {
           host.textContent = '';
           // The read-back is also where the fresh note revision comes from, so
-          // the NEXT write is a compare-and-swap against bytes the server has
-          // just shown rather than against nothing.
-          noteRevision = (result && result.noteRevision) || noteRevision;
+          // the NEXT write TO THIS DATE is a compare-and-swap against bytes the
+          // server has just shown rather than against nothing. The `date` is the
+          // one this read asked for, so the revision is filed under it — a
+          // revision read for 03-10 says nothing about 03-12, and filing it
+          // under "whatever was last read" is the bug.
+          rememberRevision(date, result && result.noteRevision);
           const entry = ((result && result.entries) || []).find((item) => item.recipeNote === name);
           if (entry && entry.trackerSynced !== true) {
             host.appendChild(

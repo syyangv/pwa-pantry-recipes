@@ -118,6 +118,11 @@ function fakeWindow({ hash = '', historyLength = 3, scrollY = 0 } = {}) {
     console: { error() {} },
   };
   win.listenerCount = (type) => (listeners.get(type) || []).length;
+  /* The two events a traversal delivers, in the order Chromium delivers them
+   * (measured: `popstate` -> the engine's reset scroll -> `hashchange`). Exposed
+   * so a test can open the window BETWEEN them, which `history.back()` cannot:
+   * it fires both synchronously, and the defect lives in that gap. */
+  win.dispatchEventForTest = (type) => emit(type);
   return win;
 }
 
@@ -374,6 +379,85 @@ test('goBack calls history.back() when there is history to go back to', () => {
   win.history.pushState(null, '', '#/recipe/y');
   router.goBack();
   assert.equal(win.location.hash, '#/recipe/x');
+  router.stop();
+});
+
+test('a tracked-scroll save between popstate and the dispatch is dropped, not written', () => {
+  /* The scroll-restore race, at the one seam that can see the WINDOW even though
+   * it cannot see the scroll event. Measured in Chromium, the order during a Back
+   * traversal is
+   *
+   *     popstate -> scroll (the engine resetting) -> hashchange
+   *
+   * and the rAF-throttled save that scroll event triggers is what corrupts the
+   * entry being arrived at: `popstate y=0 hist=640` / `scroll y=244 hist=640` /
+   * `hashchange y=244 hist=244`. The event order is Chromium's and Playwright's
+   * to measure; what the fake window can prove is the RULE the fix encodes, and
+   * that the rule releases the gate again — otherwise every later write in the
+   * session would be silently discarded and the view would stop recording where
+   * the user is at all. */
+  const log = [];
+  const win = fakeWindow({ hash: '#/shortlists' });
+  const root = fakeRoot();
+  const router = createRouter({
+    window: win,
+    root,
+    views: { home: spyView(log, 'home'), shortlists: spyView(log, 'shortlists') },
+  }).start();
+
+  router.saveViewState({ scrollTop: 640 });
+  assert.equal(win.history.state.scrollTop, 640);
+
+  // The traversal, dispatched the way the browser dispatches it. `popstate`
+  // raises the latch; nothing between it and the `hashchange` may write.
+  const emit = (type) => win.dispatchEventForTest(type);
+  emit('popstate');
+  const refused = router.saveViewState({ scrollTop: 244 });
+  assert.equal(win.history.state.scrollTop, 640, 'a traversal-window save reached the entry');
+  // The refusal returns the state as it IS, never a state that was not written.
+  assert.deepEqual(refused, { scrollTop: 640 });
+
+  // And the dispatch that follows releases it, so the incoming view can record.
+  // The dispatch itself restores the offset it read while the gate was up —
+  // 640, the correct number, which is the whole claim: the 244 never landed, so
+  // nothing was restored from it.
+  emit('hashchange');
+  assert.deepEqual(win.scrollCalls.at(-1), [0, 640], 'the restore used the corrupted offset');
+  router.saveViewState({ scrollTop: 57 });
+  assert.equal(win.history.state.scrollTop, 57, 'the gate never came down');
+  router.stop();
+});
+
+test('the entry epoch moves on a traversal and on a push, and never on a read', () => {
+  /* The view-side half of the same contract, and the reason the fix is an epoch
+   * rather than a `popstate` detach: `trackScroll` defers its save to the next
+   * animation frame, which is after every task the traversal queues, so a view
+   * that COMPARES the epoch performs its decision after `popstate` under either
+   * delivery order — while a view that detaches on `popstate` is defeated by a
+   * reset scroll that arrives first, and a traversal that never changes the hash
+   * would leave a detached view with no tracking for the rest of its life. */
+  const log = [];
+  const win = fakeWindow({ hash: '#/' });
+  const root = fakeRoot();
+  const router = createRouter({
+    window: win,
+    root,
+    views: { home: spyView(log, 'home'), recipe: spyView(log, 'recipe') },
+  }).start();
+
+  const atBoot = router.currentEntryEpoch();
+  assert.equal(typeof atBoot, 'number');
+  // A read is not a move: the offset the view re-applies must not invalidate
+  // the view that captured the epoch.
+  router.readViewState();
+  assert.equal(router.currentEntryEpoch(), atBoot);
+
+  router.navigate('#/recipe/x');
+  assert.equal(router.currentEntryEpoch(), atBoot + 1, 'a push did not move the epoch');
+
+  const afterPush = router.currentEntryEpoch();
+  win.dispatchEventForTest('popstate');
+  assert.equal(router.currentEntryEpoch(), afterPush + 1, 'a traversal did not move the epoch');
   router.stop();
 });
 

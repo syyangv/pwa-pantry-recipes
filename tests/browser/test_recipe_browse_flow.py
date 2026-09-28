@@ -34,15 +34,15 @@ damage; a browser flow that reached for it would not be a test failure, it would
 be a data-loss incident. `launch_app` pins all fourteen `Settings` keys, so a
 stray shell export cannot redirect a server-owned root either.
 
-## step_4_finding — a defect this flow found, in a real browser only
+## step_4_finding — a defect this flow found, in a real browser only — FIXED
 
 `#step_4_back_restores_the_scroll_offset` was written, watched fail on its own
 code, and the cause is worth recording rather than hiding in a fixture.
 
-**The router's own defence is defeated by a scroll event, not a teardown.**
+**The router's own defence was defeated by a scroll event, not by a teardown.**
 `router.js` documents the #20 trap and defends against it: read the entry's
 offset BEFORE unmounting anything, because by the time a `hashchange` handler
-runs the browser has already pushed the destination entry. That defence assumes
+runs the browser has already pushed the destination entry. That defence assumed
 the outgoing view writes its state at TEARDOWN. It also writes on every SCROLL,
 through the same `trackScroll` → `saveViewState` path, and that listener is
 attached until teardown.
@@ -52,15 +52,32 @@ position as part of the commit. The reset is an ordinary scroll event, the
 outgoing detail view's listener is still attached, its rAF-throttled handler
 runs `saveViewState({ scrollTop: <the reset value> })`, and by then the current
 entry is the ORIGIN's. So the origin's own 640 is overwritten before
-`home.js`'s `mount()` reads it, `resumeTop` is 0, the guard
-`resumeTop > 0` is false, and nothing re-applies the offset.
+`home.js`'s `mount()` reads it, `resumeTop` is 0, the guard `resumeTop > 0` is
+false, and nothing re-applies the offset.
+
+**The event order, measured in Chromium rather than assumed** (a capture-phase
+scroll listener next to the router's own `popstate`/`hashchange` handlers, over
+the real app and a real vault):
+
+```
+  189ms  popstate    y=  0  hist=640   hash=#/
+  189ms  scroll      y=244  hist=640   hash=#/
+  191ms  hashchange  y=244  hist=244   hash=#/      <-- already corrupted
+  192ms  scroll      y= 16  hist=244
+  202ms  scroll      y= 16  hist= 16
+  252ms  scroll      y=244  hist= 16
+```
+
+So the reset arrives **after `popstate` and before `hashchange`**, and it is the
+rAF-throttled save — not the event — that does the damage, which is why the
+write lands *before* the router's read.
 
 Measured in Chromium, under a full-suite run (so the machine is loaded, which is
 when it shows up): `window.scrollY` settled at **0px, 57px or 244px** instead of
 640 in roughly **one full-suite run in four**, and `history.state.scrollTop`
 settled at the same wrong number — so the damage is *persisted*, and a second
-Back keeps it wrong. The captured scroll log is
-`[640, 244, 16, 16, 244]`: the app reached 640 and the engine moved it.
+Back keeps it wrong. The captured scroll log is `[640, 244, 16, 16, 244]`: the
+app reached 640 and the engine moved it.
 
 **No other seam can see this, which is the point of the file.**
 `tests/js/router.test.mjs` drives a fake window whose `history.back()` restores
@@ -71,17 +88,40 @@ re-render, never a traversal. The API suite never renders. So both unit gates ar
 green against a build a user would experience as "Back sometimes drops me 200px
 from where I was".
 
-**Why step 4 is still green.** `tests/browser/conftest.py`'s
-`CONTROLLED_PAGE_SCRIPT` freezes scroll EVENTS for the duration of the
-traversal, so the engine's reset cannot reach the outgoing view's listener and
-the flow measures the view's restore. That control suppresses the RACE, not the
-restore: both injected bugs — deleting the re-application from `home.js`, and
-adding a `saveViewState` to `recipe.js`'s `unmount()` — still fail this step at
-`window.scrollY settled at 16px, not 640px`. The fix belongs in
-`app/static/js/router.js` or `views/recipe.js` (detach the outgoing view's
-tracked-scroll listener on `popstate`, before the browser can commit the reset),
-which this ticket was not permitted to touch, so it is filed as a finding rather
-than a silent `xfail`.
+**What fixed it, and why the harness workaround is gone.** Two guards, in the
+two files that own the two halves of the contract:
+
+* `router.js` raises a **traversal latch** on `popstate` and lowers it at the end
+  of the `render()` that follows, and `saveViewState` is a no-op while it is up.
+  Between those two moments no view owns the current history entry, so no view
+  may write it. This is at the router rather than in one view on purpose:
+  `home.js`, `shortlists.js`, `provenance.js` and `settings.js` all keep the same
+  tracked-scroll listener, and a rule only one view honours is a rule the fourth
+  view silently breaks.
+* `views/recipe.js` captures the **entry epoch** at mount and drops its own
+  tracked-scroll save once it moves — the same decision, made at the view, and
+  made at the *deferred* save rather than at the event.
+
+So this step no longer freezes scroll events, and it measures the app.
+Re-measured through the same round trip, freeze absent: **0 failures in 48 round
+trips** with the fix, **2 failures in 48** without it, both with the reported
+`[244, 16, 16, 244]`; and the step itself, run 30 times on its own, **0 failures
+with the fix and a failure on run 8 without it** (`settled at 57px, not 640px`,
+`saved=57`, log `[640, 57, 16, 57, 57]`).
+
+**What removing the control did and did not weaken.** Re-injected, measured:
+
+* deleting the re-application from `home.js` — still fails, loudly, at
+  `settled at 16px, not 640px`. That is the step's own claim and it is intact.
+* adding a `saveViewState` to `recipe.js`'s `unmount()` — **now passes, 5 for 5**,
+  and that is the fix being stronger than the test rather than the test going
+  blind. #24 could not fix the bug, so the router could only DEFEND against this
+  one by ordering (read the offset before tearing anything down). The latch
+  refuses the write outright, because during a traversal the teardown is inside
+  the window in which no view owns the entry. The two controls this step used to
+  rely on — the harness freeze and the router's read-first ordering — are now
+  redundant for this class, and only the re-application assertion is left holding
+  the clamp.
 """
 
 from __future__ import annotations
@@ -795,15 +835,16 @@ def test_step_4_back_restores_the_scroll_offset(booted: tuple[Page, WireLog]) ->
             "{ ...window.history.state, scrollTop: top }, '')",
             SCROLL_TARGET,
         )
-        # The browser resets the scroll position as it commits a traversal, and
-        # that reset is a scroll event the OUTGOING detail view's tracked-scroll
-        # handler is still attached to. See `step_4_finding` in the module
-        # docstring: that write lands in the entry being arrived at, and it is
-        # what this control suppresses. Nothing else is.
-        page.evaluate("() => { window.__freezeScrollEvents = true; }")
+        # NO control here. #24 froze scroll EVENTS across this traversal because
+        # the engine's reset-to-0 is a scroll event the OUTGOING detail view's
+        # tracked-scroll handler was still attached to; that write landed in the
+        # entry being arrived at, so `restoreTop` was read back already corrupted
+        # and the flow failed in roughly one full-suite run in four. The fix is
+        # in `router.js` (a traversal latch on `saveViewState`) and in
+        # `views/recipe.js` (the entry epoch on its own tracked-scroll save), so
+        # the freeze is gone and the measurement is the app's.
         page.evaluate("window.history.back()")
         wait_for_rows(page)
-        page.evaluate("() => { window.__freezeScrollEvents = false; }")
         assert page.evaluate("window.location.hash") == "#/"
 
         # THE assertion, and it is deliberately first. In the broken build the
@@ -818,7 +859,6 @@ def test_step_4_back_restores_the_scroll_offset(booted: tuple[Page, WireLog]) ->
             f"{SCROLL_TARGET}px — the restore clamped against a too-short document"
             f"\n  {scroll_diagnosis(page)}"
         )
-
         # The entry's own state converges on 640 too, but only AFTER the offset
         # has been restored — for one frame it reads the router's clamped 16
         # again, because the too-early `scrollTo` fires this view's own tracked

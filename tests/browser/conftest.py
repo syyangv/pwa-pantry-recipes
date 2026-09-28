@@ -81,47 +81,49 @@ SETTINGS_KEYS = (
 #: Injected into every page before its first script, so that what step 4 measures
 #: is the APP's scroll restore and nothing the ENGINE contributes.
 #:
-#: Three controls, each with the measurement that motivated it. All three are
-#: properties of Chromium that no assertion in this repo can distinguish from an
-#: app bug, and controlling them is the same discipline as
-#: `service_workers="block"`: the harness owns the browser, the app owns the
-#: restore.
+#: TWO controls remain, each with the measurement that motivated it, plus one
+#: diagnostic. All of them are properties of Chromium that no assertion in this
+#: repo can distinguish from an app bug, and controlling them is the same
+#: discipline as `service_workers="block"`: the harness owns the browser, the app
+#: owns the restore.
 #:
 #: * `overflow-anchor: none` everywhere. Scroll anchoring adjusts `scrollY` after
 #:   a layout change to hold an anchor node stationary, and `paint()` replaces the
 #:   whole row list under the viewport. Measured with anchoring left on:
 #:   `window.scrollY` settled at 0px instead of 640px in four full-suite runs in
-#:   ten, and the browser was the mover.
+#:   ten, and the browser was the mover. This is a LAYOUT-time adjustment and is
+#:   still here: it is a different mechanism from the event race below and it
+#:   cannot be fixed by a guard on a scroll listener.
 #: * `window.__scrollLog` — every `window.scrollY` the page ever published,
 #:   capped. This is a diagnostic, not a control: it is what turned "settled at
 #:   244px" into `[640, 244, 16, 16, 244]`, i.e. the app reached 640 and
 #:   something moved it afterwards.
-#: * `window.__freezeScrollEvents` — a capture-phase listener that swallows scroll
-#:   EVENTS while the flag is set. The browser resets the scroll position as it
-#:   commits a history traversal, and that reset is a scroll event the OUTGOING
-#:   view's tracked-scroll handler is still attached to; it then `replaceState`s
-#:   the reset value into the entry being arrived at. Measured with the freeze
-#:   absent: `test_step_4_back_restores_the_scroll_offset` failed in roughly one
-#:   full-suite run in four, settling at 0px, 57px or 244px, with
-#:   `history.state.scrollTop` settling at the same wrong number. With it:
-#:   eight full-suite runs, zero failures.
 #:
-#:   This is a REAL DEFECT and is reported as one — see the `step_4_finding`
-#:   section of `test_recipe_browse_flow.py`. The freeze is here so the flow
-#:   measures the app rather than the race, and so the suite is runnable; it is
-#:   not a claim that the app is correct. The flow still fails, loudly, if the
-#:   view stops re-applying the target, which is what both injected bugs did.
+#: **The third control — `window.__freezeScrollEvents`, which swallowed scroll
+#: events across the traversal — IS GONE, because the defect it suppressed is
+#: fixed.** It existed because the browser resets the scroll position as it
+#: commits a history traversal, and that reset is a scroll event the OUTGOING
+#: view's tracked-scroll handler was still attached to; it then `replaceState`d
+#: the reset value into the entry being arrived at, so the router read the
+#: origin's own 640 back as 244. Measured with the freeze absent: the flow
+#: failed in roughly one full-suite run in four, settling at 0px, 57px or 244px,
+#: with `history.state.scrollTop` settling at the same wrong number.
+#:
+#: The fix is in the app, not the harness: `router.js` raises a traversal latch
+#: on `popstate` that `saveViewState` honours, and `views/recipe.js` checks the
+#: entry epoch before its own tracked-scroll save. Re-measured through the round
+#: trip, freeze absent: **0 failures in 48 round trips** with the fix, **2 in 48**
+#: without it, both with the reported `[244, 16, 16, 244]`; the step alone, 30
+#: runs, **0 failures with the fix and a failure on run 8 without it**. Deleting
+#: the clamp re-application in `home.js` still fails the step loudly, so removing
+#: this control did not weaken the measurement — it stopped measuring a harness
+#: artefact.
 CONTROLLED_PAGE_SCRIPT = """
 (() => {
   window.__scrollLog = [];
-  window.__freezeScrollEvents = false;
   addEventListener('scroll', (event) => {
     if (window.__scrollLog.length < 400) window.__scrollLog.push(Math.round(window.scrollY));
-    if (window.__freezeScrollEvents) {
-      event.stopImmediatePropagation();
-      event.preventDefault();
-    }
-  }, { capture: true, passive: false });
+  }, { capture: true, passive: true });
   const style = document.createElement('style');
   style.textContent = '*, *::before, *::after { overflow-anchor: none !important; }';
   const apply = () => document.documentElement.appendChild(style);

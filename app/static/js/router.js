@@ -43,6 +43,50 @@
  * the outgoing view's. The router reads the offset before it touches anything
  * for the same reason.
  *
+ * ## THE SCROLL-RESTORE RACE, AND WHY THE SCROLL LISTENER IS THE LIABLE PART
+ *
+ * Reading the offset first is NOT sufficient, and the reason is a measurement
+ * rather than an argument. In Chromium, a same-document Back traversal dispatches
+ *
+ *     popstate  ->  scroll (the engine resetting/restoring)  ->  hashchange
+ *
+ * — measured, not assumed, and the middle event is the whole bug. The outgoing
+ * detail view's `trackScroll` handler is still attached when that reset fires,
+ * so its rAF-throttled save writes the RESET value into the entry being arrived
+ * at, and `render()` then reads the origin's own offset back already corrupted.
+ * Observed end to end: `popstate y=0 hist=640` / `scroll y=244 hist=640` /
+ * `hashchange y=244 hist=244`, settling at 244 instead of 640 — and because
+ * `history.state` holds the wrong number, a second Back stays wrong.
+ *
+ * So the router owns the other half of the same contract, in two pieces:
+ *
+ * * **A traversal latch.** `popstate` raises it, the `render()` that follows
+ *   lowers it, and `saveViewState` is a no-op while it is up. Between those two
+ *   moments *no view owns the current history entry* — the browser has already
+ *   committed the arrival — so no view may write it. This is deliberately at the
+ *   router rather than in each view: `home.js`, `shortlists.js`, `provenance.js`
+ *   and `settings.js` all keep the same tracked-scroll listener, and a rule that
+ *   only one view honours is a rule the fourth view silently breaks.
+ * * **An entry epoch**, `currentEntryEpoch()`, for a view that wants the
+ *   decision at its own end. The latch alone protects the pre-`render()` window;
+ *   the epoch additionally tells a view "the entry you were mounted for is no
+ *   longer the current one", which is the property a view can check without
+ *   knowing anything about `popstate`. `views/recipe.js` consults it, and it is
+ *   exposed as a plain integer so the decision is testable with the fake window
+ *   above, which never moves `scrollY` and therefore never fires a scroll.
+ *
+ * WHY AN EPOCH GUARD RATHER THAN #24's "detach the listener on `popstate`".
+ * The detach is right about the ordering — the reset really does come after
+ * `popstate` — but it is *strictly weaker*. `trackScroll` is rAF-throttled, so
+ * the save it performs is always deferred to the next animation frame, which is
+ * after every task the traversal queues, `popstate` among them. A view that
+ * checks the epoch performs its comparison at that deferred moment and so is
+ * correct under BOTH orderings; a view that detaches on `popstate` is defeated
+ * outright by any reset scroll dispatched *before* `popstate`, which is a
+ * rendering detail this app does not control. The epoch is also self-healing: a
+ * traversal that never changes the hash leaves a detached view with no scroll
+ * tracking for the rest of its life, and leaves the epoch guard working.
+ *
  * THE BACK-BUTTON RULE (template 2i), verbatim and non-negotiable:
  *
  *   function goBack() {
@@ -193,6 +237,17 @@ export function createRouter({
    * re-dispatches the origin's hash (template 2i) and the origin re-renders
    * at the top — the exact bug P14a asserts against. */
   let traversed = false;
+  /* The scroll-restore race's other half. Raised by `popstate` — the instant
+   * the browser commits the arrival and starts resetting the scroll offset —
+   * and lowered by the `render()` that follows it. While it is up the current
+   * history entry belongs to nobody: the outgoing view's own tracked-scroll
+   * save would land in the entry being arrived at. */
+  let traversalPending = false;
+  /* Bumped whenever `history`'s current entry stops being the one the active
+   * view was mounted for: a traversal (popstate) or a push (`navigate`). A view
+   * captures it at mount and refuses to write once it has moved, which is the
+   * same decision as the latch, expressed where the view can make it. */
+  let entryEpoch = 0;
 
   function resolve(hash) {
     const match = matchRoute(hash, routes);
@@ -268,6 +323,12 @@ export function createRouter({
     if (typeof win.scrollTo === 'function') {
       win.scrollTo(0, typeof restoreTop === 'number' ? restoreTop : 0);
     }
+    /* The traversal is now fully dispatched: the incoming view owns the entry
+     * and has been told where to restore, so the latch comes down. Lowering it
+     * HERE and not at the top of `render()` is deliberate — everything between
+     * those two points, including the outgoing view's teardown, is a moment in
+     * which the current entry is not the outgoing view's to write. */
+    traversalPending = false;
     return active;
   }
 
@@ -288,6 +349,14 @@ export function createRouter({
       onHashChange = () => dispatch();
       onPopState = () => {
         traversed = true;
+        /* The instant the browser commits the arrival. Two things happen here and
+         * both are load-bearing: the entry epoch moves, so a view can tell that
+         * the entry it was mounted for is no longer the current one; and the
+         * latch goes up, so a tracked-scroll save that arrives in the window
+         * between this and the `hashchange` dispatch is dropped rather than
+         * written into the entry being arrived at. */
+        traversalPending = true;
+        entryEpoch += 1;
       };
       win.addEventListener('hashchange', onHashChange);
       win.addEventListener('popstate', onPopState);
@@ -310,12 +379,26 @@ export function createRouter({
       started = false;
       onHashChange = null;
       onPopState = null;
+      /* The latch is dropped with the listeners that raise it. A stopped router
+       * has no `popstate` handler left to lower it, and a `saveViewState` that
+       * stayed latched for the rest of the session would silently discard every
+       * offset the app recorded. */
+      traversalPending = false;
       return router;
     },
 
     navigate(hash) {
       const normalized = normalizeHash(hash);
       if (win.location.hash === normalized) return dispatch();
+      /* A push, not a traversal: `popstate` does not fire, so the epoch moves
+       * here instead. Assigning `location.hash` tears the current view's
+       * document down, the document collapses, and the collapse is an ordinary
+       * scroll event the outgoing view's listener is still attached to — the
+       * mirror image of the traversal race, and it lands the outgoing view's
+       * offset in the DESTINATION entry. A forward navigation ignores the
+       * destination's saved offset anyway, so dropping that write costs
+       * nothing. */
+      entryEpoch += 1;
       // Assigning `location.hash` pushes a history entry, which is what makes
       // the origin entry (and its saved state) reachable by Back.
       win.location.hash = normalized;
@@ -338,10 +421,24 @@ export function createRouter({
       return state && typeof state === 'object' ? state : {};
     },
 
+    currentEntryEpoch() {
+      return entryEpoch;
+    },
+
     /* replaceState, never pushState: this records where the user is, it does
-     * not create a step they could Back into. */
+     * not create a step they could Back into.
+     *
+     * REFUSED while a traversal is being committed. `popstate` has fired and
+     * the `hashchange` dispatch has not run yet, so the browser has already
+     * made the destination entry current and no view owns it: a write here
+     * would be the outgoing view's offset, or the engine's mid-restore value,
+     * landing in the entry being arrived at. The refusal returns the state as
+     * it actually is, so a caller that reads the result is never told about a
+     * write that did not happen. */
     saveViewState(patch) {
-      const next = mergeViewState(router.readViewState(), patch);
+      const current = router.readViewState();
+      if (traversalPending) return current;
+      const next = mergeViewState(current, patch);
       win.history.replaceState(next, '');
       return next;
     },
@@ -354,7 +451,7 @@ export function createRouter({
   return router;
 }
 
-/* The app's singleton. Views import these four functions rather than a router
+/* The app's singleton. Views import these helpers rather than a router
  * object, so a view module has no construction step and `main.js` stays the
  * single place that knows which window the app runs in. */
 let instance = null;
@@ -400,6 +497,22 @@ export function saveViewState(patch) {
  */
 export function readViewState() {
   return require_().readViewState();
+}
+
+/**
+ * The identity of the `history` entry this view was mounted for. It moves on a
+ * traversal and on a push, so `epoch === currentEntryEpoch()` is exactly the
+ * statement "the entry I am recording into is still mine".
+ *
+ * A view that keeps a tracked-scroll save should capture this at `mount()` and
+ * drop the save when it no longer holds. The reason it is a number rather than
+ * a boolean is that the decision belongs at the moment of the SAVE, which
+ * `trackScroll` defers to the next animation frame — and a frame is always
+ * after the traversal's own event dispatch, whichever order the engine chooses
+ * to deliver the events in.
+ */
+export function currentEntryEpoch() {
+  return require_().currentEntryEpoch();
 }
 
 export function currentRoute() {

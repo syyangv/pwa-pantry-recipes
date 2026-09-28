@@ -985,6 +985,76 @@ test('a 404 daily_note_missing renders the server message verbatim, with a retry
   dom.restore();
 });
 
+test('the 再试一次 button on a missing note carries the MISSING date`s revision, not another`s', async () => {
+  /* The dead end #25 found, and it was a symptom of the same scalar-revision bug
+   * rather than a second defect. `daily_note_missing` publishes no
+   * `currentRevision` — F4's envelope for that code is `{requestId, code,
+   * message, date, relativePath, retryable}` and nothing else — so the button
+   * used to fall back to "whatever revision the view last read". For a note that
+   * was MISSING, that is some other date's revision, and the retry the panel
+   * offers as a one-step detour became a `409 daily_note_changed` instead: the
+   * user fixed the thing the message asked them to fix and still could not log
+   * the cook.
+   *
+   * The fix is to ask the map about the date the SERVER named. For a note that
+   * was missing the view has never read it, so that is `null` — the request F4
+   * says is retryable, and which #25 verified the server honours (201 once the
+   * note exists). It is not a weakened compare-and-swap: there is no base to
+   * compare against, and the gate below shows a date the view DID read keeping
+   * its own revision through the same button. */
+  const dom = install();
+  const bodies = [];
+  let missing = true;
+  const { unmount, open, picker, dateInput } = await mountLoggedRecipe(dom, {
+    respond: (url, init) => {
+      const asked = new URL(url, 'http://x').searchParams.get('date');
+      if (url.includes('/api/cook-logs?date=')) {
+        if (asked === '2026-03-12') {
+          return json({ requestId: 'r', code: 'daily_note_missing', message: '这一天还没有日记。', date: '2026-03-12', relativePath: '日记/2026/2026-03-12.md', retryable: true }, 404);
+        }
+        return json({ date: asked, noteRevision: 'sha256:today', entries: [] });
+      }
+      bodies.push(JSON.parse(init.body));
+      if (missing) {
+        return json({ requestId: 'r', code: 'daily_note_missing', message: '这一天还没有日记。', date: '2026-03-12', relativePath: '日记/2026/2026-03-12.md', retryable: true }, 404);
+      }
+      return json({ status: 'logged', relativePath: '日记/2026/2026-03-12.md', noteRevision: 'sha256:twelve' }, 201);
+    },
+  });
+
+  // First the date the view HAS read, so the map holds that date's revision.
+  const today = todayIn('America/New_York');
+  button(picker, '记录').dispatchEvent({ type: 'click' });
+  await settle();
+  assert.equal(bodies[0].baseRevision, 'sha256:today', bodies[0].baseRevision);
+
+  // Now the missing date. The button is the only way out of the panel, so its
+  // body is the whole claim.
+  open.dispatchEvent({ type: 'click' });
+  await settle();
+  dateInput.value = '2026-03-12';
+  button(picker, '记录').dispatchEvent({ type: 'click' });
+  await settle();
+  const state = dom.byData('log-missing-note')[0];
+  assert.ok(state, 'the missing-note panel did not render');
+  const again = button(state, '再试一次');
+  again.dispatchEvent({ type: 'click' });
+  await settle();
+  assert.equal(bodies[2].baseRevision, null, `the retry replayed a foreign revision: ${JSON.stringify(bodies[2])} — this is the dead end`);
+  assert.equal(bodies[2].date, '2026-03-12');
+
+  // The user creates the note and taps 再试一次 again: one tap, and it lands.
+  missing = false;
+  again.dispatchEvent({ type: 'click' });
+  await settle();
+  assert.ok(
+    textOf(dom.byData('log-status')[0]).includes('日记/2026/2026-03-12.md'),
+    `the retry did not recover: ${textOf(dom.byData('log-status')[0])}`,
+  );
+  unmount();
+  dom.restore();
+});
+
 test('a 409 shows both versions, the server message verbatim, and the retry carries the fresh revision', async () => {
   const dom = install();
   const message = '日记在这次读取之后被创建了，所以这次记录没有写入。';
@@ -1022,6 +1092,80 @@ test('a 409 shows both versions, the server message verbatim, and the retry carr
   const posts = fetches.filter((entry) => entry.init.method === 'POST');
   assert.equal(posts.length, 2);
   assert.equal(JSON.parse(posts[1].init.body).baseRevision, 'sha256:fresh');
+  unmount();
+  dom.restore();
+});
+
+test('a second cook on another date carries no revision, and the first date still does', async () => {
+  /* The per-date revision map, and the reason it is a Map. A Cooking Log write
+   * is a statement about a DATE, and a note revision is `sha256` of one date's
+   * bytes, so "the revision this view knows" is one value per date rather than a
+   * scalar. Held as a scalar it produced the bug the browser flow pinned: log
+   * 2026-03-10, change the date, log again, and the second write carried
+   * 2026-03-10's revision — a `409 daily_note_changed` naming a conflict that
+   * never happened, with the second cook silently lost. */
+  const dom = install();
+  const bodies = [];
+  /* The read-back tracks the write, the way the server's does: a badge read
+   * before the cook sees the pre-write bytes and one after sees the new ones.
+   * A responder that answered every read with the same string would make the
+   * third assertion below fail for a fixture reason rather than an app one. */
+  let todayRevision = 'sha256:today';
+  const { unmount, open, picker, dateInput } = await mountLoggedRecipe(dom, {
+    respond: (url, init) => {
+      if (url.includes('/api/cook-logs?date=')) {
+        return json({ date: 'x', noteRevision: todayRevision, entries: [] });
+      }
+      bodies.push(JSON.parse(init.body));
+      todayRevision = 'sha256:written';
+      return json(
+        { status: 'logged', relativePath: '日记/2026/x.md', noteRevision: todayRevision },
+        201,
+      );
+    },
+  });
+  const first = todayIn('America/New_York');
+  assert.equal(dateInput.value, first);
+  button(picker, '记录').dispatchEvent({ type: 'click' });
+  await settle();
+
+  // The first write is a real compare-and-swap: the badge read on mount saw this
+  // date's note, so the base is this date's own revision — NOT `null`, which is
+  // what §10.5 step 4's `409` needs and what a "just send null" fix would throw
+  // away along with the bug.
+  assert.deepEqual(bodies[0], {
+    recipeNote: '盐焗鸡',
+    date: first,
+    baseRevision: 'sha256:today',
+  });
+
+  // A second cook, on a DIFFERENT date, through the same UI the user has: tap
+  // 做过了 again, change the date, tap 记录.
+  open.dispatchEvent({ type: 'click' });
+  await settle();
+  dateInput.value = '2026-03-12';
+  button(picker, '记录').dispatchEvent({ type: 'click' });
+  await settle();
+
+  assert.equal(bodies.length, 2);
+  assert.deepEqual(bodies[1], {
+    recipeNote: '盐焗鸡',
+    date: '2026-03-12',
+    // Never read, so there is no base to compare against, and saying so with
+    // `null` is the honest request. A revision belonging to another date would
+    // be a compare against bytes this write is not replacing.
+    baseRevision: null,
+  });
+
+  // And the first date has NOT been forgotten: going back to it still
+  // compare-and-swaps against the revision that date's own write returned.
+  open.dispatchEvent({ type: 'click' });
+  await settle();
+  dateInput.value = first;
+  button(picker, '记录').dispatchEvent({ type: 'click' });
+  await settle();
+  assert.equal(bodies[2].baseRevision, 'sha256:written', bodies[2].baseRevision);
+  assert.equal(bodies[2].date, first);
   unmount();
   dom.restore();
 });
