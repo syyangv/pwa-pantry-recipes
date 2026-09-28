@@ -441,12 +441,14 @@ probed in the same batch as a **control** and answered `HTTP 401`, so the method
 is shown to detect a port that *is* a route.
 
 > The original list of ports to probe read "(8443, 8445–8451)", and it was
-> **wrong**: `8443`, `8445`, `8446`, `8447`, `8448`, `8449` and `8450` are all
-> declared Serve routes (`wardrobe-development`, the deliberately-retained
-> `8445`, and the four Obsidian PWAs) and would all have served. Probing them as
-> "unrelated" would have produced four false alarms. The list above is the set
-> of ports that are genuinely *not* routes. `8002` / `8448` (`pwa-deals`) was
-> excluded on purpose — out of scope for the session in which this was checked.
+> **wrong**. Of those, `8443` (→ `8003`, `wardrobe-development`), `8445` (→ `8789`,
+> the deliberately-retained route), `8446` (→ `8000`, `wardrobe-production`),
+> `8447` (→ `8004`), `8449` (→ `8005`) and `8450` (→ `8006`, the three Obsidian
+> PWAs) are all declared Serve routes with live backends and would all have
+> served — probing them as "unrelated" would have produced **six** false alarms,
+> plus a seventh at `8448` (→ `8002`, `pwa-deals`) which was excluded from the
+> batch on purpose as out of scope. The list above is the set of ports that are
+> genuinely *not* routes.
 
 > **What this vantage cannot establish.** A connection from the serving node to
 > its own `100.x` address never leaves the machine, so this does not exercise a
