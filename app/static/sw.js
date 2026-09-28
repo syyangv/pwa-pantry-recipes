@@ -54,16 +54,25 @@ const SHELL_ASSETS = [
   '/js/api.js?v=' + CACHE_VERSION,
   '/js/dom.js?v=' + CACHE_VERSION,
   '/js/prefs.js?v=' + CACHE_VERSION,
-  // The five views behind the five routes. main.js imports all five, so the
+  // The six views behind the six routes. main.js imports all six, so the
   // boot graph already reaches them — but `shell_assets.test.mjs` requires every
   // module to be NAMED here, and rightly: a view added later and reached only
   // by a hash the user has never visited is not in any import graph yet, and a
   // precache that trusts the graph alone is how a route 404s offline.
   '/js/views/home.js?v=' + CACHE_VERSION,
+  // The second tab's view, and the FIRST one here that is reached by a tab
+  // rather than by a link inside a list: `index.html` links it in the tab bar,
+  // so a user has a reason to open it before any list has been rendered.
+  '/js/views/pantry.js?v=' + CACHE_VERSION,
   '/js/views/recipe.js?v=' + CACHE_VERSION,
   '/js/views/shortlists.js?v=' + CACHE_VERSION,
   '/js/views/settings.js?v=' + CACHE_VERSION,
   '/js/views/provenance.js?v=' + CACHE_VERSION,
+  // The tab bar's half: 更多's open/close and the current-route mark. The bar
+  // itself is static markup in index.html (so it is on screen at first paint
+  // offline); this is the behaviour on top of it, and without the entry a cold
+  // offline start renders a bar whose tabs navigate but never mark themselves.
+  '/js/tabbar.js?v=' + CACHE_VERSION,
   // The D4 display primitives, shared by the home and recipe views. They live
   // at the top of js/ rather than in a js/components/ directory on purpose: a
   // new subdirectory under static/js/ needs its own [tool.setuptools]
@@ -85,6 +94,10 @@ const SHELL_ASSETS = [
   // cold offline start would resolve them from the network and fail.
   '/js/logic/chip-class.js?v=' + CACHE_VERSION,
   '/js/logic/format.js?v=' + CACHE_VERSION,
+  // The 食材 tab's grouping. Reached only from views/pantry.js, and the tab bar
+  // can send a user there on their first offline launch, so the chain
+  // tabbar -> pantry -> index has to resolve out of this cache.
+  '/js/logic/ingredient-index.js?v=' + CACHE_VERSION,
   '/js/logic/sort.js?v=' + CACHE_VERSION,
   // Vendored pwa-infra modules reachable from /js/main.js. update-manager and
   // waking-banner are imported by main.js directly; outbox is reached through

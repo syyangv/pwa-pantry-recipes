@@ -56,6 +56,18 @@ FastAPI (loopback only)  ──  vanilla ES modules  ──  no build step
 - **Pattern A versioning.** `CACHE_VERSION` in `app/static/sw.js` is the single
   source: `/api/version`, `/health`, the FastAPI app version, and the version
   injected into the HTML shell all derive from it. There is no `VERSION` file.
+- **Two tabs, one payload.** The bar is `菜谱` (`#/`, the recipe list) and `食材`
+  (`#/pantry`, what the house has and what each thing makes); 清单, 溯源 and
+  调试 live behind 更多. **Both tabs read the same `GET /api/recipes`.** That is
+  the load-bearing part: the response already publishes two derived views of one
+  `StockJoin` (`stockUnjoinedCount` and every slot's `stockJoinState`), so a
+  second route re-reading `Pantry.md` through a second TTL window could
+  contradict a number printed beside it in the first — and two tabs that
+  disagree about the same jar is worse than one tab. `logic/ingredient-index.js`
+  is the pure projection that groups slots and `Pantry.md` lines by Pantry Item;
+  `js/tabbar.js` holds only the 更多 menu and the current-route mark, over static
+  markup in `index.html` that exists so the bar is on screen at first paint
+  offline.
 - **Route order is load-bearing.** `/js/{path}` is registered before the static
   mount so it can inject `__APP_VERSION__` into ES-module *content* (a `?v=` pin
   on the entry URL does not propagate to nested imports), and the static mount
@@ -394,12 +406,20 @@ can check against the tree, not as a claim about intent.
   > app/static/js/router.js, app/static/js/views/recipe.js`
 
   **It is fixed.** `a303d4a` carried the rotation to `v0.7.0`, and `CACHE_VERSION`
-  has since been rotated again to **`v0.7.1` in `fb2577e`**. The anchor
-  `git log -1 -G"const CACHE_VERSION" -- app/static/sw.js` therefore resolves to
-  **`fb2577e`** (HEAD), not to `a303d4a`, and `git diff --name-only fb2577e..HEAD
-  -- app/static ':!app/static/sw.js'` is **empty** — so condition 5's rotation
-  half passes against the tree as it stands, and the gate's
-  fixture-follows-shipping behaviour is in `516675f`. Two things are worth
+  has since been rotated again — to **`v0.7.1` in `fb2577e`**, and to
+  **`v0.7.2`** for the 食材 tab, which added `app/static/js/tabbar.js`,
+  `app/static/js/views/pantry.js` and `app/static/js/logic/ingredient-index.js`
+  and therefore re-used the same obligation: a new module that is precached but
+  not reachable from the boot graph is exactly the `cf39101` incident class
+  again. The anchor `git log -1 -G"const CACHE_VERSION" -- app/static/sw.js`
+  therefore resolves to whichever commit last rotated it — **not** to
+  `a303d4a` — and the property condition 5 actually checks is that
+  `git diff --name-only <that anchor>..HEAD -- app/static ':!app/static/sw.js'`
+  is **empty**, so the rotation half passes against the tree as it stands, and
+  the gate's fixture-follows-shipping behaviour is in `516675f`. Re-run those two
+  commands after any rotation rather than trusting the version number quoted
+  here: the number moves every release and this sentence is the thing that goes
+  stale quietly. Two things are worth
   keeping from this. First, **the check works**: the one condition that can catch
   a self-consistent bad deploy caught a real one, unprompted, before anything was
   installed. Second, **the lesson is now in the release sequence** rather than in

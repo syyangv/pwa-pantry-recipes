@@ -68,8 +68,39 @@
 
     <!-- NO inline serviceWorker.register: the vendored pwa-infra
          update-manager owns registration and the update lifecycle
-         (docs/pwa-template.md Part 3c). An inline register here would create
-         a second registration the manager cannot control. -->
+         (docs/pwa-template.md Part 3c). An inline register here would create a
+         second registration the manager cannot control. -->
+
+    <!-- THE TAB BAR. Outside #app-root on purpose: the router clears that
+         subtree on every navigation, so a bar inside it would vanish on the
+         first tap. Two tabs (菜谱 / 食材) and the 更多 menu that holds the other
+         three routes.
+         STATIC markup, not built by tabbar.js: the shell is precached, so the
+         bar is on screen at first paint offline, and an <a href="#/…"> is a
+         real link the router's hashchange picks up with no click handler at
+         all. tabbar.js owns only the behaviour (更多's toggle, the current-tab
+         mark) and `tests/js/tabbar.test.mjs` asserts these hrefs against the
+         TABS table there, so the two cannot drift. -->
+    <nav id="tabbar" class="tabbar" aria-label="主导航">
+      <a class="tabbar__tab" href="#/" data-tab="home"><span class="tabbar__label">菜谱</span></a>
+      <a class="tabbar__tab" href="#/pantry" data-tab="pantry"><span class="tabbar__label">食材</span></a>
+      <button type="button" class="tabbar__tab" data-tab="more" aria-expanded="false" aria-controls="more-sheet">
+        <span class="tabbar__label">更多</span>
+      </button>
+    </nav>
+
+    <!-- 更多's menu. `hidden` from the start, so it is not a focusable stop on
+         load, and `js/tabbar.js` is the only thing that removes it. It carries
+         the vendored `.form-sheet` class so `main.js`'s F18 §4e busy-guard
+         treats an open menu like an open date picker and refuses a forced
+         reload underneath it. -->
+    <div id="more-sheet" class="form-sheet more-sheet" hidden>
+      <a class="more-sheet__link" href="#/shortlists" data-tab="shortlists">清单</a>
+      <a class="more-sheet__link" href="#/provenance" data-tab="provenance">溯源</a>
+      <a class="more-sheet__link" href="#/settings" data-tab="settings">调试与严格模式</a>
+    </div>
+
     <script type="module" src="/js/main.js?v=__APP_VERSION__"></script>
   </body>
 </html>
+

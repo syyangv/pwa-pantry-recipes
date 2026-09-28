@@ -35,8 +35,11 @@ body {
 
 .content {
   padding: 16px;
-  /* Room for the home indicator, so the last row is never under it. */
-  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+  /* Room for the home indicator AND the fixed tab bar, so the last row of a
+   * list is never behind either. The two are stacked, not alternatives, so this
+   * is the sum of both — dropping `--tabbar-h` here is what puts the last
+   * recipe row under the bar. */
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + var(--tabbar-h) + 16px);
 }
 
 .banners {
@@ -56,6 +59,118 @@ body {
 
 #route-notice:empty {
   display: none;
+}
+
+/* --- The tab bar ----------------------------------------------------------
+ * TWO TABS: 菜谱 (what can I cook) and 食材 (what I have, and what it makes).
+ * The other three routes live behind 更多, so a tab bar that stayed at two
+ * entries did not have to delete anything — `#/shortlists`, `#/settings` and
+ * `#/provenance` are unchanged routes with unchanged views.
+ *
+ * `position: fixed` on `<body>`-level markup. The vendored `.bottom-bar` is a
+ * one-line FRAGMENT (`bottom: …`, nothing else), not a component, so it is
+ * composed here rather than forked: this rule is the whole bar.
+ *
+ * TRAP, and it is the one that ships: a fixed bar does not displace content, so
+ * `.content` above pads itself by `--tabbar-h` + the bottom inset. Without that
+ * sum the last recipe row sits UNDER the bar and no amount of bar styling makes
+ * it reachable.
+ *
+ * `env(safe-area-inset-bottom)` goes on the BAR's padding, not on `bottom`, so
+ * the home indicator is covered by the bar's own surface instead of by a gap
+ * through which the page scrolls. */
+.tabbar {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 20;
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+  padding: 4px 8px calc(env(safe-area-inset-bottom, 0px) + 4px);
+  background: var(--bg-elev);
+  border-top: 1px solid var(--border);
+}
+
+/* One band, and the band is the target: the label is centred inside it rather
+ * than sized to the text, so 菜谱 and 更多 are both a full 44px column. A tab
+ * whose hit area is its glyph is the classic too-small-target bug, and the
+ * vendored 44px minimum (`button, a` in pwa.css) is a MINIMUM, not a layout. */
+.tabbar__tab {
+  flex: 1 1 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: var(--tap-min);
+  padding: 6px 4px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--fg-muted);
+  font-size: 0.9rem;
+  text-decoration: none;
+  cursor: pointer;
+}
+
+.tabbar__tab[aria-current='page'] {
+  color: var(--accent);
+  font-weight: 600;
+  /* The current tab is marked by colour AND by weight, not by colour alone:
+   * a user who cannot separate the accent from the muted grey still sees which
+   * tab they are on. */
+}
+
+/* 更多's open state is the same treatment, so the menu reads as "you are here"
+ * while it is up. */
+.tabbar__tab[aria-expanded='true'] {
+  color: var(--accent);
+  font-weight: 600;
+}
+
+/* The 更多 sheet: a fixed card sitting directly ON the bar, not a full-screen
+ * modal — a menu of three routes does not deserve a scrim, and a scrim would
+ * need its own dismiss handling for no gain.
+ *
+ * It keeps the vendored `.form-sheet` CLASS on purpose, for `main.js`'s
+ * `isModalOpen()`: that function is F18 §4e's busy-guard and it looks for
+ * `.form-sheet:not([hidden])`, so an open menu blocks a forced Service Worker
+ * reload exactly like the recipe view's date picker does. Dropping the class
+ * would silently opt this menu out of that guard. */
+.more-sheet {
+  position: fixed;
+  left: 8px;
+  right: 8px;
+  bottom: calc(var(--tabbar-h) + env(safe-area-inset-bottom, 0px) + 12px);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: var(--tap-gap);
+  padding: 16px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--bg-elev);
+  box-shadow: var(--shadow);
+}
+
+.more-sheet[hidden] {
+  display: none;
+}
+
+/* A row is a link, so it is a real `href` the router's hashchange picks up —
+ * see `tabbar.js` for why these are anchors and not buttons. */
+.more-sheet__link {
+  display: flex;
+  align-items: center;
+  min-height: var(--tap-min);
+  padding: 0 12px;
+  border-radius: var(--radius-sm);
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.more-sheet__link:active {
+  background: var(--skeleton);
 }
 
 /* --- Banners ------------------------------------------------------------
@@ -524,4 +639,53 @@ code {
   color: var(--fg-muted);
   font-size: 0.75rem;
   font-variant-numeric: tabular-nums;
+}
+
+/* --- The 食材 rows --------------------------------------------------------
+ * The CARD is the app's one card, `recipe-row`, reused rather than forked: a
+ * second border/radius/padding set is a second thing to keep in step, and these
+ * rows are the same object at a different level of the join. What is new here
+ * is only the parts a recipe row does not have — the recipe list inside one
+ * ingredient.
+ *
+ * A recipe link inside a row reuses `.recipe-row__link` for its 44px target and
+ * then re-lays it out as a horizontal wrap list, because a column of
+ * full-width links inside an already-full-width card is a column of rows with
+ * one word each.
+ */
+.ing-recipes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--tap-gap);
+  margin-top: 4px;
+}
+
+.ing-recipe {
+  flex: 0 0 auto;
+  justify-content: center;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  color: var(--accent);
+}
+
+/* `overflow-wrap: anywhere` on the name, because a Pantry.md line is the user's
+ * own free text and a long one must wrap rather than widen the card — the
+ * card is inside the `.recipe-grid` column that `minmax(0, 1fr)` keeps from
+ * being widened by its content. */
+.ing-row .recipe-row__name {
+  overflow-wrap: anywhere;
+}
+
+.ing-source,
+.ing-alias {
+  margin: 0;
+}
+
+/* The alias line is the one that says "the other file calls this something
+ * else", so it is tinted with the muted colour at a smaller size rather than
+ * styled as a warning: a disagreement between two files is a fact to read, not
+ * a failure. */
+.ing-alias {
+  font-size: 0.8rem;
 }

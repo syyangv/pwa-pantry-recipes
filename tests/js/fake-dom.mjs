@@ -56,26 +56,53 @@ class FakeNode {
     this.listeners = new Map();
     this.parentNode = null;
     this._className = '';
+    /* `dataset` and `attributes` are ONE store in a browser: `node.dataset.role`
+     * and `node.getAttribute('data-role')` are the same string, and
+     * `[data-role="x"]` finds a node whose id was written through either. This
+     * used to be a separate object, which is invisible until a test — or app
+     * code — looks a node up by an attribute selector: `el()` writes `dataset`,
+     * so every such lookup silently found nothing and the assertion passed for
+     * the wrong reason. A proxy over the attribute map, with the browser's own
+     * camelCase -> `kebab-case` rule, is both the faithful answer and the one
+     * that makes `[data-role="x"]` work. */
+    const attributeName = (key) => `data-${String(key).replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}`;
+    const self = this;
     this.dataset = new Proxy(
       {},
       {
-        set(target, key, value) {
-          target[key] = String(value);
+        set(_target, key, value) {
+          self.attributes.set(attributeName(key), String(value));
           return true;
         },
-        get(target, key) {
-          if (key in target) return target[key];
-          if (typeof key === 'string' && key.startsWith('_')) return undefined;
-          return undefined;
+        get(_target, key) {
+          if (typeof key !== 'string' || key.startsWith('_')) return undefined;
+          const value = self.attributes.get(attributeName(key));
+          return value === undefined ? undefined : value;
         },
-        has(target, key) {
-          return key in target;
+        has(_target, key) {
+          return typeof key === 'string' && self.attributes.has(attributeName(key));
         },
-        ownKeys(target) {
-          return Reflect.ownKeys(target);
+        deleteProperty(_target, key) {
+          self.attributes.delete(attributeName(key));
+          return true;
         },
-        getOwnPropertyDescriptor(target, key) {
-          return Reflect.getOwnPropertyDescriptor(target, key);
+        ownKeys() {
+          return [...self.attributes.keys()]
+            .filter((name) => name.startsWith('data-'))
+            .map((name) => name.slice(5));
+        },
+        getOwnPropertyDescriptor(_target, key) {
+          // Every own key this proxy reports is a real, enumerable, configurable
+          // attribute — the invariants `Object.keys` and spread rely on, and the
+          // VALUE has to be the real one or a test that enumerated a node's
+          // dataset would read `undefined` for every key.
+          if (typeof key !== 'string' || !self.attributes.has(attributeName(key))) return undefined;
+          return {
+            configurable: true,
+            enumerable: true,
+            writable: true,
+            value: self.attributes.get(attributeName(key)),
+          };
         },
       },
     );
@@ -112,14 +139,34 @@ class FakeNode {
 
   setAttribute(name, value) {
     this.attributes.set(name, String(value));
+    // A real document indexes ids, so `getElementById` finds a node whose id was
+    // set at any point in its life. Without this, `getElementById` only ever
+    // answered for the one id `installFakeDom` registered by hand — and a module
+    // that looks its panel up that way (which is the normal way) would be
+    // untestable rather than tested.
+    if (name === 'id') this.ownerDocument.byId.set(String(value), this);
   }
 
   getAttribute(name) {
     return this.attributes.has(name) ? this.attributes.get(name) : null;
   }
 
+  /** Present-valued and empty-valued attributes are both "present" here, which
+   * is the distinction `hidden=""` turns on: a boolean attribute is written
+   * without a value, and `getAttribute` cannot tell that from `hidden=""`
+   * without the attribute table — which is what this is. */
+  hasAttribute(name) {
+    return this.attributes.has(name);
+  }
+
   removeAttribute(name) {
+    // Captured BEFORE the delete: the id is the value being removed, and asking
+    // for it afterwards would answer null and leave the index pointing at a node
+    // that is no longer in the tree.
+    const previous = this.attributes.get(name);
     this.attributes.delete(name);
+    // …and un-index it, or a removed id would still answer `getElementById`.
+    if (name === 'id' && previous !== undefined) this.ownerDocument.byId.delete(previous);
   }
 
   appendChild(child) {
@@ -164,17 +211,33 @@ class FakeNode {
   }
 
   /**
-   * The four selector shapes the tests use, and no more: a tag name, a class,
-   * a bare attribute, and `:not([attr])`. A stub that silently answered an
-   * arbitrary selector would let a test pass against a shape it never meant to
-   * assert, so an unknown one throws.
+   * The five selector shapes the tests use, and no more: a tag name, a class, a
+   * bare attribute, an attribute WITH its value, and `:not([attr])`. A stub that
+   * silently answered an arbitrary selector would let a test pass against a shape
+   * it never meant to assert, so an unknown one throws.
+   *
+   * The value form (`[data-tab="more"]`) is here because app code uses it:
+   * `js/tabbar.js` looks its three controls up by `data-tab`, and the alternative
+   * was a hand-written window stub for that one module — which is the drift this
+   * file exists to prevent. It is a fixed shape, matched by one regex, and the
+   * throw below still guards everything else.
    */
   querySelectorAll(selector) {
     const trimmed = selector.trim();
     if (trimmed.includes(',')) {
       return trimmed.split(',').flatMap((part) => this.querySelectorAll(part));
     }
+    const valuedAttr = trimmed.match(/^(?:([a-z][a-z0-9-]*))?\[([a-z-]+)="([^"]*)"\]$/i);
+    if (valuedAttr) {
+      const [, tag, name, value] = valuedAttr;
+      return walk(this).filter(
+        (node) =>
+          (tag === undefined || node.tagName === tag.toUpperCase()) &&
+          node.getAttribute(name) === value,
+      );
+    }
     const tagAttr = trimmed.match(/^([a-z][a-z0-9-]*)\[([a-z-]+)\]$/i);
+
     if (tagAttr) {
       return walk(this).filter(
         (node) => node.tagName === tagAttr[1].toUpperCase() && node.getAttribute(tagAttr[2]) !== null,

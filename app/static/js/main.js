@@ -13,7 +13,10 @@
  *   4. initApi() — one GET /api/session for the CSRF token and the capability
  *      flags, shared by every later request. Its settle path dispatches
  *      'pwa:awake', which removes the waking banner.
- *   5. initRouter() + start() — mounts the first view.
+ *   5. initTabbar() then initRouter() + start() — the bar reads the static
+ *      markup in index.html, and the router's onNavigate tells it which route it
+ *      landed on. The bar is created FIRST so the very first screen already has
+ *      a current tab marked.
  *
  * Every import uses ?v=__APP_VERSION__. The /js/{path} route in app/main.py
  * injects the token into module *content* as well, so nested ES-module imports
@@ -26,8 +29,10 @@ import { initWakingBanner } from '/js/pwa/waking-banner.js?v=__APP_VERSION__';
 import { initApi, mutationInFlight } from '/js/api.js?v=__APP_VERSION__';
 import { initOutbox } from '/js/domain-intents.js?v=__APP_VERSION__';
 import { initRouter, reload as reloadCurrentView } from '/js/router.js?v=__APP_VERSION__';
+import { initTabbar } from '/js/tabbar.js?v=__APP_VERSION__';
 import { mount as mountHome } from '/js/views/home.js?v=__APP_VERSION__';
 import { mount as mountRecipe } from '/js/views/recipe.js?v=__APP_VERSION__';
+import { mount as mountPantry } from '/js/views/pantry.js?v=__APP_VERSION__';
 import { mount as mountShortlists } from '/js/views/shortlists.js?v=__APP_VERSION__';
 import { mount as mountSettings } from '/js/views/settings.js?v=__APP_VERSION__';
 import { mount as mountProvenance } from '/js/views/provenance.js?v=__APP_VERSION__';
@@ -111,14 +116,25 @@ function showRouteNotice(hash) {
   host.hidden = false;
 }
 
+/* The tab bar, BEFORE the router and for a reason that is not tidiness: the
+ * router's `onNavigate` is the only thing that tells the bar which route it
+ * landed on, so a bar created after the first `start()` would leave the first
+ * screen with no current tab marked — a bar that cannot say where you are on
+ * the screen you arrive at. `initTabbar` reads the static markup in
+ * `index.html`; it does not build the bar, and the router never learns that a
+ * bar exists (the dependency runs one way). */
+const tabbar = initTabbar();
+
 initRouter({
   views: {
     home: { mount: mountHome },
+    pantry: { mount: mountPantry },
     recipe: { mount: mountRecipe },
     shortlists: { mount: mountShortlists },
     settings: { mount: mountSettings },
     provenance: { mount: mountProvenance },
   },
+  onNavigate: (route) => tabbar.markActive(route && route.view),
   onUnknownRoute: showRouteNotice,
 }).start();
 
