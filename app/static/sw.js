@@ -21,7 +21,7 @@
  * the version injected into the HTML shell all derive from this constant, so
  * the served cache name and every reported version cannot drift. Bump on every
  * deploy. */
-const CACHE_VERSION = 'v0.5.0';
+const CACHE_VERSION = 'v0.6.0';
 const CACHE_NAME = `pwa-shell-${CACHE_VERSION}`;
 const API_CACHE_NAME = `pwa-api-${CACHE_VERSION}`;
 const OUTBOX_SYNC_TAG = 'outbox';
@@ -86,8 +86,20 @@ const SHELL_ASSETS = [
   '/js/logic/chip-class.js?v=' + CACHE_VERSION,
   '/js/logic/format.js?v=' + CACHE_VERSION,
   '/js/logic/sort.js?v=' + CACHE_VERSION,
-  // Vendored pwa-infra modules imported by /js/main.js. They are part of the
-  // boot graph, so a cold offline start needs them in the shell cache.
+  // Vendored pwa-infra modules reachable from /js/main.js. update-manager and
+  // waking-banner are imported by main.js directly; outbox is reached through
+  // js/domain-intents.js, and pull-refresh and unstick-on-timeout through the
+  // views. All five are therefore in the boot graph, and a cold offline start
+  // resolves that graph out of this cache with no network to fall back on.
+  //
+  // The directory completeness test in tests/js/shell_assets.test.mjs
+  // deliberately filters js/pwa/ out (the whole vendor directory is opt-in
+  // infrastructure — badge.js, which nothing imports), so it cannot see a
+  // missing entry here. Reachability is asserted by that file's boot-graph
+  // gate instead, which walks the graph through this directory.
+  '/js/pwa/outbox.js?v=' + CACHE_VERSION,
+  '/js/pwa/pull-refresh.js?v=' + CACHE_VERSION,
+  '/js/pwa/unstick-on-timeout.js?v=' + CACHE_VERSION,
   '/js/pwa/update-manager.js?v=' + CACHE_VERSION,
   '/js/pwa/waking-banner.js?v=' + CACHE_VERSION,
 ];
