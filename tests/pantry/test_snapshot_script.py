@@ -35,9 +35,27 @@ right. What is asserted here:
    structurally (the flag is passed, and it is the flag that stops the real
    script rewriting the user's snapshot note).
 
-Everything runs against `tmp_path` copies, so this file needs no sibling
-repository, no vault, and no network — it is a CI-resident test of a developer
-tool, which is the only way a safety property in a script gets enforced at all.
+**What is deliberately *not* asserted here: that the frozen notes still match
+the vault.** The vault is live, mutable, and machine-rewritten — the
+`recipeTracker` plugin rewrites `烤鸡翅.md`'s frontmatter every time the user
+cooks — while `tests/fixtures/real_recipes/` is a frozen snapshot, so byte
+equality between the two asserts that the user never cooks. That is F14's
+failure in the note-shaped direction: a red build about the world rather than
+about this code, on a run of the script that changes no code at all. The
+comparison has a home and it is already built: `scripts/snapshot_pantry_catalog.py
+--job recipes --check` reports every differing byte, every note the vault gained,
+and every committed note the vault dropped, exits non-zero, and never writes.
+This file asserts the committed end instead — that the fixture is the seventeen
+files this commit intends, that every one of them still parses, that
+`Recipes.md` is still excluded from the index, that the five `材料`/`调料` shapes
+and the three-codepoint ZWJ value are still all present in the corpus, and that
+the fixture is unchanged relative to git. That is drift-proof, needs no vault,
+and fails on a fixture that is actually wrong rather than on a vault that moved.
+
+Everything runs against `tmp_path` copies and committed bytes, so this file
+needs no sibling repository, no vault, and no network — it is a CI-resident test
+of a developer tool, which is the only way a safety property in a script gets
+enforced at all.
 """
 
 from __future__ import annotations
@@ -56,13 +74,58 @@ from typing import Any, Final
 
 import pytest
 
+from app.config import Settings
 from app.pantry.catalog import build_snapshot
+from app.recipes.ingredients import parse_ingredient_value
+from app.recipes.reader import RecipeIndex, RecipeNote, parse_recipe
 
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 SCRIPT: Final = REPO_ROOT / "scripts" / "snapshot_pantry_catalog.py"
 SNAPSHOT: Final = REPO_ROOT / "tests" / "fixtures" / "pantry_items_snapshot.json"
 PARITY: Final = REPO_ROOT / "tests" / "fixtures" / "pantry_stock_math_parity.json"
 PANTRY_NOTE: Final = REPO_ROOT / "tests" / "fixtures" / "pantry" / "Pantry.md"
+#: The frozen recipe notes: F14's rule applied to `Hobbies/做饭/Recipes`, for the
+#: same reason as the catalog. Frozen, committed, and asserted against — never
+#: compared to the live folder from a test.
+RECIPES_FIXTURE: Final = REPO_ROOT / "tests" / "fixtures" / "real_recipes"
+
+#: The 16 recipe notes the folder held when it was frozen, named. Written out
+#: rather than globbed, because a glob-derived expectation is satisfied by any
+#: set of files whatever its size — a fixture that quietly lost a note, or gained
+#: one, would still agree with itself.
+FROZEN_RECIPE_NAMES: Final[tuple[str, ...]] = (
+    "Easy Fragrant Fried Rice",
+    "Paradiso三明治",
+    "凉拌黑木耳",
+    "微波菜菜",
+    "拌空心菜",
+    "炒红苋菜",
+    "烤土豆",
+    "烤小辣椒",
+    "烤红薯",
+    "烤鲭鱼",
+    "烤鸡翅",
+    "煮菜菜",
+    "番茄炒蛋",
+    "盐焗鸡",
+    "花蛤拌饭",
+    "茶碗蒸",
+)
+#: The folder's own table of contents: frozen alongside them, and none of them.
+#: `_is_recipe_note` rejects it twice over — no `材料`/`调料` key, and a basename
+#: equal to the folder's own name.
+FROZEN_TOC_NAME: Final = "Recipes"
+
+#: Every `parse_ingredient_value` method the real corpus is expected to exercise.
+#: Asserted as coverage over the whole fixture rather than as a table of named
+#: cases: the claim is that freezing these 16 notes keeps the parser honest
+#: against real data, and a corpus that stopped containing a shape would make
+#: the parser's tolerance a fiction whether or not any single case still passes.
+FROZEN_PARSE_METHODS: Final[frozenset[str]] = frozenset(
+    {"bare", "wikilink", "emoji_alt", "emoji_only", "alt_pair"}
+)
+#: F15's ZWJ sequence: `U+1F34B U+200D U+1F7E9`. Three codepoints, one emoji.
+FROZEN_ZWJ_VALUE: Final = "🍋‍🟩"
 
 # The producer's schema, three columns wide on purpose: the point of these
 # fixtures is the script's *contract*, and a 178-row catalog is not needed to
@@ -408,7 +471,34 @@ def test_a_missing_vault_folder_is_an_error_not_a_silent_pass(
     assert "no recipe folder at" in result.stderr
 
 
-# --- 5. The committed fixture and the script agree -------------------------
+# --- 5. The committed fixtures, and the script that owns them ---------------
+
+
+def _git(*args: str) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        ["git", *args], cwd=REPO_ROOT, capture_output=True, text=True, check=False
+    )
+
+
+def _frozen_parsed(settings: Settings) -> dict[str, RecipeNote]:
+    """Every committed note through `parse_recipe()`, keyed by basename."""
+    return {
+        path.stem: parse_recipe(
+            path.read_bytes(),
+            note_name=path.stem,
+            note_path=f"{settings.recipes_root}/{path.name}",
+            max_bytes=settings.max_recipe_bytes,
+        )
+        for path in sorted(RECIPES_FIXTURE.glob("*.md"))
+    }
+
+
+def _seed_frozen_vault(settings: Settings) -> None:
+    """Copy the committed notes into the isolated vault, as the app would read them."""
+    for path in sorted(RECIPES_FIXTURE.glob("*.md")):
+        (settings.vault_path / settings.recipes_root / path.name).write_bytes(
+            path.read_bytes()
+        )
 
 
 def test_the_scripts_expected_numbers_are_the_committed_snapshots(
@@ -425,25 +515,123 @@ def test_the_scripts_expected_numbers_are_the_committed_snapshots(
     assert module.measurement_drift(module.measure(records), module.expected_measurements()) == []
 
 
-def test_the_committed_real_recipe_notes_are_the_vault_folder(
-    module: Any, tmp_path: Path
-) -> None:
-    """The 17 files this script would freeze, proven so rather than assumed.
+def test_the_frozen_notes_are_the_seventeen_files_this_commit_intends() -> None:
+    """17 = 16 recipes + the folder's own table of contents, and no more.
 
-    Ticket #11 copied the folder; nothing recorded *where from* or that the copy
-    was faithful, so the claim was unreproducible. This is the claim, executed:
-    the recipe job is pointed at a scratch copy of the committed fixture and at
-    the real vault, and the two must agree byte for byte. It skips without the
-    vault, which is the honest answer — the committed bytes are still gated in CI
-    by `tests/recipes/test_reader.py`'s 16-note count.
+    The names are literals. `test_reader.py` derives its expected set from a glob
+    over the same directory, which is a self-consistent assertion: a fixture that
+    lost a note, gained a stray one, or was renamed on disk would satisfy it
+    happily. This one cannot, and it needs no vault to fail.
     """
-    vault = Path(os.environ.get("OBSIDIAN_VAULT_PATH") or Path.home() / "obsidian" / "syang")
-    source = vault / module.DEFAULT_RECIPES_ROOT
-    if not source.is_dir():
-        pytest.skip(f"no vault at {source}; the frozen notes are gated by test_reader.py instead")
-    frozen = REPO_ROOT / "tests" / "fixtures" / "real_recipes"
-    result = module.run_recipes(vault, module.DEFAULT_RECIPES_ROOT, frozen, regenerate=False)
-    assert result == 0
+    assert sorted(path.name for path in RECIPES_FIXTURE.glob("*.md")) == sorted(
+        [*(f"{name}.md" for name in FROZEN_RECIPE_NAMES), f"{FROZEN_TOC_NAME}.md"]
+    )
+
+
+def test_every_frozen_note_parses_through_the_products_own_reader(
+    settings: Settings,
+) -> None:
+    """The fixture exists to be parser input, so every committed byte must parse.
+
+    `parse_recipe()` raising is the failure this catches, and it is caught
+    directly rather than through `RecipeIndex.skipped`, which would also count a
+    note the index legitimately decided is not a Recipe. The 16 are additionally
+    required to be Recipes — `材料` or `调料` present — because a frozen note that
+    had lost both would parse cleanly and quietly stop being test data.
+    """
+    parsed = _frozen_parsed(settings)
+    assert set(parsed) == {*FROZEN_RECIPE_NAMES, FROZEN_TOC_NAME}
+    recipes = [note for name, note in parsed.items() if name != FROZEN_TOC_NAME]
+    assert len(recipes) == len(FROZEN_RECIPE_NAMES)
+    missing = [note.note_name for note in recipes if not (note.ingredients or note.seasonings)]
+    assert not missing, f"these frozen notes are no longer recipes: {missing}"
+
+
+def test_the_frozen_notes_index_as_sixteen_and_the_toc_is_not_one_of_them(
+    settings: Settings,
+) -> None:
+    """The index's two conditions, on the real corpus: 16 in, 0 skipped, 0 index page.
+
+    Asserted over a vault built from the committed bytes, so the scan really
+    reads the fixture rather than a hand-written stand-in. `Recipes.md` is
+    frozen *with* the recipes and indexed as none of them; if either half of
+    `_is_recipe_note` stopped holding, the count and the name set would both
+    move.
+    """
+    _seed_frozen_vault(settings)
+    snapshot = RecipeIndex(settings).refresh()
+    assert snapshot.skipped == 0
+    assert {note.note_name for note in snapshot.notes} == set(FROZEN_RECIPE_NAMES)
+    assert FROZEN_TOC_NAME not in {note.note_name for note in snapshot.notes}
+
+
+def test_the_frozen_corpus_still_covers_all_five_material_shapes(
+    settings: Settings,
+) -> None:
+    """Coverage of the corpus, not a table of named cases.
+
+    The point of freezing real notes is that the parser's tolerance is set by what
+    the 16 notes actually contain. So the assertion is that feeding every
+    `材料` and `调料` value of every frozen note through the one shared parser
+    still produces all five `parse_method` values — a corpus that stopped
+    containing a shape would leave that shape untested without any single case
+    failing. `test_reader.py` pins what individual values parse *to*; this pins
+    that the variety is still in the fixture at all.
+    """
+    methods = {
+        parse_ingredient_value(entry.raw).parse_method
+        for note in _frozen_parsed(settings).values()
+        for entry in (*note.ingredients, *note.seasonings)
+    }
+    assert methods == FROZEN_PARSE_METHODS
+
+
+def test_the_frozen_corpus_still_carries_a_three_codepoint_zwj_value(
+    settings: Settings,
+) -> None:
+    """F15's `🍋‍🟩` is one emoji in three codepoints, and the corpus must keep it.
+
+    A corpus-level claim over the *distinct* values the frozen notes carry, which
+    is the part nothing else covers: `test_reader.py` asserts that one named
+    note's lime survives as a unit, but not that the fixture as a whole still
+    contains a ZWJ value at all. Two notes carry this one value (烤鲭鱼 and Easy
+    Fragrant Fried Rice), so this is deliberately not an occurrence count —
+    dropping one of the two notes does not fail here, and `git status` catching
+    that is `test_the_frozen_recipe_fixture_is_unchanged_since_it_was_committed`'s
+    job. What this kills is a re-freeze that flattened the sequence everywhere,
+    or replaced it with a two-codepoint ZWJ that left the emoji shapes still
+    represented.
+    """
+    values = {
+        entry.raw
+        for note in _frozen_parsed(settings).values()
+        for entry in (*note.ingredients, *note.seasonings)
+    }
+    zwj = {value for value in values if "\u200d" in value}
+    assert zwj == {FROZEN_ZWJ_VALUE}
+    assert len(FROZEN_ZWJ_VALUE) == 3, "the ZWJ value is not three codepoints"
+    assert parse_ingredient_value(FROZEN_ZWJ_VALUE).parsed_name == "青柠"
+
+
+def test_the_frozen_recipe_fixture_is_unchanged_since_it_was_committed() -> None:
+    """Drift has to be *reported*, never absorbed.
+
+    `--job recipes --check` prints every differing byte and exits non-zero, and
+    `--regenerate` is the only path that writes — but a regeneration that was run
+    and committed anyway leaves nothing behind to fail. This is the guard that
+    makes the drift visible as a review event rather than as a quiet edit to the
+    parser's test data: if these bytes are not what the commit says they are, CI
+    says so. It also needs no vault, so it works in a clone that has none.
+    """
+    if _git("rev-parse", "--is-inside-work-tree").returncode != 0:
+        pytest.skip("not a git checkout; there is nothing to compare the fixture against")
+    relative = RECIPES_FIXTURE.relative_to(REPO_ROOT)
+    changed = _git("status", "--porcelain", "--", str(relative))
+    assert changed.returncode == 0, changed.stderr
+    assert changed.stdout == "", (
+        "the frozen recipe notes differ from the commit; a re-freeze is a "
+        f"deliberate act, reviewed in its own commit:\n{changed.stdout}"
+    )
 
 
 def test_the_snapshot_the_script_writes_is_the_shape_build_snapshot_takes(

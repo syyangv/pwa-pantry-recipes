@@ -30,7 +30,7 @@ failing quietly:
 10. **The purchase-history columns are not projected**, because the catalog is a
     lifetime purchase history and a row existing there says nothing about stock.
 11. **The committed snapshot is the catalog the golden tests read** (F14), and
-    the live 178-row file is only a staleness check on top of it.
+    nothing in this file reads the live `pantry_items.db`.
 
 The catalog used by sections 1-10 is a `tmp_path` SQLite file carrying the
 producer's real `items` schema and rows copied from it, so nothing above depends
@@ -49,10 +49,19 @@ from CI would make every catalog re-import a red build — a failure about the
 world rather than about this code, and therefore one that teaches everyone to
 ignore CI.
 
-The live file is still read, by three tests that skip when it is absent: they
-answer "does the catalog on this machine still look like the frozen snapshot?",
-which is the signal to rerun the script. **The revision digest itself is never
-pinned** — see `test_no_test_pins_the_catalog_revision_digest`.
+**No test reads the live file either.** Three `test_the_live_*` tests used to
+remain as a staleness check that skipped when the sibling checkout was absent;
+they were the same landmine with a `pytest.skip` in front of it, and F14's
+letter is that CI does not read the live database *ever* — the user buys
+groceries, `wholefoods-to-pantry` re-imports, a row appears, and the suite goes
+red about the world. They were asserting nothing about this repository's code
+that sections 11 and 12 do not already assert against the committed snapshot.
+The question they answered — "does the catalog on this machine still look like
+the frozen snapshot?" — is `scripts/snapshot_pantry_catalog.py --job catalog`,
+whose `--check` is the default: it prints the measured shape and a unified diff
+of the encoded snapshot, exits non-zero on drift, and never writes. **The
+revision digest itself is never pinned**, and that is gated in CI structurally
+rather than by a live read — see `test_no_test_pins_the_catalog_revision_digest`.
 """
 
 from __future__ import annotations
@@ -61,7 +70,6 @@ import ast
 import hashlib
 import inspect
 import json
-import os
 import re
 import sqlite3
 import threading
@@ -96,11 +104,12 @@ REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 # repository.
 SNAPSHOT_PATH: Final = REPO_ROOT / "tests" / "fixtures" / "pantry_items_snapshot.json"
 
-# The producer's default catalog location. `PANTRY_ITEMS_DB` overrides it, so the
-# live section follows the same server-owned root the app itself reads.
-PRODUCER_CATALOG: Final = (
-    Path.home() / "projects" / "wholefoods-to-pantry" / "assets" / "pantry_items.db"
-)
+# There is deliberately no `PRODUCER_CATALOG` here. The producer's live
+# `assets/pantry_items.db` is resolved by `scripts/snapshot_pantry_catalog.py`
+# (from `$PANTRY_ITEMS_DB`, for its own `--check`), which is a local diagnostic a
+# human runs — not by this file, and not by anything else in `tests/`.
+# `tests/recipes/test_brand_lexicon.py` gates the same property for the drift
+# gate with the same name in an assertion.
 
 # Copied from the producer's `assets/pantry_items.db`, column order and types
 # included. It is a READ-ONLY producer asset; this app never writes it.
@@ -1231,13 +1240,14 @@ def test_the_row_is_frozen() -> None:
 
 
 
-# --- 11. The committed snapshot, and the live file behind it ---------------
+# --- 11. The committed snapshot, read as the catalog the tests use ---------
 #
 # These twelve used to read the sibling repository's `pantry_items.db` and skip
 # when it was absent, which meant the catalog's real shape was asserted on one
 # machine and nowhere else. They now read `tests/fixtures/pantry_items_snapshot.json`
-# and run everywhere. Three of them (`test_the_live_*`) still read the live file,
-# as a staleness check that skips cleanly when the checkout is absent.
+# and run everywhere. Nothing here reads the live file: the staleness question is
+# `scripts/snapshot_pantry_catalog.py --job catalog`, and the live tests that
+# used to answer it failed whenever the user bought something.
 
 
 def _snapshot_records() -> list[list[Any]]:
@@ -1420,7 +1430,7 @@ def test_the_snapshot_holds_products_that_are_not_currently_held(
     assert frozen.by_id[70].basename == "新鲜小叶茼蒿"
 
 
-# --- 12. The snapshot is the artifact, and the live file is the check -------
+# --- 12. The snapshot is the artifact, and it is the whole of the check ---
 
 
 def test_the_snapshot_is_a_list_of_five_tuples_in_id_order() -> None:
@@ -1523,7 +1533,7 @@ def test_the_snapshot_is_a_drop_in_replacement_for_the_live_snapshot(
 def test_the_snapshot_revision_is_stable_and_never_pinned(
     frozen: CatalogSnapshot,
 ) -> None:
-    """Stability and shape only, mirroring the live check.
+    """Stability and shape only, and the digest deliberately not pinned.
 
     The digest is a function of the five frozen columns, so it is a perfectly
     good *signal* — printed on every regeneration and pasted into that commit's
@@ -1554,87 +1564,3 @@ def test_no_test_pins_the_catalog_revision_digest() -> None:
         if revision in path.read_text(encoding="utf-8")
     ]
     assert not offenders, f"these tests pin the catalog revision: {offenders}"
-
-
-# --- 12b. The live catalog, when this machine has it -----------------------
-
-
-def _live_path() -> Path:
-    configured = os.environ.get("PANTRY_ITEMS_DB", "")
-    for candidate in (Path(configured) if configured else None, PRODUCER_CATALOG):
-        if candidate is not None and candidate.is_file():
-            return candidate
-    pytest.skip(
-        "pantry_items.db is a read-only asset of the wholefoods-to-pantry "
-        "producer and is not in this clone; set PANTRY_ITEMS_DB to check the live "
-        "catalog against the committed snapshot. The snapshot-backed tests above "
-        "are the ones CI runs."
-    )
-
-
-@pytest.fixture
-def live(tmp_path: Path) -> Iterator[PantryCatalog]:
-    instance = PantryCatalog(Settings.from_mapping(_env_for(_live_path(), tmp_path)))
-    try:
-        yield instance
-    finally:
-        instance.close()
-
-
-def test_the_live_catalog_still_has_the_frozen_shape(live: PantryCatalog) -> None:
-    """Staleness, and the signal to rerun the script.
-
-    A local-only check by design, and the one place the *numbers* rather than the
-    digest are asserted against the live file: a producer re-import that changed
-    the row count or moved an `area` must be answered with a deliberate
-    regeneration and a reviewed commit, not with a test quietly widening itself.
-    """
-    snapshot = live.snapshot()
-    assert snapshot.total_row_count == 178
-    assert len(snapshot.rows) == 176
-    assert snapshot.excluded_row_count == 2
-    assert live.row(49) is None
-    assert live.row(50) is None
-    assert [row.id for row in live.family("6")] == [24]
-    assert [row.id for row in live.snapshot().rows if row.variants] == [52, 55, 169]
-    assert {row.category for row in snapshot.rows} == set(REAL_CATEGORY_CODES)
-    assert _collisions(snapshot) == {
-        "小白菜心": [18, 106],
-        "台湾旺旺浪味仙 熔岩辣起司口味": [27, 38],
-        "韩国紫苏叶": [39, 105],
-        "organic 1% milk": [90, 116],
-        "优质白桃礼盒": [104, 128],
-        "2026fifa世界杯限定联名薯片牛肉派味": [111, 124],
-        "poland spring maine spring bottled water": [156, 165],
-        "chocolate crepe": [168, 169],
-    }
-
-
-def test_the_live_catalog_still_agrees_with_the_snapshot_row_for_row(
-    live: PantryCatalog,
-) -> None:
-    """Name-level agreement, which is what the frozen numbers cannot see.
-
-    A re-import that renames a row and keeps every count identical would pass
-    `test_the_live_catalog_still_has_the_frozen_shape`; this is the check that
-    notices. Ids are compared too, but the *names* are the point: a renumbered
-    `id` is expected on a re-import and is repaired by `catalog_revision`, while a
-    renamed product is what the golden matcher test's expected outcomes would
-    have to be re-reviewed against.
-    """
-    frozen = build_snapshot(_snapshot_records())
-    assert [row.canonical_name for row in live.snapshot().rows] == [
-        row.canonical_name for row in frozen.rows
-    ]
-
-
-def test_the_live_revision_is_stable_and_never_pinned(live: PantryCatalog) -> None:
-    """Stability is asserted; the digest itself deliberately is not.
-
-    Pinning the hash here would make every producer re-import a local test
-    failure — the exact behaviour F14's committed snapshot exists to replace.
-    """
-    revision = live.catalog_revision()
-    assert revision == live.refresh().catalog_revision
-    assert revision.startswith("sha256:")
-    assert len(revision) == len("sha256:") + 64
