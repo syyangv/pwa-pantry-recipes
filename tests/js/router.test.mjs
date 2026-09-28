@@ -147,11 +147,12 @@ function spyView(log, name) {
   };
 }
 
-test('the route table is exactly the five routes in the spec', () => {
+test('the route table is exactly the six routes in the spec', () => {
   assert.deepEqual(
     ROUTES.map((route) => [route.pattern, route.view]),
     [
       ['#/', 'home'],
+      ['#/pantry', 'pantry'],
       ['#/recipe/:basename', 'recipe'],
       ['#/shortlists', 'shortlists'],
       ['#/settings', 'settings'],
@@ -159,6 +160,26 @@ test('the route table is exactly the five routes in the spec', () => {
     ],
   );
   assert.equal(DEFAULT_HASH, '#/');
+});
+
+/* `#/pantry` is the second tab, and the only route that had to be inserted
+ * rather than appended — it sits NEXT TO `#/` in the table because the two are
+ * the two tabs, and a reader comparing this table with the tab bar in
+ * index.html should find them in the same order. The two are kept honest from
+ * both sides: `tabbar.test.mjs` reads the shell markup and compares it to
+ * `tabbar.js`'s TABS, and this test fixes the route table. */
+test('#/pantry is the second route, adjacent to #/', () => {
+  assert.deepEqual(
+    ROUTES.slice(0, 2).map((route) => route.view),
+    ['home', 'pantry'],
+  );
+  const matched = matchRoute('#/pantry');
+  assert.equal(matched.view, 'pantry');
+  assert.deepEqual(matched.params, {});
+  // A single segment, so a recipe basename can never be read as this route and
+  // this route can never swallow a detail URL.
+  assert.equal(matchRoute('#/pantry/anything'), null);
+  assert.equal(matchRoute('#/pantryextra'), null);
 });
 
 test('normalizeHash defaults an empty or bare hash to the home route', () => {

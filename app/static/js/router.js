@@ -1,13 +1,19 @@
 /* The hash router and the view convention. docs/pwa-template.md 2i / spec 9.3.
  *
- * Five routes, no more (spec 9.3 table):
+ * Six routes, no more (spec 9.3 table):
  *
- *   #/                    -> home          the recipe list
+ *   #/                    -> home          the recipe list, 今天能做什么
+ *   #/pantry              -> pantry        家里有什么, the second tab
  *   #/recipe/<basename>   -> recipe        the detail, basename URL-encoded
  *   #/shortlists          -> shortlists    the three meal shortlists (D3)
  *   #/settings            -> settings      调试 + 严格模式 (F7, F8)
  *   #/provenance          -> provenance    the full per-Ingredient table
  *   anything else         -> home, plus a non-blocking "unknown route" notice
+ *
+ * `#/pantry` sits next to `#/` because those two are the two TABS, and the other
+ * three routes are the ones `js/tabbar.js` puts behind 更多. A route is a route
+ * either way — the bar changed how four of them are reached, not what they are,
+ * and the table above is still the whole list.
  *
  * WHY A HASH ROUTER: the SW precaches `/` and every module is served from
  * `/js/...`; a path router would ask the network for `/recipe/拌空心菜` on a
@@ -111,9 +117,10 @@
 
 export const DEFAULT_HASH = '#/';
 
-/** The five routes, in match order. Frozen: the table is the contract. */
+/** The six routes, in match order. Frozen: the table is the contract. */
 export const ROUTES = Object.freeze([
   Object.freeze({ pattern: '#/', view: 'home' }),
+  Object.freeze({ pattern: '#/pantry', view: 'pantry' }),
   Object.freeze({ pattern: '#/recipe/:basename', view: 'recipe' }),
   Object.freeze({ pattern: '#/shortlists', view: 'shortlists' }),
   Object.freeze({ pattern: '#/settings', view: 'settings' }),

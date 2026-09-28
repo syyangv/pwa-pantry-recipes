@@ -118,9 +118,14 @@ app/recipes/         the recipe index + note parser, the ingredient value
 app/vault/           atomic_write (AtomicNoteStore), frontmatter, sections,
                      daily_paths — all byte-span primitives
 app/static/          sw.js (configured) + the vendored js/pwa/*, css/*
-app/static/js/logic/ chipClass, headline, sortRecipes — pure, node --test ed,
-                     and imported by nothing in app/static but sw.js's
-                     SHELL_ASSETS list
+app/static/js/tabbar.js  the 菜谱 / 食材 tab bar and the 更多 menu: behaviour
+                     only, over STATIC markup in index.html (the shell is
+                     precached, so the bar is on screen at first paint). The
+                     TABS table and the shell's data-tab attributes are held
+                     together by tests/js/tabbar.test.mjs, not by review.
+app/static/js/logic/ chipClass, headline, sortRecipes, ingredientIndex — pure,
+                     node --test ed, and imported by nothing in app/static but
+                     sw.js's SHELL_ASSETS list
 scripts/             the LaunchAgent TEMPLATE (pwa-pantry-recipes.example.plist,
                      rendered by the installer into the installed plist),
                      generate_icons.py, and the three deploy-path scripts:
@@ -151,8 +156,9 @@ tests/shortlists/    the three Meal Shortlists
 tests/mapping/       the materialized ingredient mapping and its repair path
 tests/browser/       two opt-in Playwright flows, NOT collected by a default run
 tests/scaffold/      the convergence gate, route table, static shell, icons
-tests/js/            node --test gates for the boot contract + SHELL_ASSETS
-tests/js/logic/      node --test gates for the three logic modules
+tests/js/            node --test gates for the boot contract + SHELL_ASSETS,
+                     plus the tab bar, the 食材 view, and the collection probe
+tests/js/logic/      node --test gates for the four logic modules
 previews/            VENDORED pwa-infra device frames (dev-only)
 ```
 

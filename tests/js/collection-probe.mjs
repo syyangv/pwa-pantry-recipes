@@ -30,9 +30,16 @@ export const EXPECTED_TESTS = [
   'tests/js/api.test.mjs',
   'tests/js/logic/chip-class.test.mjs',
   'tests/js/logic/format.test.mjs',
+  // The 食材 tab's grouping. Nested like the other two logic gates, and listed
+  // here for the reason they are: an unlisted new file is collected by `npm test`
+  // and the collector gate still passes, which is the §7.1 failure mode in
+  // reverse — a gate that exists and is not running.
+  'tests/js/logic/ingredient-index.test.mjs',
   'tests/js/logic/sort.test.mjs',
   // #23's outbox contract: the enqueued types, the replay, and F5's negative.
   'tests/js/outbox_contract.test.mjs',
+  // The 食材 tab's own view gates, beside #22's.
+  'tests/js/pantry-view.test.mjs',
   // #22's provenance + Stock Join gates. Added deliberately: without the entry
   // here `npm test` collects this file and the collector gate still passes,
   // which is the §7.1 failure mode in reverse.
@@ -40,6 +47,7 @@ export const EXPECTED_TESTS = [
   'tests/js/router.test.mjs',
   'tests/js/scaffold.test.mjs',
   'tests/js/shell_assets.test.mjs',
+  'tests/js/tabbar.test.mjs',
   'tests/js/views.test.mjs',
 ];
 
