@@ -33,6 +33,7 @@ from ..mapping.store import IngredientMappingStore
 from ..pantry.catalog import PantryCatalog
 from ..pantry.stock import PantryStockIndex
 from ..recipes.reader import RecipeIndex
+from ..shortlists.intents import ShortlistIntentLedger
 from ..shortlists.store import MealShortlistStore
 
 #: §9.19's four readers plus the `AtomicNoteStore` the two vault readers share.
@@ -49,6 +50,15 @@ MAPPING_STORE_STATE_KEY: Final = "ingredient_mapping_store"
 #: sits here with the rest anyway, because the argument at the top of this module
 #: is about the two sides agreeing on a name, not about what the thing is.
 MEAL_SHORTLIST_STORE_STATE_KEY: Final = "meal_shortlist_store"
+
+#: §9.18.3's `shortlist_intents` ledger, and the *only* reason the three mutating
+#: shortlist routes take a connection of their own. It is published beside the
+#: store rather than inside it for the reason this module exists at all: the
+#`lifespan` opens it, the router reads it, and a bare string literal in two files
+#: is how they would otherwise stop agreeing. It holds no connection (the
+#: factory opens and closes one per operation) and no cache, so it is closed by
+#: not being held open.
+SHORTLIST_INTENT_LEDGER_STATE_KEY: Final = "shortlist_intent_ledger"
 
 #: §9.15's 503 for "the lifespan never published this". Distinct from
 #: `pantry_stock_unreadable`, which means "the vault's `Pantry.md` could not be
@@ -73,6 +83,7 @@ Resource = (
     | PantryStockIndex
     | IngredientMappingStore
     | MealShortlistStore
+    | ShortlistIntentLedger
 )
 
 
@@ -96,6 +107,10 @@ def meal_shortlist_store(request: Request) -> MealShortlistStore:
     return _get(request, MEAL_SHORTLIST_STORE_STATE_KEY, MealShortlistStore)
 
 
+def shortlist_intent_ledger(request: Request) -> ShortlistIntentLedger:
+    return _get(request, SHORTLIST_INTENT_LEDGER_STATE_KEY, ShortlistIntentLedger)
+
+
 def _get[ResourceT: Resource](
     request: Request, key: str, expected: type[ResourceT]
 ) -> ResourceT:
@@ -112,10 +127,12 @@ __all__ = [
     "PANTRY_STOCK_STATE_KEY",
     "RECIPE_INDEX_STATE_KEY",
     "RESOURCE_UNAVAILABLE_CODE",
+    "SHORTLIST_INTENT_LEDGER_STATE_KEY",
     "ResourceUnavailable",
     "mapping_store",
     "meal_shortlist_store",
     "pantry_catalog",
     "pantry_stock",
     "recipe_index",
+    "shortlist_intent_ledger",
 ]

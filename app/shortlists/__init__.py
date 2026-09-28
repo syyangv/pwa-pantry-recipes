@@ -24,7 +24,12 @@ the enum is closed now — while the table is empty and the app is unimplemented
 rather than later, when it would be an availability-affecting migration. The three
 answer the question the user actually has: "what do I usually eat at lunch".
 
-**The outbox is not here (F5, #23).** Nothing in this package enqueues anything,
-holds a queue, or accepts a client id. `shortlist_intents` exists in the schema
-from #3 and is unwired; `store.py`'s docstring states what #23 has to do.
+**The outbox is split across two modules and neither is the store.** `store.py`
+enqueues nothing, holds no queue, and accepts no client id — that is unchanged and
+is the property #16 fixed. `intents.py` (#23) is the *server* half: the
+`shortlist_intents` ledger, the request fingerprint, and the `X-Client-Id`
+exactly-once contract that makes a replayed mutation return the first delivery's
+bytes. The *client* half — the localStorage queue — is `app/static/js/pwa/outbox.js`
+(vendored) plus `app/static/js/domain-intents.js` (this app's own), and the
+Cooking Log is on neither, per F5.
 """

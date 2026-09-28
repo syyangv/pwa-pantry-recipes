@@ -26,10 +26,13 @@
  * SEGMENT the server resolves against its own index — never joined to a path.
  *
  * **F5: the Cooking Log is online-only and is never queued.** Offline the
- * `做过了` control is disabled and says `离线：需要连接后记录`. This file imports
- * no outbox; #23 owns that wiring and §9.18.1 records why the cook log is
- * deliberately not on it. Success is never claimed optimistically — the success
- * text is printed only from a 201/200 body.
+ * `做过了` control is disabled and says `离线：需要连接后记录`. This file reaches the
+ * outbox only through `writeIntent(SHORTLIST_ADD, …)`, and
+ * `app/static/js/domain-intents.js` has no intent type for a Cooking Log at all
+ * — §9.18.1 records why, and `tests/js/outbox_contract.test.mjs` asserts the
+ * absence. Success is never claimed optimistically — the success text is
+ * printed only from a 201/200 body, and a queued edit says `已排队` rather than
+ * `已加入`.
  *
  * **Every failure that carries a `message` renders it VERBATIM** — `error.message`
  * from `api.js`, which IS the server's string. This view composes no substitute
@@ -53,8 +56,8 @@ import { goBack, readViewState, saveViewState } from '../router.js?v=__APP_VERSI
 import { isDebugEnabled } from '../prefs.js?v=__APP_VERSION__';
 import { el, trackScroll } from '../dom.js?v=__APP_VERSION__';
 import { chipRow, scoredSlots } from '../chips.js?v=__APP_VERSION__';
+import { SHORTLIST_ADD, writeIntent } from '../domain-intents.js?v=__APP_VERSION__';
 import { headline } from '../logic/format.js?v=__APP_VERSION__';
-import { markPendingEdits } from '../pending-edits.js?v=__APP_VERSION__';
 import { unstickOnTimeout } from '../pwa/unstick-on-timeout.js?v=__APP_VERSION__';
 import {
   emptyState,
@@ -396,8 +399,9 @@ export function mount(root, params = {}) {
       : isReadOnly()
         ? '只读模式：这一台不会写入日记。'
         : '';
-    // F5: disabled and it SAYS why, and nothing is queued — this file imports
-    // no outbox and never will; §9.18.1 records why the cook log is not on it.
+    // F5: disabled and it SAYS why, and nothing is queued for it — the outbox
+    // this file does use is reached only through `writeIntent`, which has no
+    // type for this write; §9.18.1 records why it must never have one.
     logButton.disabled = offline || inFlight;
     if (offline) status.textContent = '';
   }
@@ -420,18 +424,13 @@ export function mount(root, params = {}) {
 
   async function addToShortlist(meal, button) {
     if (button.disabled) return;
-    if (navigator.onLine === false) {
-      // §9.18.1 is #23's job: shortlist edits are the ONE mutation the outbox
-      // is for. Until the outbox lands, offline says exactly that instead of
-      // pretending to have queued an intent the app is not holding.
-      button.textContent = `+ ${meal.label}（离线：还没接上）`;
-      return;
-    }
     button.disabled = true;
-    // F19's gate is only meaningful if something can be pending, so a
-    // shortlist add marks itself for the duration of its request. #23 replaces
-    // this producer with the outbox, not the counter.
-    markPendingEdits(1);
+    // A hung fetch re-enables the control and says so, rather than freezing the
+    // screen on a spinner the user cannot escape. The watchdog is armed before
+    // the await and cleared in the `finally` below, so it covers the *queue*
+    // case too: an intent parked in the outbox is not an in-flight request, and
+    // a control left disabled against a queue the user cannot see would be a
+    // control that never comes back.
     const clearWatchdog = unstickOnTimeout(button, {
       delay: UNSTICK_DELAY_MS,
       onStall: () => {
@@ -439,7 +438,21 @@ export function mount(root, params = {}) {
       },
     });
     try {
-      await apiFetch(`/api/shortlists/${meal.slot}`, { method: 'POST', body: { recipeNote: name } });
+      // §9.18.1: a shortlist edit is one of the two mutations the offline
+      // outbox is FOR. `writeIntent` writes through while online and queues
+      // durably when the transport or the connection is gone; the intent carries
+      // its own `clientId`, which the server binds to a fingerprint of the
+      // mutation so the replay is answered from the first delivery's bytes
+      // rather than applied a second time.
+      const result = await writeIntent(SHORTLIST_ADD, { slot: meal.slot, recipeNote: name });
+      if (result.queued) {
+        // Queued, not done. The wording says so, because the alternative — a
+        // success label on an edit the server has not seen — is the one thing
+        // F4 made structural and this app must not reintroduce.
+        button.textContent = `+ ${meal.label}（已排队）`;
+        status.textContent = `离线：${meal.label}清单的改动已排队，联网后自动送出。`;
+        return;
+      }
       button.textContent = `已加入${meal.label}`;
       status.textContent = `已加入${meal.label}清单。`;
     } catch (error) {
@@ -447,11 +460,21 @@ export function mount(root, params = {}) {
       // failure never claims the recipe was added — which matters for the
       // refusal F4 made structural: the app never invents state it does not
       // have. The body is `{recipeNote}` per §9.16 and D2, never a path.
+      //
+      // A 409 `client_id_reused` is reachable here: it means the app spent one
+      // idempotency key on two different edits, which is a bug in the app, not
+      // something the user did. It surfaces as the server's code rather than
+      // being swallowed, and the intent is NOT retried — the vendored outbox has
+      // parked it, and retrying a parked intent forever is the tight loop the
+      // adapter's own comment warns about.
       button.textContent = `+ ${meal.label}`;
       status.textContent = `${meal.label}清单：${error.message || error.code}`;
     } finally {
       clearWatchdog();
-      markPendingEdits(-1);
+      // F19's gate: the outbox's own counter is the producer now, so this view
+      // no longer marks itself. What the counter reports is "the app has not yet
+      // confirmed my change" — which covers the in-flight request AND an intent
+      // sitting in the outbox, and the recipe view was only ever the former.
       button.disabled = false;
     }
   }

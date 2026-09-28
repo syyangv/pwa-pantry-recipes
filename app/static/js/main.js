@@ -24,6 +24,7 @@
 import { initUpdateManager, requestUpdateReload } from '/js/pwa/update-manager.js?v=__APP_VERSION__';
 import { initWakingBanner } from '/js/pwa/waking-banner.js?v=__APP_VERSION__';
 import { initApi, mutationInFlight } from '/js/api.js?v=__APP_VERSION__';
+import { initOutbox } from '/js/domain-intents.js?v=__APP_VERSION__';
 import { initRouter, reload as reloadCurrentView } from '/js/router.js?v=__APP_VERSION__';
 import { mount as mountHome } from '/js/views/home.js?v=__APP_VERSION__';
 import { mount as mountRecipe } from '/js/views/recipe.js?v=__APP_VERSION__';
@@ -120,6 +121,24 @@ initRouter({
   },
   onUnknownRoute: showRouteNotice,
 }).start();
+
+/* ONE outbox, created here and read by every view (§9.18.2, Part 6b).
+ *
+ * It is created *after* the router so the first view is already mounted and a
+ * view that wants to write on mount finds a live outbox, and *before* the
+ * `online` / `focus` / `visibilitychange` / interval triggers can fire — the
+ * vendored adapter registers them in its constructor, so an outbox created later
+ * would have missed a connectivity event that arrived in between.
+ *
+ * `replay` is the app's, not the adapter's, and that is Part 6b's whole point:
+ * the app knows the endpoint, the CSRF token, the revision, and the UI semantics;
+ * the adapter only knows about localStorage and flush ordering. `F18`'s pair is
+ * untouched by this — the outbox registers a Background Sync tag the vendored
+ * worker already handles, and the `autoApply: false` / `WAIT_FOR_MESSAGE: true`
+ * pairing that keeps an update from being forced underneath a replay is set in
+ * `main.js` and `sw.js` respectively and neither moved.
+ */
+initOutbox();
 
 /* Pattern F — iOS resume. A BFCache restore can fire `pageshow` with
  * e.persisted WITHOUT a visibilitychange, and a Home Screen PWA resumes a

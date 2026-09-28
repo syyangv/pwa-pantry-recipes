@@ -56,6 +56,7 @@ const { hasPendingEdit, markPendingEdits, pendingEdits, resetPendingEdits } = aw
   '../../app/static/js/pending-edits.js'
 );
 const { initRouter } = await import('../../app/static/js/router.js');
+const intents = await import('../../app/static/js/domain-intents.js');
 const api = await import('../../app/static/js/api.js');
 const { mount: mountHome } = await import('../../app/static/js/views/home.js');
 const { mount: mountRecipe, MEALS, OFFLINE_REASON, TRACKER_BADGE, todayIn } = await import(
@@ -184,9 +185,41 @@ function json(body, status = 200) {
   };
 }
 
+/**
+ * The fake DOM, the router, and **one app outbox**.
+ *
+ * The outbox is part of the boot contract now (#23): `main.js` creates exactly
+ * one, and `views/recipe.js` reaches it through `writeIntent`. A view test that
+ * mounted the recipe view without one would be testing a state the app can never
+ * be in, and the failure it would produce is a rejected promise rather than a
+ * missing button — so the harness builds the real thing over the fake DOM's
+ * storage instead of stubbing the module.
+ */
 function install(options = {}) {
   const dom = installFakeDom(options);
   initRouter({ window: dom.window, views: {} });
+  dom.outbox = intents.initOutbox({
+    storage: dom.localStorage,
+    eventTarget: dom.window,
+    document: dom.document,
+    navigator: dom.navigator,
+    serviceWorker: null,
+    // The vendored adapter's 30 s interval must not hold the runner's event
+    // loop open, and no view test depends on real elapsed time.
+    timers: { setInterval: () => 0, clearInterval: () => {} },
+    events: { addEventListener() {}, removeEventListener() {}, dispatchEvent: () => true },
+    autoStart: false,
+  });
+  // The vendored adapter registers its `online` / `focus` / `visibilitychange`
+  // listeners on the window and only removes them in `close()`. Restoring the
+  // DOM without closing the outbox would leave one behind, and the listener
+  // ledger test below is exactly the assertion that would catch it — so the two
+  // are tied together here rather than in each test.
+  const restoreDom = dom.restore;
+  dom.restore = () => {
+    dom.outbox.close();
+    restoreDom();
+  };
   return dom;
 }
 
@@ -221,11 +254,15 @@ test.beforeEach(() => {
   api.resetApi();
   api.recipeListCache.clear();
   resetPendingEdits();
+  // The outbox is a module singleton, so its queue has to start empty for each
+  // test or one test's queued intent replays inside the next one.
+  intents.resetOutbox();
   setResponder(() => json(sessionBody(), 200));
 });
 
 test.afterEach(() => {
   api.resetApi();
+  intents.resetOutbox();
   resetPendingEdits();
 });
 
@@ -1336,13 +1373,22 @@ test('a panel that settles after unmount writes nothing into the next view root'
 test('the detail view registers every listener it adds and drops them all', async () => {
   const dom = install();
   respondRecipe();
+  /* The baseline is captured AFTER `install()`, because the app outbox keeps its
+   * own `online` listener for the life of the page — that is the vendored
+   * adapter doing its job, not a leak, and asserting an absolute zero would be
+   * asserting that the outbox does not exist. What is under test is the DELTA
+   * the view adds and the view removes. */
+  const baseline = (type) => (dom.window.listeners.get(type) || new Set()).size;
+  const before = { online: baseline('online'), offline: baseline('offline') };
+  assert.ok(before.online > 0, 'the harness registered no outbox listener to begin with');
+
   const unmount = mountRecipe(dom.root, { basename: '盐焗鸡' });
   await settle();
   const live = dom.window.listeners.get('online');
-  assert.ok(live && live.size > 0, 'the view never listened for connectivity');
+  assert.ok(live && live.size > before.online, 'the view never listened for connectivity');
   unmount();
-  assert.equal(dom.window.listeners.get('online').size, 0, 'a listener outlived unmount()');
-  assert.equal(dom.window.listeners.get('offline').size, 0);
+  assert.equal(baseline('online'), before.online, 'a listener outlived unmount()');
+  assert.equal(baseline('offline'), before.offline);
   assert.equal(dom.root.textContent, '');
   dom.restore();
 });

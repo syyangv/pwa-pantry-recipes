@@ -1106,18 +1106,18 @@ def test_the_shortlist_rows_live_in_the_pwa_database_and_nowhere_else(
 
 
 def test_a_shortlist_mutation_enqueues_nothing(app: _App) -> None:
-    """F5: the outbox is #23's, and this ticket adds none of it.
+    """F5: these three routes are the outbox's SERVER half and enqueue nothing.
 
-    `shortlist_intents` exists from #3 and is **unwired**, so the table stays
-    empty across a full mutation cycle. That is the negative the ticket asks for:
-    #23 will wrap these three routes, so a line that enqueued here would be a
-    second enqueue path for #23 to find and reason about, and would violate §9.18.1
-    for the same reason the cook log is off the outbox — a blind replay of a
-    `PUT` is a lost update.
+    `shortlist_intents` is the *server* half of the offline outbox — a ledger, not
+    a queue — and it is written only for a request that carries an
+    `X-Client-Id`. A mutation with no key is the plain path, so the table stays
+    empty across a full cycle. The negative is still load-bearing: a line that
+    enqueued *here* would be a second, client-independent enqueue path, and the
+    Cooking Log is off the outbox for the reason §9.18.1 gives in full.
 
-    `X-Client-Id` is not read here either: accepted-and-ignored would imply a
-    dedupe guarantee this ticket does not provide, and there is no reason for the
-    client to send it until #23 says so.
+    The ledger's own behaviour — same key replays the stored bytes, a different
+    intent under one key is 409, a refusal records nothing — is asserted in
+    `tests/api/test_shortlist_intents.py`, which is where it belongs.
     """
     app.add("lunch", MAIN_RECIPE)
     app.add("lunch", SECOND_RECIPE)
@@ -1134,12 +1134,18 @@ def test_a_shortlist_mutation_enqueues_nothing(app: _App) -> None:
     assert asyncio.run(intents()) == 0
 
 
-def test_a_client_id_header_changes_nothing_yet(app: _App) -> None:
-    """The header is not read, so a replayed request is applied twice, once #23.
+def test_a_client_id_header_on_an_ordinary_add_looks_exactly_like_no_header(
+    app: _App,
+) -> None:
+    """A first delivery with a key is byte-for-byte the response without one.
 
-    Asserted because "not wired" must mean *not wired*, not "wired but the ledger
-    row is missing". Sending the header today is a no-op, and a test that asserted
-    the opposite would be asserting a guarantee that does not exist yet.
+    The ledger is a transparency requirement, not a second response shape: the
+    first delivery and every replay are the same string, and that string is the
+    one a keyless request gets. If adding the header changed the body, the client
+    would have two shapes to render and the exactly-once guarantee would be paid
+    for out of the response contract. `tests/api/test_shortlist_intents.py` asserts
+    the replay leg; this asserts the first-delivery leg, because "same intent,
+    same bytes" is only true if both legs hold.
     """
     plain = app.add("lunch", MAIN_RECIPE)
 

@@ -59,6 +59,7 @@ from .api.resources import (
     PANTRY_CATALOG_STATE_KEY,
     PANTRY_STOCK_STATE_KEY,
     RECIPE_INDEX_STATE_KEY,
+    SHORTLIST_INTENT_LEDGER_STATE_KEY,
     ResourceUnavailable,
 )
 from .api.shortlists import build_shortlists_router
@@ -71,6 +72,7 @@ from .pantry.catalog import CatalogError, PantryCatalog
 from .pantry.stock import PantryStockIndex
 from .pwa_version import derive_version, install_pwa_version
 from .recipes.reader import RecipeIndex
+from .shortlists.intents import ShortlistIntentLedger
 from .shortlists.store import MealShortlistStore
 from .vault.atomic_write import AtomicNoteStore
 from .vault.daily_paths import DailyNotePathPolicy
@@ -201,6 +203,15 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 partial(connect_db, runtime), recipe_basenames(recipes)
             )
 
+            # 8b. §9.18.3's `shortlist_intents` ledger — the server half of the
+            #     offline outbox, and the reason the three mutating shortlist
+            #     routes can answer a replay with the bytes the first delivery
+            #     returned. It wraps the ROUTES and never the store: the store
+            #     stays the single writer of `meal_lists`, and this object opens
+            #     its own connection per guarded mutation, so there is no second
+            #     writer and no descriptor to close.
+            shortlist_intents = ShortlistIntentLedger(partial(connect_db, runtime))
+
             # 9. The Cooking Log writer (F4, D2). It writes the daily note and
             #    appends to `cook_log_receipts`, both through the same store and
             #    the same database. F5: it is online-only and is **not** wired
@@ -216,6 +227,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             application.state[PANTRY_STOCK_STATE_KEY] = stock
             application.state[MAPPING_STORE_STATE_KEY] = mappings
             application.state[MEAL_SHORTLIST_STORE_STATE_KEY] = shortlists
+            application.state[SHORTLIST_INTENT_LEDGER_STATE_KEY] = shortlist_intents
             application.state[COOK_LOG_WRITER_STATE_KEY] = writer
             yield
         finally:

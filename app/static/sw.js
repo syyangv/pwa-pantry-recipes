@@ -21,7 +21,7 @@
  * the version injected into the HTML shell all derive from this constant, so
  * the served cache name and every reported version cannot drift. Bump on every
  * deploy. */
-const CACHE_VERSION = 'v0.4.1';
+const CACHE_VERSION = 'v0.5.0';
 const CACHE_NAME = `pwa-shell-${CACHE_VERSION}`;
 const API_CACHE_NAME = `pwa-api-${CACHE_VERSION}`;
 const OUTBOX_SYNC_TAG = 'outbox';
@@ -73,6 +73,13 @@ const SHELL_ASSETS = [
   '/js/chips.js?v=' + CACHE_VERSION,
   '/js/panels.js?v=' + CACHE_VERSION,
   '/js/pending-edits.js?v=' + CACHE_VERSION,
+  // The app's half of the offline outbox (#23): the three intent types, the
+  // replay, and the one `createBrowserOutbox` main.js creates. It is named here
+  // rather than left to the boot graph for the reason the views are: a module
+  // that is imported, served, and precached by nothing works perfectly online
+  // and is simply absent from an installed app — which is exactly the case that
+  // matters here, since the module exists to make an OFFLINE edit durable.
+  '/js/domain-intents.js?v=' + CACHE_VERSION,
   // Pure client-side logic modules. Not imported by main.js itself, so they are
   // named here rather than pulled in by the boot graph; without the entries a
   // cold offline start would resolve them from the network and fail.

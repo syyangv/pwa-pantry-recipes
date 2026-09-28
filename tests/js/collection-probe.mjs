@@ -31,6 +31,8 @@ export const EXPECTED_TESTS = [
   'tests/js/logic/chip-class.test.mjs',
   'tests/js/logic/format.test.mjs',
   'tests/js/logic/sort.test.mjs',
+  // #23's outbox contract: the enqueued types, the replay, and F5's negative.
+  'tests/js/outbox_contract.test.mjs',
   // #22's provenance + Stock Join gates. Added deliberately: without the entry
   // here `npm test` collects this file and the collector gate still passes,
   // which is the §7.1 failure mode in reverse.

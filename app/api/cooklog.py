@@ -41,10 +41,9 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..cooklog.writer import CookingLogWriter, CookLogError, CookLogResult
+from .client_id import MAX_CLIENT_ID_LENGTH as MAX_CLIENT_ID_LENGTH
+from .client_id import normalize_client_id as _normalize_client_id
 from .envelope import api_error
-
-#: Same bound, same trim, same non-empty rule as `pwa-deals` (§9.16).
-MAX_CLIENT_ID_LENGTH: Final = 200
 
 #: The state key `app/main.py`'s `lifespan` is expected to publish. Kept as a
 #: constant because the wiring ticket and this one have to agree on it, and a
@@ -161,13 +160,14 @@ def normalize_client_id(raw: str | None) -> str | None:
     the outbox (§9.18.1), so there is no replay to deduplicate. It is accepted
     only as defence in depth against a user-driven double submit, and the real
     guarantee is the note plus `cook_log_receipts`.
+
+    The body moved to `app/api/client_id.py` when the shortlist ledger landed,
+    because the two routes read this header for opposite reasons and a validator
+    written twice agrees only until one of them moves. This stays as a named
+    re-export so every existing caller and every existing test that imports it
+    from here is unaffected.
     """
-    if raw is None:
-        return None
-    normalized = raw.strip()
-    if not normalized or len(normalized) > MAX_CLIENT_ID_LENGTH:
-        return ""
-    return normalized
+    return _normalize_client_id(raw)
 
 
 def _writer(request: Request) -> CookingLogWriter | None:
