@@ -1,0 +1,95 @@
+# The closed brand lexicon consumed by `app/recipes/normalize.py`.
+#
+# Loaded once at import time by `app/recipes/brand_lexicon.py` and compiled into
+# the single anchored alternation `_BRAND_RE`. A leading token is stripped only
+# if it appears here, compared case-insensitively after NFKC, and only together
+# with the single space that follows it.
+#
+# It is CLOSED on purpose, in both directions. "Strip the first token" is wrong
+# either way: the leading token of `Mushroom Dried Morel Mushrooms` is a food
+# word, and the leading token of `优质白桃礼盒` / `韩国紫苏叶` is a product
+# qualifier, while `小巷口白糖馅蟹壳黄烧饼` buries a brand mid-name. Position
+# says nothing; a closed list does.
+#
+# Schema. `version` is the schema revision, not the data revision: a loader that
+# does not recognise it refuses to start rather than misreading the file.
+# `brands` is a list of the exact strings that participate in matching. A bare
+# string is the whole entry, and there is deliberately no per-brand field,
+# because nothing would read one. Matching is already case-insensitive, so a
+# "canonical form" or a list of case aliases would be inert; and grouping `POM`
+# under `Wonderful` would be actively wrong, because `POM Wonderful 100%
+# Pomegranate Juice` only strips because `POM` matches at position 0.
+# Attaching per-brand metadata is a `version: 2` change and must land together
+# with the code that reads it.
+#
+# Entries that look redundant are load-bearing and must NOT be merged:
+# `Chobani` and `Chobani®` are separate, as are `POM` and `Wonderful`.
+# `Beekeeper's` and `BEEKEEPERS` are separate for a different reason — only the
+# first carries the apostrophe, so the second is what matches a catalog row that
+# spells it without one.
+#
+# This is a curated list, not a projection of the catalog. Several real catalog
+# brands are deliberately absent (`Surasang`, `八道`, `鲍师傅`, `良品铺子`)
+# because over-stripping a food word costs more than leaving a brand attached:
+# the two sides of the matcher are normalized through the same function, so an
+# unstripped brand is symmetric and harmless, while a false strip is not.
+# `test_catalog_brands_are_all_reviewed` keeps that deliberate, so a newly
+# ingested brand surfaces as a visible failure instead of a silent mis-strip.
+version: 1
+brands:
+  - "盒马"
+  - "AeroFarms"
+  - "Chobani"
+  - "Chobani®"
+  - "Icelandic Provisions"
+  - "Lifeway"
+  - "Loacker"
+  - "POM"
+  - "Wonderful"
+  - "Simple"
+  - "Nutricost"
+  - "乐事"
+  - "喜茶"
+  - "柴米"
+  - "好丽友"
+  - "小巷口"
+  - "禾苑"
+  - "晨曦"
+  - "Fusipim"
+  - "JAYONE"
+  - "Koia"
+  - "MOOALA"
+  - "HAITAI"
+  - "ORION"
+  - "CJ"
+  - "Asahi"
+  - "Acure"
+  - "Manukora"
+  - "Matchaful"
+  - "Driscoll's"
+  - "Beekeeper's"
+  - "BEEKEEPERS"
+  - "Bell"
+  - "Gelatys"
+  - "Dr.Reju-All"
+  - "LESSEREVIL"
+  - "Forward"
+  - "EVOLUTION"
+  - "NOW"
+  - "Orri"
+  - "Wang Korea"
+  - "思念"
+  - "臻品德"
+  - "中华"
+  - "江船长&Yaba"
+  - "超禾"
+  - "味圈"
+  - "必品阁"
+  - "饭匹兄弟"
+  - "Love Me Sweet"
+  - "Sanpellegrino"
+  - "Trader Joe's"
+  - "365"
+  - "365 By Whole Foods Market"
+  - "Whole Foods Market"
+  - "YABA"

@@ -19,6 +19,7 @@ import re
 import unicodedata
 from typing import Final
 
+from .brand_lexicon import load_brand_lexicon
 from .ingredients import strip_leading_emoji_run
 
 # Closed lexicon of leading brand tokens observed in the 178-row catalog. It is
@@ -27,66 +28,13 @@ from .ingredients import strip_leading_emoji_run
 # leading token of `优质白桃礼盒` / `韩国紫苏叶` is a product qualifier, while
 # `小巷口白糖馅蟹壳黄烧饼` buries a brand mid-name — position says nothing, a
 # closed list does.
-BRAND_LEXICON: Final[frozenset[str]] = frozenset(
-    {
-        "盒马",
-        "AeroFarms",
-        "Chobani",
-        "Chobani®",
-        "Icelandic Provisions",
-        "Lifeway",
-        "Loacker",
-        "POM",
-        "Wonderful",
-        "Simple",
-        "Nutricost",
-        "乐事",
-        "喜茶",
-        "柴米",
-        "好丽友",
-        "小巷口",
-        "禾苑",
-        "晨曦",
-        "Fusipim",
-        "JAYONE",
-        "Koia",
-        "MOOALA",
-        "HAITAI",
-        "ORION",
-        "CJ",
-        "Asahi",
-        "Acure",
-        "Manukora",
-        "Matchaful",
-        "Driscoll's",
-        "Beekeeper's",
-        "BEEKEEPERS",
-        "Bell",
-        "Gelatys",
-        "Dr.Reju-All",
-        "LESSEREVIL",
-        "Forward",
-        "EVOLUTION",
-        "NOW",
-        "Orri",
-        "Wang Korea",
-        "思念",
-        "臻品德",
-        "中华",
-        "江船长&Yaba",
-        "超禾",
-        "味圈",
-        "必品阁",
-        "饭匹兄弟",
-        "Love Me Sweet",
-        "Sanpellegrino",
-        "Trader Joe's",
-        "365",
-        "365 By Whole Foods Market",
-        "Whole Foods Market",
-        "YABA",
-    }
-)
+#
+# The entries are DATA, in `app/recipes/lexicon/brands.yaml`, so a brand is
+# added or corrected without a code change. They are read and validated once, at
+# import: an unreadable or malformed file raises `ConfigurationError` here and
+# the app refuses to start, because a silently empty lexicon would strip
+# nothing and quietly admit every packaged SKU as a candidate.
+BRAND_LEXICON: Final[frozenset[str]] = load_brand_lexicon()
 
 _QUOTE_PAIRS: Final[dict[str, str]] = {
     '"': '"',
