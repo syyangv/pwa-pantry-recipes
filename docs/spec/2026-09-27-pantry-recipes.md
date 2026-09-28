@@ -3062,14 +3062,46 @@ the rejected `candidates_json`. That view also hosts the two repair actions
 join is measurably the weakest link in the app (2 misses in 46 open lines), so
 the only thing standing between it and silent wrongness is that the misses are
 visible. It lists every open `Pantry.md` line with its raw text, its normalized
-product core, and its `stockJoinState ∈ {joined, override, unresolved}` plus the
-resolved `pantry_item_id` when joined. The `unresolved` rows are the actionable
-ones: each names the `canonical_name` to add to
-`app/pantry/line_overrides.yaml`, so repairing a miss is a one-line reviewed
+product core, and its `stockJoinState ∈ {joined, override, unresolved}` plus
+`pantryItemIds` when joined. The `unresolved` rows are the actionable ones, and
+**what an unresolved row names is the `overrideKey` to add to
+`app/pantry/line_overrides.yaml` — the folded key, and only the key. The
+`canonical_name` beside it is the operator's to supply.** The row is still enough
+to act on: the key is the string a paste must reproduce, because
+`load_line_overrides` refuses to boot on any key that is not already
+`fold_name`-normalized, so a raw `Pantry.md` line pasted as a key produces an
+entry that can never fire. Repairing a miss is therefore a one-line reviewed
 source edit rather than a database write or — far worse — an edit to the user's
-vault. `joined` rows resolved to a **duplicate** catalog name (D1's 5-row set)
-are shown with both candidate ids so the ambiguity is visible before it becomes
-a wrong chip.
+vault.
+
+**The server does not publish a guessed `canonical_name`, and that is the
+contract rather than a gap.** The join is exactly three tiers (exact name →
+basename → `line_overrides.yaml`) with no fourth and no re-resolution pass, so
+for a line no tier explained there is no candidate value the server could name
+without inventing it. A miss is *by definition* a row the ladder could not
+resolve, so naming a value for it would be a fourth tier wearing a disguise — and
+a confidently wrong `canonical_name` is strictly worse than an honest miss,
+because it converts a visible gap into an invisible bad chip. `overrideName` is
+therefore `null` on a plain miss, and `repairHint` says so in as many words
+(`服务器不替你猜这个值` — the server will not guess this value for you; there is no
+fourth rung on the ladder to guess it from).
+
+**Where the server does have a name, it reports that name verbatim.** An override
+that *fired* and still did not resolve is a different failure from a line no tier
+touched: the operator already wrote an entry and it is stale — mistyped, or the
+product was renamed by a re-ingest. `StockJoinMiss.override` carries that value,
+`overrideName` publishes it, and `repairHint` is the other sentence: change the
+value of key `{key}` to a `canonical_name` that really exists in the live
+catalog, or delete the line. That is why the field is nullable rather than
+absent: `null` means "no name was tried, and none should be", while a string
+means "this is the name that was tried, and it is wrong". On a **resolved** row
+`overrideName` is `null` on every hit — a hit's repair value is a fact about a
+file the client has no business reading, and a tier-3 hit already says `override`
+in its `stockJoinState` and names its own `overrideKey`.
+
+`joined` rows resolved to a **duplicate** catalog name (D1's 5-row set) are
+shown in `pantryItemIds` with **both** candidate ids, so the ambiguity is
+visible before it becomes a wrong chip.
 
 **F7, locked:** the API **always** returns the provenance fields on every recipe
 response (a 16-recipe list is a few kilobytes), so toggling 调试 is instant and
@@ -3324,10 +3356,10 @@ other code still emits exactly `{"requestId", "code"}`.
 |---|---|---|---|
 | `GET /api/version` | Existing convergence gate | `{"version": "v…"}` | — |
 | `GET /api/session` | Identity, CSRF token, capability flags | `{"identity","csrfToken","version","readOnly","appTimezone"}` | 401 `identity_*` |
-| `GET /api/pantry/items?q=&limit=` | Catalog search for the manual picker | `{"items":[{id,canonicalName,category,area,variants,lastSeen}],"catalogRevision"}` | 422 bad query |
-| `GET /api/recipes?strict=0` | The list, with per-Ingredient provenance | `{"recipes":[…],"catalogRevision","stockRevision","strict","staleMappingCount","stockUnjoinedCount"}` | 503 `pantry_stock_unreadable` / `pantry_db_unreadable` |
-| `GET /api/recipes/{note_name}` | One Recipe, full | `{"recipe":{…,"ingredients":[{index,rawValue,parsedName,parseMethod,matchMethod,matchTier,pantryItemId,confidence,chipClass,stockJoinState,isSeasoning}],"history":{…}}}` | 404 `recipe_not_found`; 503 `pantry_stock_unreadable` |
-| `POST /api/recipes/resolve` | Re-resolve unresolved and stale rows | `{"reconsidered":N,"resolved":N,"stillUnresolved":N,"staleReset":N,"duplicateSlotConflicts":N}` | 409 while a resolve is in flight |
+| `GET /api/pantry/items?q=&limit=` | Catalog search for the manual picker | `{"items":[{id,canonicalName,category,area,variants}],"catalogRevision"}` — **no `lastSeen`**, see the picker row's note below | 422 bad query |
+| `GET /api/recipes?strict=0` | The list, with per-Ingredient provenance | `{"recipes":[…],"catalogRevision","stockRevision","strict","staleMappingCount","stockUnjoinedCount","skipped":N,"stockJoin":{…}}` | 503 `pantry_stock_unreadable` / `pantry_db_unreadable` |
+| `GET /api/recipes/{note_name}` | One Recipe, full | `{"recipe":{…,"ingredients":[{index,rawValue,parsedName,parseMethod,matchMethod,matchTier,pantryItemId,confidence,candidatesJson,inStock,stockJoinState,isSeasoning}],"history":{…}}` — the ingredient list is **exact**, and carries no `chipClass`; see below | 404 `recipe_not_found`; 503 `pantry_stock_unreadable` |
+| `POST /api/recipes/resolve` | Re-resolve unresolved and stale rows | `{"reconsidered":N,"resolved":N,"stillUnresolved":N,"staleReset":N,"duplicateSlotConflicts":N,"conflicts":[{recipeNote,ingredientIndex,rawValue,pantryItemId,canonicalName,reason}]}` | 409 while a resolve is in flight |
 | `PUT /api/recipes/{note_name}/ingredients/{index}/mapping` | Manual re-map | `{"mapping":{…}}` | 404 / 422 / 403 `read_only` |
 | `DELETE /api/recipes/{note_name}/ingredients/{index}/mapping` | Clear a manual row | `{"mapping":null}` | 404 |
 | `GET /api/shortlists` | All three slots | `{"breakfast":[…],"lunch":[…],"dinner":[…]}` | — |
@@ -3345,11 +3377,80 @@ catalog row (F1). `stockJoinState` on each Ingredient is
 F1's acknowledged weak join is **visible** rather than silent, and both are what
 the `调试` toggle renders.
 
+**`stockJoin` and `skipped` — added after this table was locked, and the reason
+the widening is safe.** Both arrived in later tickets, both were **additive**, and
+every key that existed before them kept its exact shape: the list response is
+still `recipes` + the six scalars, and the two tickets touched no existing row.
+`tests/api/test_recipes_api.py::LIST_KEYS` pins the eight-key set exactly, so a
+ninth key is a deliberate edit rather than a surprise.
+
+- **`skipped: N`** — the number of recipe notes dropped for being unreadable
+  (`RecipeSnapshot.skipped`). A bad note is **skipped and counted, never fatal**:
+  one unreadable file must not blank the whole list. It is the same number
+  `/health` publishes as `recipes.skipped`, and it is on the response rather than
+  only in the debug view for the same reason `staleMappingCount` is (§7.3) — a
+  note that silently stopped being indexed is a wrong answer, not a missing one.
+- **`stockJoin: {…}`** — F1's **whole** per-line join table, materialized in the
+  recipe response rather than fetched by a second route. It is a projection of
+  the *same* `StockJoin` object that `stockUnjoinedCount` and every slot's
+  `stockJoinState` were computed from, so the table cannot disagree with the
+  count beside it: `{"lineCount","unjoinedCount","tierCounts":{"exact","basename","override"},"guidance","lines":[…]}`. `lines` is
+  every open `Pantry.md` line in `line_index` order — the note's own order, so a
+  row's position on screen is its position in the file — and a line is
+  `{lineIndex,section,text,core,stockJoinState,tier,pantryItemIds,overrideKey,overrideName,repairHint}`
+  whether it hit or missed, so the two row shapes differ only where the join's
+  answer differs. `pantryItemIds` is a **list**, both candidates on a duplicate.
+  `overrideName` is `null` on a plain miss and carries the stale value when an
+  override fired and did not resolve; `repairHint` is a server-composed sentence
+  and never `null` on a miss. See §9.13.4 for why the server names the key and
+  refuses to name the value. The alternative — a `GET /api/stock-join` route —
+  was rejected on the §9.13.4 ratio argument: the table is 45 rows against a
+  16-recipe list, and a second request is a second thing that can drift from the
+  first, which is the failure **F7** exists to prevent.
+
+**Two rows above were corrected against the routes as they respond, and one row
+was corrected twice.** The table is the first thing an implementer reads, so a
+key that is named here and absent from the response is worse than a missing key:
+
+- **`lastSeen` is not published on the picker row.** It was named here and is
+  deliberately withheld: `last_price` / `first_seen` / `last_seen` /
+  `order_count` are Pantry-Write Contract data owned by `wholefoods-to-pantry`,
+  and this app is a read-only consumer of a sibling project's committed asset
+  (`AGENTS.md` #4). `CatalogRow` does not even project them, so publishing one
+  would need a second, wider reader over `items` — and would invite a caller to
+  read purchase history as current stock, which is the Pantry Item / Pantry Stock
+  conflation `CONTEXT.md` forbids. The ticket's non-goal ("emit `last_price`,
+  `first_seen`, `last_seen`, or `order_count` in any response") is the tighter of
+  the two constraints and wins. `area` **is** published, and is always `null`:
+  `PantryCatalog` drops every row whose `area` is not NULL before building a
+  `CatalogRow`, so publishing the key states a fact rather than hiding one.
+  Recorded in `app/api/pantry.py` and pinned by
+  `tests/api/test_pantry_api.py::ITEM_KEYS`.
+- **An Ingredient carries no `chipClass`, and this is the design, not an
+  omission.** `chipClass` is a **client-side** function
+  (`app/static/js/logic/chip-class.js`), fed the raw facts — `matchMethod`,
+  `pantryItemId`, `inStock`, `isSeasoning`, `strict` — all of which *are*
+  published, and it decides a CSS class name. A server-rendered `chipClass`
+  string would be a sixth place to change the answer on top of the ladder the
+  server already duplicates in `_is_missing`, and it would have Python owning a
+  CSS class name. So the slot publishes `inStock` — the raw fact the classifier
+  consumes — and the browser derives the class. `candidatesJson` was also missing
+  from this row even though the **F7** paragraph below requires it on every
+  Ingredient of every recipe response; the row now matches that paragraph.
+- **`conflicts` travels with `duplicateSlotConflicts`.** The resolve row listed
+  the count without the entries, while **F2** below and
+  `tests/api/test_recipes_api.py::REPORT_KEYS` both require the conflict to be
+  *shown* and never merely counted.
+
 **F2's `duplicateSlotConflicts` field.** `POST /api/recipes/resolve` returns the
-count of slots downgraded by the per-slot `IntegrityError` catch (§9.10.1). It is
-the F2 degradation made countable, and a value > 0 is a data defect in a
-user-authored recipe note, not an engine error. It is reported here so a reviewer
-can see the downgrade is observable and not a silent drop.
+count of slots downgraded by the per-slot `IntegrityError` catch (§9.10.1), and
+the `conflicts` entries themselves travel beside it — a count without the rows
+would satisfy the word "countable" and not the intent, which is that the
+downgrade is *shown*. Each entry is
+`{recipeNote, ingredientIndex, rawValue, pantryItemId, canonicalName, reason}`.
+The count is the F2 degradation made countable, and a value > 0 is a data defect
+in a user-authored recipe note, not an engine error. It is reported here so a
+reviewer can see the downgrade is observable and not a silent drop.
 
 **F7: provenance is unconditional — there is no second shape.** Every Ingredient
 on every recipe response carries `matchTier`, `matchMethod`, `pantryItemId`,
