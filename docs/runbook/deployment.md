@@ -1,11 +1,13 @@
 # Runbook — deploying pwa-pantry-recipes
 
-> **Deployment is NOT authorized.** `AGENTS.md` § *Deploy* records it as not yet
-> authorized, and `scripts/pwa-pantry-recipes.example.plist` is a template. This
-> document is the *plan*, plus the scripts that execute it and the verification
-> that shows they work. Nothing here bootstraps the LaunchAgent or runs
-> `tailscale serve`; both need explicit authorization from the user in the same
-> session, and the installer refuses to start a service without it.
+> **Status (2026-09-28): the deploy was authorized in-session and executed.**
+> `install_launchagent.sh --apply --bootstrap` has been run and
+> `com.syang.pwa-pantry-recipes` is `state = running`; the Serve route on `:8452`
+> exists and proxies to `127.0.0.1:8007`. Two things are still open and are not
+> cosmetic: the converge gate **exits 1** when run from the serving host (§7b),
+> and the participant-identity validation in §8 is **not done**. Read both before
+> describing this deploy as verified. Rollback is unchanged and is at the end of
+> each section.
 
 The plan itself is `docs/spec/2026-09-27-pantry-recipes.md` §12 and
 `~/projects/pwa-template/docs/pwa-template.md` §1a, §1c, §1d, §3e. This runbook
@@ -16,13 +18,13 @@ create a half-deployed state, and the reason each one is where it is.
 
 | Artifact | State |
 |---|---|
-| `scripts/pwa-pantry-recipes.example.plist` | A template. Renders, lints, and is asserted against `app/config.py` by `tests/deploy/test_launchagent_template.py`. **Not installed.** |
-| `scripts/install_launchagent.sh` | Three stages. The first two are verified; the third (`--bootstrap`) has deliberately never been run. |
-| `scripts/converge_gate.py` | The release gate. Runs against a live service; verified in full against a loopback dev server and proved able to fail on all nine conditions. |
+| `scripts/pwa-pantry-recipes.example.plist` | A template, and the source of the installed plist. Renders, lints, and is asserted against `app/config.py` by `tests/deploy/test_launchagent_template.py`. Rendered by the installer, not installed by hand. |
+| `scripts/install_launchagent.sh` | Three stages. **All three have been run** (2026-09-28), the third under explicit in-session authorization. |
+| `scripts/converge_gate.py` | The release gate. Runs against a live service; verified in full against a loopback dev server and proved able to fail on all nine conditions. **Exits 1 against the deployed pair — see §7b.** |
 | `scripts/converge-smoke.json` | The release-specific half of gate condition 4. Edited every release. |
-| `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` | **Does not exist.** |
-| `com.syang.pwa-pantry-recipes` in `launchctl` | **Not loaded.** |
-| Tailscale Serve route on `:8452` | **Not configured.** |
+| `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` | **Installed** 2026-09-28. |
+| `com.syang.pwa-pantry-recipes` in `launchctl` | **Loaded**, `state = running`. |
+| Tailscale Serve route on `:8452` | **Configured.** `8452 → http://127.0.0.1:8007`, tailnet only. |
 
 ## 2. The two ports
 
@@ -38,10 +40,10 @@ create a half-deployed state, and the reason each one is where it is.
 reaches **8452**; Tailscale proxies between them. A diagram, a smoke check, or a
 `base_url` that collapses them into one port is wrong.
 
-| Port | Role | Status on 2026-09-28 |
+| Port | Role | Status on 2026-09-28 (re-verified at deploy time) |
 |---|---|---|
-| 8007 | the app's loopback bind | free at the time of writing; the audit run here found no listener |
-| 8452 | the Tailscale Serve ingress | free; `tailscale serve status` lists 8443, 8445–8451 as taken and 8452 as unallocated |
+| 8007 | the app's loopback bind | **In use** by `com.syang.pwa-pantry-recipes` (`127.0.0.1:8007` only) |
+| 8452 | the Tailscale Serve ingress | **In use**: `8452 → http://127.0.0.1:8007`, tailnet only |
 
 Allocated elsewhere: 8000 (wardrobe prod), 8002 (deals), 8003 (wardrobe dev),
 8004 (obsidian-daily), 8005 (obsidian-monthly), 8006 (obsidian-editor), and the
@@ -65,7 +67,7 @@ will report it as an `unmanaged_extra` rather than `ok`. That file is owned by t
 `port-manager` skill, not by this repo, so it is reported here rather than edited;
 adding the entry is a follow-up ticket.
 
-## 3. The Tailscale Serve plan — not executed
+## 3. The Tailscale Serve plan — executed 2026-09-28
 
 State the port, the path, and the backend URL explicitly. **Never run a bare
 `tailscale serve <target>`.** Run the read-only allocation audit before and
@@ -96,11 +98,16 @@ byte for byte: scheme, host, port, no path, no trailing slash. The Origin guard
 compares it exactly, so one extra slash answers every mutation
 `403 origin_not_allowed`.
 
-`TAILSCALE_OWNER_LOGIN` must be the exact normalized login the proxy injects:
-
-```bash
-tailscale status --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["Self"]["LoginName"])'
-```
+`TAILSCALE_OWNER_LOGIN` must be the exact normalized login the proxy injects.
+The command this section used to recommend does not work on the installed
+client (1.98.10): `tailscale status --json` has no `Self.LoginName`, and the
+`Self` node's own user profile reports `LoginName` equal to the node's MagicDNS
+name, which is *not* what the proxy attributes to a requester. Get it from a
+source that observes the real thing instead — here, the deployed sibling
+`~/Library/LaunchAgents/com.syang.pwa-obsidian-daily.plist` already runs the
+identical posture and carries `TAILSCALE_OWNER_LOGIN = syyangv@github`, which
+matches the tailnet's own `syyangv@` peers. **As installed it is
+`syyangv@github`.**
 
 ## 4. Install the LaunchAgent — the staged installer
 
@@ -114,11 +121,16 @@ tailscale status --json | python3 -c 'import json,sys; print(json.load(sys.stdin
 
 # stage 3: bootout + bootstrap. THIS starts a service that writes cooking logs
 # into the real vault. Requires explicit authorization.
+# RUN 2026-09-28 under explicit in-session authorization.
 ./scripts/install_launchagent.sh --apply --bootstrap
 
 # rollback
 ./scripts/install_launchagent.sh --teardown
 ```
+
+There is no `.env` file and none should be created; every value below reaches
+the service through the plist's `EnvironmentVariables` dict or the installer
+arguments on the command line.
 
 The installer's configuration is by environment variable, because **this app has
 no `.env` parser** — `Settings.from_environment()` reads `os.environ` and nothing
@@ -233,8 +245,10 @@ the person deciding whether to bootstrap the agent.
 **Exit codes are the design.** `0` every condition passed. `1` at least one
 failed — do not reinstall the PWA. `2` at least one could not be evaluated.
 Exit 2 is not a soft 0: before a Serve route exists, conditions 2, 3 and 4 have no
-second origin to compare against, and the gate says so rather than passing on the
-local half alone.
+second origin to compare against, and the gate says so rather than passing on
+the local half alone. **As deployed the gate exits `1`, not `2` and not `0`** —
+it has a second origin now and evaluates it, and the deployed half fails.
+See §9b for the diagnosis and §8 for the check that would resolve it.
 
 Condition 5's second half is the one with a recorded incident behind it: a deploy
 can be internally consistent — clean tree, matching versions, correct shell
@@ -267,27 +281,36 @@ while re-using the previous Service Worker cache key, so every installed PWA is
 handed the previous exact-versioned bundle. The rotation was deliberately left
 to the release that carries those changes, and that is what `a303d4a` is:
 `CACHE_VERSION = 'v0.7.0'`, CONFIG block only, with the gate re-run after it.
+(`CACHE_VERSION` has since moved again, to `v0.7.1` in `fb2577e`, so the anchor
+`git log -1 -G"const CACHE_VERSION" -- app/static/sw.js` now resolves to
+`fb2577e`, not `a303d4a`. Both rotations are history; the live value is
+`v0.7.1`.)
 
-## 8. Validation from a participant identity
+## 8. Validation from a participant identity — **NOT DONE**
 
-Before the LaunchAgent exists, a foreground loopback dev server is enough:
+**This check was not performed and is not satisfied.** The 2026-09-28 deploy ran
+from a shell on the serving host; no phone was reachable from it. It is recorded
+here as outstanding rather than approximated, and **no loopback or desktop check
+was substituted for it** — §8 exists precisely because the host's own browser is
+not a participant identity: it shares the host's tailnet position and its
+loopback.
 
-```bash
-set -a; . ./.env; set +a
-.venv/bin/python -m uvicorn app.main:create_app --factory --host 127.0.0.1 --port 8007
-```
+What remains to be done, from a phone off the host's network:
 
-Then, **from a phone off the host's network** (not the host's own browser — that
-is not a participant identity, it shares the host's tailnet position and its
-loopback):
-
-- the PWA port **succeeds**;
+- the PWA origin `:8452` **succeeds** (this exercises the whole injected-identity
+  chain, which nothing so far has);
 - unrelated HTTPS ports (8443, 8445–8451) **fail**;
 - SSH **fails**.
 
-Only after that is `PUBLIC_ORIGIN=https://home-macbook-air.tailcd6e49.ts.net:8452`
-and `TRUST_TAILSCALE_HEADERS=true` correct, and only then is the LaunchAgent
-bootstrapped.
+The tailnet has online phones logged in as `syyangv@` (`mieiphone`,
+`100.99.212.85`), which is the identity the deployed `TAILSCALE_OWNER_LOGIN`
+expects, so the check is finishable by the user in one step from a phone. Until
+it is done, **no observer has seen an authenticated 200 from the deployed
+origin**, and the deploy is unverified on its success path.
+
+The runbook's original ordering put this check *before* the LaunchAgent exists,
+with a foreground loopback dev server. That ordering was not followed, and the
+consequence is §7b.
 
 ## 9. Where the auth posture stops
 
@@ -300,7 +323,8 @@ runbook was written in, against a loopback server on the production vault:
 | `POST /api/cook-logs`, correct `Origin`, no CSRF | `403 {"code":"csrf_required"}` |
 | `POST /api/cook-logs`, foreign `Origin` | `403 {"code":"origin_not_allowed"}` |
 | `DELETE /api/recipes/<note>/ingredients/0/mapping` | `403 {"code":"origin_not_allowed"}` |
-| any request with a client-supplied `Tailscale-User-Login` | `401 {"code":"identity_spoof"}` |
+| any request with a client-supplied `Tailscale-User-Login`, **development** posture | `401 {"code":"identity_spoof"}` |
+| any request with a client-supplied `Tailscale-User-Login`, **production** posture | `401 {"code":"identity_denied"}` (mismatched) or, through the proxy, `401 {"code":"identity_missing"}` (stripped) — see §9c |
 
 In trusted-header mode (`TRUST_TAILSCALE_HEADERS=true`, the production posture) the
 app additionally refuses a *missing* login with `401 identity_missing` and a
@@ -310,11 +334,89 @@ mismatched one with `401 identity_denied`. With
 is deliberately **no write allowlist** (F18): with F4 removing the note-creation
 service, that flag is the only gate between a mutation and the vault.
 
-**This is where the ticket stops.** The identity, Origin, CSRF, Host,
-content-type and body-size guards are shipped, tested, and installed. What is
-*not* authorized is turning the process on: `bootstrap` starts a service that
-appends `[[Recipe]]` lines to the real `日记/2026/2026-09-28.md`, and `tailscale
-serve` puts it on a surface the user's phone can reach. Both are one command
-away (§3, §4) and neither was run. The deploy path is built and verified; the
-decision to cross the line is the user's, and it has to be made in a session
-where they say so.
+**The gate now has two origins, and it fails.** Exit 2 is gone: conditions 2, 3
+and 4 are evaluated and *failing*, not unevaluated. See §7b for the diagnosis.
+
+## 9b. Why the gate exits 1 from the serving host
+
+The deploy ran the gate from the same machine that serves `:8452`, and it exits
+**1**, identically before and after `launchctl kickstart -k`:
+
+```
+[PASS] 0 listener      [PASS] 0b identity     [PASS] 1 source-version
+[FAIL] 2 deployed-version  [FAIL] 3 backend-freshness  [FAIL] 4 release-smoke
+[FAIL] 5 cache-rotation   [FAIL] 6 shell-assets
+[FAIL] 7 resume-check     [FAIL] 8 busy-guard
+```
+
+Every failure is the same one: the deployed origin answers `401
+identity_missing`.
+
+**Cause.** Tailscale Serve injects no identity header for a request that
+originates from the node doing the serving. It *strips* the client's
+`Tailscale-User-Login` — so a forged header is discarded rather than trusted,
+which is the correct and safe behaviour — and has no remote peer to attribute
+the request to, so it injects nothing. `converge_gate.py` uses **one** fetcher
+that presents `Tailscale-User-Login: <owner-login>` for *both* origins (that is
+what makes condition 0b pass on loopback), so over the proxy that header is
+thrown away and the backend correctly answers `identity_missing`.
+
+This is a **vantage-point** limit, not a deploy defect. Evidence, all observed:
+
+| Request | Origin | Result |
+|---|---|---|
+| owner header | loopback `:8007` | `200` |
+| no header | Serve `:8452` | `401 identity_missing` |
+| `Tailscale-User-Login: attacker@evil` | Serve `:8452` | `401 identity_missing` (stripped) |
+| `Tailscale-User-Login: syyangv@github` (the **correct** login) | Serve `:8452` | `401 identity_missing` |
+
+The fourth row is the one that settles it: sending the correct identity changes
+nothing, so the header is not being rejected — it is not arriving. Duplicate
+headers through the proxy return `identity_missing` rather than
+`identity_invalid`, which independently confirms the strip. Reaching `:8452`
+via the raw tailnet IP with correct SNI gives the same `401`, so it is not a
+DNS or curl artifact. And the same behaviour was observed on the pre-existing
+sibling route `:8447` before this app was deployed, so it is a property of Serve
+on this node, not of this app.
+
+**The fix is to run the gate from a host that is not the serving node** — a
+participant on the tailnet. **The fix is not** `--baseline`, and not editing a
+condition; both were available and were refused, because the only defensible way
+to change a failing condition is to fix the cause.
+
+## 9c. Guard order, and where the auth posture actually stops
+
+The order in `app/auth.py::_guard` is **host (400) → identity (401) → read-only
+(403) → body size (413) → origin (403) → content-type (415) → CSRF (403)**.
+Two consequences worth stating because they change what a test can observe:
+
+* **Identity precedes Origin.** Over the deployed origin every request from the
+  serving host is stopped at identity, so it returns `401` and never reaches the
+  Origin or CSRF checks. An unauthenticated mutation *is* refused; the code that
+  refuses it is `identity_missing`, not `origin_not_allowed`.
+* **Read-only precedes Origin and CSRF.** With `OBSIDIAN_READ_ONLY=true` — how
+  it is installed — every authenticated mutation is `403 read_only`, so
+  `origin_not_allowed`, `csrf_required` and `csrf_invalid` are unreachable on
+  the deployed instance. Those codes were verified on a throwaway instance
+  pointed at a **copy** of the vault; the copy is disposable and the real vault
+  was not written to.
+
+Also note the code that does *not* belong on a deployed instance:
+`identity_spoof` is the **development-posture** answer to any client-supplied
+`Tailscale-*` header. In the production posture a well-formed but mismatched
+login is `401 identity_denied`, and a header the proxy has stripped is
+`identity_missing`. Expecting `identity_spoof` from a deployed origin is
+expecting the wrong posture.
+
+## 9d. The stopping point, as of 2026-09-28
+
+`app/auth.py` is real and it wraps every response. The identity, Origin, CSRF,
+Host, content-type and body-size guards are shipped, tested, installed and
+running. What was authorized and done: `bootstrap` started the service and
+`tailscale serve` put it on a tailnet-only surface. What is **not** done is
+`§8`'s participant-identity validation, which means the deploy has only ever been
+observed **failing closed** — every request made over the network in the deploy
+session was refused. That is the safe direction to be wrong in, and it is still
+being wrong in it. The decision that remains the user's is whether to complete
+§8 from a phone, which is the only thing left that would let the gate exit 0
+with a real second origin.

@@ -3,17 +3,33 @@
 A local-only PWA that answers **"what can I cook from what I already have?"**
 and records the cook in the Obsidian daily note.
 
-**State (2026-09-28): the features ship and are reachable; the app has never
-been run as a service.** The `lifespan` opens and closes every reader, the
-domain routers are registered in the load-bearing position, and the auth guards
-wrap every response — an unauthenticated mutation is refused before it reaches a
-route. **Deployment is not authorized and has not happened**: no plist is
-installed, nothing is in `launchctl list`, and no Tailscale Serve route exists.
-The deploy path — template, staged installer, Serve plan, and a runnable
-converge gate — is built and verified, and `docs/runbook/deployment.md` is the
-operational form. Do not describe this app as deployed, and do not bootstrap
-anything without explicit authorization in the same session — read `README.md` §
-*What does not work yet*.
+**State (2026-09-28): deployed, on a tailnet-only origin, with two honest
+caveats that are not "it works".** The user authorized the deploy in-session, so
+`~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` is installed,
+`com.syang.pwa-pantry-recipes` is loaded and `state = running`, and a Tailscale
+Serve route proxies **8452 → 127.0.0.1:8007**. The deployed origin is
+`https://home-macbook-air.tailcd6e49.ts.net:8452` (tailnet only).
+
+Two caveats, both load-bearing, both in `README.md` § *What does not work yet*:
+
+1. **The converge gate exits 1 when it is run from the serving host**, not 0.
+   All nine local-side conditions pass; the seven deployed-origin conditions all
+   return `401 identity_missing`, because **Tailscale Serve injects no identity
+   header for a request that originates from the node doing the serving** — it
+   strips the client's `Tailscale-User-Login` (so spoofing fails too) and has no
+   remote peer to attribute. The gate's fetcher presents `Tailscale-User-Login`
+   on both origins, so over the proxy that header is discarded. This was
+   diagnosed, not worked around: no `--baseline`, no relaxed check, no claim of
+   a pass that was not observed.
+2. **The participant-identity validation is NOT DONE.** `docs/runbook/
+   deployment.md` §8 requires a phone off the host's network, and no phone was
+   reachable from the deploy session. No observer has yet seen an authenticated
+   200 from the deployed origin. Loopback with the owner login returns 200 on
+   everything, which proves the app, not the exposed surface.
+
+Do not describe the gate as passing, and do not substitute a loopback or
+desktop check for the participant check. `docs/runbook/deployment.md` is the
+operational form.
 
 ## Non-negotiables
 
@@ -82,11 +98,16 @@ app/static/js/logic/ chipClass, headline, sortRecipes — pure, node --test ed,
                      and imported by nothing in app/static but sw.js's
                      SHELL_ASSETS list
 scripts/             the LaunchAgent TEMPLATE (pwa-pantry-recipes.example.plist,
-                     never installed as-is), generate_icons.py, and the three
-                     deploy-path scripts: install_launchagent.sh (staged, and
-                     its bootstrap mode needs explicit authorization),
+                     rendered by the installer into the installed plist),
+                     generate_icons.py, and the three deploy-path scripts:
+                     install_launchagent.sh (staged; --bootstrap is the gate
+                     and was crossed 2026-09-28),
                      converge_gate.py (the release gate), and converge-smoke.json
-                     (the release-specific half of its condition 4)
+                     (the release-specific half of its condition 4).
+                     Also render_headlines.mjs, check-modules.mjs (what
+                     `npm run check` runs), snapshot_pantry_catalog.py and
+                     snapshot_golden_match_results.py. `scripts/` is NOT linted
+                     by `ruff check app tests`.
 docs/runbook/        deployment.md — the Serve plan, the install stages, the
                      restart rules, the participant-identity validation
 tests/conftest.py    tmp vault + tmp data dir + seeded pantry catalog
@@ -143,8 +164,9 @@ rm -rf /tmp/wheel build pwa_pantry_recipes.egg-info
   --host 127.0.0.1 --port 8007
 ```
 
-Deployment-path commands. The first two are safe to run; the third starts a
-service and **must not** be run without explicit authorization in the session:
+Deployment-path commands. Stages 1 and 2 start nothing; stage 3 crossed the
+authorization gate on 2026-09-28 and the service is running. Re-running `--apply`
+or `--bootstrap` is idempotent:
 
 ```bash
 # render + lint the LaunchAgent. No side effects.
@@ -153,15 +175,28 @@ service and **must not** be run without explicit authorization in the session:
 # install APP_DATA_DIR 0700 and the plist. Starts NOTHING.
 ./scripts/install_launchagent.sh --apply
 
-# THE AUTHORIZATION GATE. bootout + bootstrap, then the release gate.
+# bootout + bootstrap. Crossed 2026-09-28; also the required pair after ANY
+# plist edit, because kickstart ignores the plist.
 ./scripts/install_launchagent.sh --apply --bootstrap
+
+# code-only change: the job is already loaded, so this is the correct restart.
+launchctl kickstart -k gui/$(id -u)/com.syang.pwa-pantry-recipes
+
+# the release gate. MUST be run from a host that is not the serving node, or
+# the seven deployed-origin conditions return 401 identity_missing and it
+# exits 1. Never make it pass by passing --baseline.
 .venv/bin/python scripts/converge_gate.py \
   --local-origin http://127.0.0.1:8007 \
   --deployed-origin https://home-macbook-air.tailcd6e49.ts.net:8452 \
+  --owner-login syyangv@github \
   --vault /Users/syang/obsidian/syang
 
 # prove the socket, not the process, after ANY restart
 python3 ~/.agent/skills/port-manager/scripts/port_manager.py inspect 8007
+
+# rollback, in either order
+tailscale serve --https=8452 off
+./scripts/install_launchagent.sh --teardown
 ```
 
 ## Agent skills
@@ -193,18 +228,39 @@ introduces the code that implements it, not later.
 
 ### Deploy
 
-**Not yet authorized, and not done.** `scripts/pwa-pantry-recipes.example.plist`
-is a template only: no plist is installed, nothing named
-`com.syang.pwa-pantry-recipes` is in `launchctl list`, and no Tailscale Serve
-route exists. Do not `launchctl bootstrap` it and do not run `tailscale serve`
-without explicit authorization from the user in the same session.
+**Deployed 2026-09-28, with the gate at exit 1 and the participant-identity check
+not done — see the state header at the top of this file and `README.md` § *What
+does not work yet*.** Concretely: the plist is installed at
+`~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist`, the label
+`com.syang.pwa-pantry-recipes` is loaded and `state = running`, and
+`tailscale serve status` lists `8452 → http://127.0.0.1:8007`. Do not re-bootstrap
+it casually; `--bootstrap` is `bootout` + `bootstrap` and is safe, but a plist
+edit still needs that pair, never a kickstart.
 
 **Two ports, never one end-to-end.** The app binds loopback **8007**; the phone
 reaches **8452**; Tailscale Serve proxies between them. Never `:443`, and never
 a bare `tailscale serve <target>` — state the port, the path and the backend URL
 explicitly, and run `port-manager audit --json` **before and after**. The
 2026-09-27 port audit is recorded in `.env.example`; verify it against live
-`lsof` and `tailscale serve status` rather than trusting the file.
+`lsof` and `tailscale serve status` rather than trusting the file. As shipped,
+`port-manager audit --json` reports 8452 as an `unmanaged_extra`, because
+`~/.agent/skills/port-manager/references/port-allocations.json` has no
+`pwa-pantry-recipes` entry; that file is the port-manager skill's, not this
+repo's, so it is reported rather than edited.
+
+**The deployed identity is `TAILSCALE_OWNER_LOGIN=syyangv@github`, and it is not
+a guess**: it is the value the sibling `com.syang.pwa-obsidian-daily` plist
+already runs with in the identical posture (`TRUST_TAILSCALE_HEADERS=true`
+behind a tailnet-only Serve route), and the tailnet's own peers are logged in as
+`syyangv@`. `PUBLIC_ORIGIN` is the deployed origin byte for byte — scheme, host,
+port, no path, no trailing slash — because the Origin guard compares it exactly.
+`OBSIDIAN_READ_ONLY=true` as installed, so every mutation is `403 read_only`.
+
+**Run the gate from a host that is not the serving node, or expect exit 1.** From
+the serving host the deployed-origin conditions are `401 identity_missing`,
+because Serve attributes no identity to a self-originated request. That is a
+property of the vantage point, not of the deploy, and it must not be taught away
+by passing `--baseline` or weakening a condition.
 
 **The release sequence is:** bump `CACHE_VERSION` → add new static files to
 `SHELL_ASSETS` → **edit `scripts/converge-smoke.json`** → commit → push →

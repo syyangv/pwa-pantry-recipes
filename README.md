@@ -14,14 +14,20 @@ note.
 > guards are real, and an unauthenticated mutation is refused before it reaches
 > a route.
 >
-> **It has never been run as a service.** `AGENTS.md` records deployment as not
-> authorized, `scripts/pwa-pantry-recipes.example.plist` is a template, there is
-> no LaunchAgent in `~/Library/LaunchAgents`, and no Tailscale Serve route exists
-> on the planned ingress port 8452. The deploy path — the rendered plist, the
-> staged installer, the Tailscale plan, and a **runnable** converge gate — is
-> built and verified; see [Deployment](#deployment) and
-> [`docs/runbook/deployment.md`](docs/runbook/deployment.md). What is genuinely
-> missing is in [What does not work yet](#what-does-not-work-yet).
+> **It is now running as a service, and its verification is not finished.**
+> Deployed 2026-09-28: the plist is installed, `com.syang.pwa-pantry-recipes` is
+> loaded and `state = running`, and a tailnet-only Tailscale Serve route proxies
+> **8452 → 127.0.0.1:8007**, so the deployed origin is
+> `https://home-macbook-air.tailcd6e49.ts.net:8452`. Two things are genuinely
+> open, and neither is cosmetic: the converge gate **exits 1** when run from the
+> serving host (Serve attributes no identity to a self-originated request, so
+> the seven deployed-origin conditions return `401 identity_missing`), and the
+> runbook's **participant-identity check is not done** — it needs a phone, and
+> so no observer has yet seen an authenticated 200 from the deployed origin.
+> Every request this deploy made over the network was refused, which is the safe
+> direction to be wrong in. See [Deployment](#deployment) and
+> [`docs/runbook/deployment.md`](docs/runbook/deployment.md); both gaps are
+> stated in [What does not work yet](#what-does-not-work-yet).
 
 ## Architecture
 
@@ -164,23 +170,58 @@ annotated list; the four that matter most are:
 
 ## Deployment
 
-**Not authorized, and not done.** `AGENTS.md` § *Deploy* records deployment as
-not yet authorized. There is no plist in `~/Library/LaunchAgents`, nothing named
-`com.syang.pwa-pantry-recipes` in `launchctl list`, and no Tailscale Serve route
-on the planned ingress port. What exists is the *path*: a template that renders
-and lints, a staged installer, a Serve plan, and a converge gate that runs.
+**Deployed 2026-09-28, on a tailnet-only origin.** The user authorized it
+in-session, so `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` is
+installed, `com.syang.pwa-pantry-recipes` is loaded with `state = running`, and
+`tailscale serve status` lists the ingress. What is *not* true is that the
+release gate has passed: it exits **1** when run from the serving host, and the
+participant-identity check the runbook requires has not been done. Both are
+stated precisely in [What does not work yet](#what-does-not-work-yet); read them
+before claiming the deploy is verified.
 
 Two ports, never one end-to-end: the app binds loopback **8007**, the phone
 reaches **8452**, and Tailscale Serve proxies between them. Never `:443`; 8000
 and 8002–8006 are allocated to sibling PWAs, as are Serve ingresses 8443 and
 8445–8451.
 
+| | |
+|---|---|
+| Deployed origin | `https://home-macbook-air.tailcd6e49.ts.net:8452` (tailnet only) |
+| App bind | `127.0.0.1:8007` — loopback, never `0.0.0.0` |
+| `TAILSCALE_OWNER_LOGIN` | `syyangv@github` |
+| `TRUST_TAILSCALE_HEADERS` | `true` (behind the loopback proxy) |
+| `OBSIDIAN_READ_ONLY` | `true` — every mutation is `403 read_only` |
+| `APP_DATA_DIR` | `~/.local/share/pwa-pantry-recipes`, mode `0700` |
+| `SoftResourceLimits` | `NumberOfFiles 8192` — required, see below |
+| Logs | `~/Library/Logs/pwa-pantry-recipes/server.log` |
+
+`NumberOfFiles 8192` is not decoration. `AtomicNoteStore` pins directory
+descriptors for the process lifetime by design, and launchd gives a LaunchAgent a
+**256** soft limit, not the shell's `ulimit -n`. Under exhaustion the vault
+writes fail. Confirm it in the rendered plist and in `launchctl print` before
+trusting it.
+
+### Restart rules
+
+```bash
+# code-only change: the job is already loaded, so this is correct and enough
+launchctl kickstart -k gui/$(id -u)/com.syang.pwa-pantry-recipes
+
+# plist edit: kickstart IGNORES the plist, so this is the only correct pair
+launchctl bootout   gui/$(id -u)/com.syang.pwa-pantry-recipes
+launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/com.syang.pwa-pantry-recipes
+```
+
+Never `--force`. After **any** restart, prove the socket rather than the process:
+`launchctl print` showing `state = running` means a process is alive, not that
+the port is listening.
+
 ### The artifacts
 
 | File | What it is |
 |---|---|
-| `scripts/pwa-pantry-recipes.example.plist` | The template. `__UPPER_CASE__` placeholders, loopback bind on 8007, `SoftResourceLimits NumberOfFiles 8192`, `ThrottleInterval 2`, `KeepAlive`, `--timeout-graceful-shutdown 5`, and the full `EnvironmentVariables` contract. `tests/deploy/test_launchagent_template.py` asserts each of those against the file and against `app/config.py`. |
-| `scripts/install_launchagent.sh` | Three stages: render + `plutil -lint` (no side effects), `--apply` (creates `APP_DATA_DIR` 0700 and the log directory, copies the plist, **starts nothing**), `--bootstrap` (bootout + bootstrap — the step that needs authorization). Plus `--teardown` for the rollback. |
+| `scripts/pwa-pantry-recipes.example.plist` | The template, now actually rendered and installed. `__UPPER_CASE__` placeholders, loopback bind on 8007, `SoftResourceLimits NumberOfFiles 8192`, `ThrottleInterval 2`, `KeepAlive`, `--timeout-graceful-shutdown 5`, and the full `EnvironmentVariables` contract. `tests/deploy/test_launchagent_template.py` asserts each of those against the file and against `app/config.py`. |
+| `scripts/install_launchagent.sh` | Three stages: render + `plutil -lint` (no side effects), `--apply` (creates `APP_DATA_DIR` 0700 and the log directory, copies the plist, **starts nothing**), `--bootstrap` (bootout + bootstrap; run 2026-09-28). Plus `--teardown` for the rollback. |
 | `scripts/converge_gate.py` | The release gate: nine conditions, stdlib-only, exit 0 / 1 / 2. |
 | `scripts/converge-smoke.json` | The release-specific half of condition 4. **Edit it in every release.** |
 | [`docs/runbook/deployment.md`](docs/runbook/deployment.md) | The operational form: the Serve commands with the audit before and after, the install stages, the restart rules, and the participant-identity validation. |
@@ -191,6 +232,7 @@ and 8002–8006 are allocated to sibling PWAs, as are Serve ingresses 8443 and
 .venv/bin/python scripts/converge_gate.py \
   --local-origin http://127.0.0.1:8007 \
   --deployed-origin https://home-macbook-air.tailcd6e49.ts.net:8452 \
+  --owner-login syyangv@github \
   --vault /Users/syang/obsidian/syang
 ```
 
@@ -203,19 +245,49 @@ smoke check, that the **served** `/sw.js` carries this `CACHE_VERSION` *and* tha
 served HTML pins the same versioned assets as the SW cache name, that the served
 update manager re-checks on resume, and that an open confirmation flow postpones
 the reload. **Exit 2 means a condition could not be evaluated, which is not a
-pass** — before a Serve route exists, that is the correct answer.
+pass.** Run it from a host that is **not** the serving node — see below.
 
-### The auth posture this deploy path would publish
+### The auth posture the deployed origin actually publishes
 
-Real, installed, and wrapping every response. An unauthenticated mutation is
-refused before it reaches a route: `403 origin_not_allowed` without a matching
-`Origin`, `403 csrf_required` without a token, `401 identity_spoof` for any
-client-supplied `Tailscale-*` header in development-identity mode. With
-`OBSIDIAN_READ_ONLY=true` every mutation is `403 read_only` with **no write
-allowlist** (F18). The stopping point is not the guards — it is that
-`bootstrap` starts a service which appends to the real daily note, and
-`tailscale serve` puts it on a surface a phone can reach. Both are one command
-away and neither was run.
+Real, installed, and wrapping every response, in this order: **host (400) →
+identity (401) → read-only (403) → body size (413) → origin (403) →
+content-type (415) → CSRF (403)**.
+
+Measured against the deployed origin over the network, unauthenticated:
+
+| Request | Response |
+|---|---|
+| `POST /api/cook-logs`, no `Origin`, no CSRF | `401 {"code":"identity_missing"}` |
+| `POST /api/cook-logs`, `Origin: https://evil.example` | `401 {"code":"identity_missing"}` |
+| `POST /api/cook-logs`, `Tailscale-User-Login: attacker@evil` | `401 {"code":"identity_missing"}` |
+| `DELETE …/ingredients/0/mapping` spoofing the **owner** login | `401 {"code":"identity_missing"}` |
+
+Two things about that table are load-bearing. First, **Serve strips the client's
+`Tailscale-User-Login`**, so spoofing the owner is refused exactly as a missing
+header is — the app never sees the forged value. Second, **identity precedes
+`Origin`**, so an unauthenticated request is stopped at identity and never
+reaches the `Origin` or CSRF checks; that is why every row above is `401` and not
+`403`.
+
+With `OBSIDIAN_READ_ONLY=true`, `read_only` also precedes `Origin`/CSRF, so on
+the deployed instance every authenticated mutation is `403 read_only` and the
+Origin and CSRF codes are unreachable. They were verified on a **throwaway
+instance against a copied vault** (never the real one):
+
+| Request | Response |
+|---|---|
+| no `Origin` | `403 {"code":"origin_not_allowed"}` |
+| `Origin: https://evil.example` | `403 {"code":"origin_not_allowed"}` |
+| correct `Origin`, no CSRF token | `403 {"code":"csrf_required"}` |
+| correct `Origin`, bad CSRF token | `403 {"code":"csrf_invalid"}` |
+| correct `Origin`, `Content-Type: text/plain` | `415 {"code":"unsupported_media_type"}` |
+| `Tailscale-User-Login: attacker@evil` | `401 {"code":"identity_denied"}` |
+
+Note the last row: in the **production** posture a mismatched login is
+`identity_denied`. The code `identity_spoof` belongs to the *development*
+posture (`TRUST_TAILSCALE_HEADERS=false`), where any client-supplied
+`Tailscale-*` header is refused; it cannot appear on a correctly deployed
+instance.
 
 ## What does not work yet
 
@@ -223,22 +295,41 @@ Honest list of every gap, so nothing here reads as finished. `AGENTS.md` tells
 readers to trust this section, so every bullet below is stated as something you
 can check against the tree, not as a claim about intent.
 
-- **No deployment — the real one.** There is no
-  `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist`, no
-  `com.syang.pwa-pantry-recipes` in `launchctl list`, and no Tailscale Serve
-  route on the planned ingress port 8452. The app has only ever run as a
-  foreground dev server. The deploy path is built and verified
-  ([Deployment](#deployment), `docs/runbook/deployment.md`) but
-  `install_launchagent.sh --bootstrap` and `tailscale serve` have never been run,
-  because `AGENTS.md` records deployment as unauthorized and neither was
-  authorized in the session that built it. **Everything below this bullet is a
-  smaller gap than this one.**
-- **The converge gate has never seen a deployed origin.** It exits 2 against a
-  loopback server, which is the honest answer: conditions 2, 3 and 4 have no
-  second origin to compare against until the Serve route exists. Its nine
-  conditions are each proven able to fail (`tests/deploy/test_converge_gate.py`,
-  and against a live server in the session that wrote it), but a gate that has
-  only ever seen one origin has only ever seen half of the problem.
+- **The converge gate has never exited 0, and cannot be made to from the serving
+  host.** As deployed it exits **1**, identically before and after a
+  `launchctl kickstart -k`. Conditions 0, 0b and 1 pass; the seven
+  deployed-origin conditions all fail with `401 identity_missing`. The cause is
+  diagnosed and is not a defect in the deploy: **Tailscale Serve injects no
+  identity header for a request originating from the node doing the serving.** It
+  strips the client's `Tailscale-User-Login` (so a spoofed header is discarded
+  rather than trusted) and has no remote peer to attribute the request to. The
+  gate's fetcher presents `Tailscale-User-Login` on *both* origins, so over the
+  proxy that header is thrown away and the backend answers `identity_missing`.
+  Proven, not inferred: the same header against loopback returns `200`, and a
+  request through the proxy returns `401` for no header, a forged header, and
+  the *correct owner* header alike. This is a **vantage-point** limit, so the
+  fix is to run the gate from a host that is not the serving node. What must not
+  happen is what was available and was refused: passing `--baseline`, or editing
+  a condition to agree. The gate's exit 2 is gone — conditions 2/3/4 now have a
+  second origin and are *evaluated and failing*, which is a stronger statement
+  than "unevaluated".
+- **The participant-identity check is NOT DONE — this is the real remaining
+  gap.** `docs/runbook/deployment.md` §8 requires a phone off the host's own
+  network: the PWA port succeeds, unrelated HTTPS ports fail, SSH fails. The
+  deploy session had no phone reachable from it, so this was not performed and
+  is recorded as not done rather than approximated. Consequently **no observer
+  has yet seen an authenticated 200 from the deployed origin**, and the whole
+  identity chain past the proxy is unexercised. A loopback check does not
+  substitute: it shares the host's tailnet position and its loopback, which is
+  the exact thing §8 rules out. The tailnet does contain online phones
+  (`mieiphone`, `100.99.212.85`, logged in as `syyangv@`), so this is finishable
+  in one step by the user from a phone — it was not finishable from a shell.
+- **The deployed service has only ever been observed failing closed.** Every
+  request this deploy made over the network was refused, which is the safe
+  direction, but it means the success path — a participant opening the PWA and
+  getting data — is unverified. Loopback with the owner login does return `200`
+  with a full `/health` payload (vault readable, `pantry_items.db` 178 rows, 16
+  recipes), so the app is healthy; it is the *exposed* surface that is unproven.
 - **`scripts/converge-smoke.json` is a one-release artifact.** It is populated for
   v0.6.0 and nothing rewrites it. A release that forgets to edit it asserts that
   *last* release's fields still exist, which is weaker than it looks; the gate
@@ -258,11 +349,12 @@ can check against the tree, not as a claim about intent.
   > changed since the commit that last rotated CACHE_VERSION (b5292b96691f):
   > app/static/js/router.js, app/static/js/views/recipe.js`
 
-  **It is fixed.** `a303d4a` is the release commit and carries the rotation to
-  `v0.7.0`; the anchor `git log -1 -G"const CACHE_VERSION" -- app/static/sw.js`
-  now resolves to `a303d4a`, and
-  `git diff --name-only a303d4a..HEAD -- app/static` is **empty** — so condition
-  5's rotation half passes against the tree as it stands, and the gate's
+  **It is fixed.** `a303d4a` carried the rotation to `v0.7.0`, and `CACHE_VERSION`
+  has since been rotated again to **`v0.7.1` in `fb2577e`**. The anchor
+  `git log -1 -G"const CACHE_VERSION" -- app/static/sw.js` therefore resolves to
+  **`fb2577e`** (HEAD), not to `a303d4a`, and `git diff --name-only fb2577e..HEAD
+  -- app/static ':!app/static/sw.js'` is **empty** — so condition 5's rotation
+  half passes against the tree as it stands, and the gate's
   fixture-follows-shipping behaviour is in `516675f`. Two things are worth
   keeping from this. First, **the check works**: the one condition that can catch
   a self-consistent bad deploy caught a real one, unprompted, before anything was
