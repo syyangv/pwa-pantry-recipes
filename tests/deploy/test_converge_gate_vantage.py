@@ -568,12 +568,25 @@ def test_a_deployed_origin_404ing_is_a_wrong_route_not_a_vantage_limit(world: Wo
 def test_the_local_origin_still_gates_the_whole_run(vantage_world: World) -> None:
     """If the *local* origin will not answer, the gate says so once and stops.
     The vantage classification does not become a way to run the rest of the gate
-    against a backend it could not reach."""
+    against a backend it could not reach.
+
+    Condition 9 still runs, and the reason it is not a violation is the whole
+    reason it is allowed to exist: it never touches the origin. It reads the
+    Serve configuration and the process table, so in this world it reports
+    *where the route points* — a routing fact that stays true while the backend
+    behind it stops answering. Listing it here is what keeps that honest: were 9
+    ever to start probing the origin, this list would gain an entry the
+    suppression is supposed to have prevented."""
     vantage_world.responses[f"{LOCAL}/api/version"] = gate.Response(
         url="", status=0, headers={}, body=b"connection refused"
     )
     results, code = run(vantage_world, owner_login=OWNER)
-    assert [result.ident for result in results] == ["0 listener", "0b identity"]
+    assert [result.ident for result in results] == [
+        "0 listener",
+        "0b identity",
+        "9 ingress-identity",
+    ]
+    assert by_id(results, "9 ingress-identity").status == gate.PASS
     assert code == 1
 
 

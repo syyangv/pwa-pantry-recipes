@@ -33,7 +33,7 @@ create a half-deployed state, and the reason each one is where it is.
 |---|---|
 | `scripts/pwa-pantry-recipes.example.plist` | A template, and the source of the installed plist. Renders, lints, and is asserted against `app/config.py` by `tests/deploy/test_launchagent_template.py`. Rendered by the installer, not installed by hand. |
 | `scripts/install_launchagent.sh` | Three stages. **All three have been run** (2026-09-28), the third under explicit in-session authorization. |
-| `scripts/converge_gate.py` | The release gate. Runs against a live service; verified in full against a loopback dev server and proved able to fail on all nine conditions. **Exits 3 against the deployed pair from the serving host — see §9b.** |
+| `scripts/converge_gate.py` | The release gate. Runs against a live service; verified in full against a loopback dev server and proved able to fail on all ten conditions. **Exits 3 against the deployed pair from the serving host — see §9b.** |
 | `scripts/converge-smoke.json` | The release-specific half of gate condition 4. Edited every release. |
 | `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` | **Installed** 2026-09-28. |
 | `com.syang.pwa-pantry-recipes` in `launchctl` | **Loaded**, `state = running`. |
@@ -247,7 +247,7 @@ the person deciding whether to bootstrap the agent.
 | Condition | §12 | What it compares |
 |---|---|---|
 | 0 `listener` | — | `port_manager.py inspect 8007`. `launchctl print` showing `state = running` proves a process is alive, not that the socket is listening. |
-| 0b `identity` | — | Can the gate talk to the origin at all, and in which posture. `app/auth.py` guards **every** path, so with `TRUST_TAILSCALE_HEADERS=true` a bare loopback GET is `401 identity_missing` — correctly, because the proxy is then the only intended caller. One diagnosis, and the other nine are suppressed rather than all reporting the same 401. |
+| 0b `identity` | — | Can the gate talk to the origin at all, and in which posture. `app/auth.py` guards **every** path, so with `TRUST_TAILSCALE_HEADERS=true` a bare loopback GET is `401 identity_missing` — correctly, because the proxy is then the only intended caller. One diagnosis, and conditions 1–8 are suppressed rather than all reporting the same 401. Condition 9 still runs: it reads the Serve configuration and the process table, never the origin, so it is a different fact rather than a tenth copy of this one. |
 | 1 `source-version` | 1 | `CACHE_VERSION` in `app/static/sw.js` == local `/api/version`. |
 | 2 `deployed-version` | 2 | local `/api/version` == deployed `/api/version`. |
 | 3 `backend-freshness` | 3 | `X-PWA-Backend-Started-At` present and equal on both origins, and newer than every changed startup-loaded file (`app/config.py`, `app/db/schema.sql`, the recipe/pantry index inputs, and the rest of the `STARTUP_LOADED_GLOBS` list in the script). |
@@ -256,6 +256,52 @@ the person deciding whether to bootstrap the agent.
 | 6 `shell-assets` | 5 | every `?v=` in the served HTML is pinned to `CACHE_VERSION` and appears in `SHELL_ASSETS`. |
 | 7 `resume-check` | 6 | the **served** `update-manager.js` re-checks on `pageshow`, `visibilitychange` and `focus`. |
 | 8 `busy-guard` | 7 | `WAIT_FOR_MESSAGE` is `true` and the served update manager exposes `canApplyUpdate` / `requestUpdateReload`. |
+| 9 `ingress-identity` | — | The Serve route for the `--deployed-origin` port resolves to the **same address the local origin is served by**, and the process holding that port — pid *and* start time — is the same in both reads. Proves **who** is behind the route, never **what** it returned; see below. |
+
+### Condition 9, and why it is additive and not a loophole
+
+Condition 9 exists because a vantage limit is a comfortable place for a real
+defect to hide. From the serving node, conditions 2–8 report `VANTAGE-LIMITED`,
+and that reads as *nothing was learned*. But `8452 → http://127.0.0.1:8007` is a
+pass-through to **the same process** the local origin talks to, so if that were
+ever not true — the route pointed at another port, or at the same port held by a
+stale sibling — the gate would be saying "unobservable" while every
+deployed-vs-local comparison was quietly about a second copy of the app. Nothing
+else in the script can see that, and the vantage limit would be concealing it.
+
+**It cannot become a pass for anything else.** It fetches nothing. It does not
+read a deployed response, a deployed version, a deployed timestamp or a deployed
+key, so it has no evidence that would clear a single `VANTAGE-LIMITED` condition
+— and a run where 9 passes still exits **3**, with all seven deployed conditions
+still `VANTAGE-LIMITED`. The distinction it establishes is *there is only one
+deployment here*, which is a statement about topology and not about convergence.
+
+**Its one assumption, printed on every run.** That Tailscale Serve is a
+pass-through and **does not cache responses**. That is true of Serve, and it is
+an assumption about someone else's proxy rather than a fact about this
+deployment — a caching proxy would satisfy every other check in the condition and
+serve bytes from somewhere else entirely. So the condition emits a
+`CACHING ASSUMPTION:` line in its own output on every run rather than leaving the
+belief in a comment, and the honest reading of a passing condition 9 is *"the
+deployed origin is this process, and Serve is assumed not to cache"* — never
+*"the deployed origin was observed"*.
+
+**What it fails on, unsmoothed.** A route resolving to a different port, or to
+the same port held by a different pid *or a different process start time*, is a
+deployment defect and reports `FAIL` (exit 1). A pid alone is not an identity —
+pids are reused across a restart — so the start time is compared as well, and the
+process table is read **twice** rather than once and reused: on the live topology
+both authorities are the same port, so a single lookup would make the comparison
+a tautology that always agrees, and a backend that restarted between the route
+read and the process read would go unnoticed.
+
+**Where it stands down.** Run from a host that is not the serving node, the
+deployed origin answers directly and conditions 2–8 compare against it, which is
+a stronger statement than a route table; condition 9 then reports that the proof
+is unnecessary rather than disappearing from the report. This is also what keeps
+the §9b remedy reachable: a phone on the tailnet has no `tailscale serve status`,
+and had this branch reported `UNPROVEN` there, the one host that can reach exit 0
+would exit 2 instead.
 
 **Exit codes are the design.** Four states, and **only `0` is a pass**:
 
@@ -375,16 +421,82 @@ section asks for at the end. So conditions **2, 4, 5, 6, 7 and 8** — and the
 deployed half of **3** — are still not evaluated, the gate still reports seven
 `VANTAGE-LIMITED` conditions, and the gate still **exits 3**.
 
-**Still outstanding from this section's original list.** Two of the three
-original items were negative checks and are **not** covered by what was
-reported, and are recorded as still unperformed rather than assumed:
+### The two negative checks, performed 2026-09-28
 
-- unrelated HTTPS ports (8443, 8445–8451) **fail** — not checked;
-- SSH **fails** — not checked.
+Both were performed on 2026-09-28, **from this Mac — the serving node itself**,
+and that vantage is weaker than the one the positive check above used, so it is
+named per check rather than once. Neither result is a claim about what a remote
+peer sees on the tailnet; §8's own discipline ("a probe from the serving node is
+weaker evidence than one from a phone") is the reason.
 
-Both are worth doing and neither is implied by the app loading. The positive
-check is the one that could not be done from the serving host; these two can be,
-and they are cheap.
+**Unrelated HTTPS ports do not serve — VERIFIED, from the serving node.** Ports
+`8444`, `8451`, `8453`, `9000` and `4433` were probed against
+`https://home-macbook-air.tailcd6e49.ts.net:<port>/`. Every one **refused the
+TCP connection** (`curl` exit 7, `nc -z` exit 1) — no TLS handshake, no HTTP
+status, nothing served. Three independent facts agree, and all three were
+checked: no local process holds those ports (`lsof -nP -iTCP:<p> -sTCP:LISTEN`
+is empty for every one of them), they are absent from
+`tailscale serve status --json`, and the connection is refused. `8452` was
+probed in the same batch as a **control** and answered `HTTP 401`, so the method
+is shown to detect a port that *is* a route.
+
+> The original list of ports to probe read "(8443, 8445–8451)", and it was
+> **wrong**: `8443`, `8445`, `8446`, `8447`, `8448`, `8449` and `8450` are all
+> declared Serve routes (`wardrobe-development`, the deliberately-retained
+> `8445`, and the four Obsidian PWAs) and would all have served. Probing them as
+> "unrelated" would have produced four false alarms. The list above is the set
+> of ports that are genuinely *not* routes. `8002` / `8448` (`pwa-deals`) was
+> excluded on purpose — out of scope for the session in which this was checked.
+
+> **What this vantage cannot establish.** A connection from the serving node to
+> its own `100.x` address never leaves the machine, so this does not exercise a
+> tailnet ACL or a peer's path. For a port that nothing listens on *and* Serve
+> does not forward there is no socket for a peer to reach either, so the
+> conclusion holds — but the tailnet-ACL layer itself is untested, and only a
+> probe from a phone would test it.
+
+**SSH over the tailnet — NOT VERIFIED, and the check as originally written cannot
+pass on this node.** The configuration half is clean and was verified read-only:
+`tailscale serve status --json` lists TCP forwards on `443`, `8443`, `8445`–`8450`
+and `8452` and **no `22`**; `tailscale debug prefs` reports **`RunSSH = False`**
+(Tailscale SSH is not enabled for this node); and `tailscaled` holds **no**
+listener on the tailnet address's port 22. So Tailscale Serve is not tunnelling
+SSH, which is what the check was aimed at.
+
+The behavioural half is a **different and more serious answer than "it failed".**
+`nc` to `<tailnet-hostname>:22` **connected**, and the banner on the wire was
+`SSH-2.0-OpenSSH_9.6` — macOS's own OpenSSH, not tailscaled. `netstat -an` shows
+it bound to `*.22` (wildcard, therefore including `tailscale0`), the application
+firewall reports `State = 0` (disabled) with block-all and stealth mode off, and
+`ssh <tailnet-hostname> true` from this Mac **succeeded** (exit 0). `lsof` shows
+no process on 22 because `/System/Library/LaunchDaemons/ssh.plist` uses
+`inetdCompatibility`, so launchd holds the socket and spawns `sshd` on demand.
+
+So on this node SSH over the tailnet is not blocked at all — and it is not
+Tailscale that unblocks it, it is a wildcard-bound `sshd` on a Mac with its
+firewall off. **The check "SSH must fail over the tailnet" is therefore recorded
+as NOT PASSED, not as failed and not as passed.** It is a property of the host's
+own SSH configuration, and closing it is a decision about Remote Login on this
+Mac, not a fact this repository can assert. Two sub-points are honest gaps: the
+`systemsetup -getremotelogin` read needs `sudo` and was not obtained, so Remote
+Login's *configured* state is inferred from the successful connect rather than
+read; and the node still advertises `https://tailscale.com/cap/ssh` in its
+`CapMap`, so "the node advertises no SSH capability" is **not** something this
+entry claims.
+
+> One side effect, disclosed: that `ssh` probe authenticated, with a local key,
+> to **this Mac's own** `sshd` as the current user. The intent was a refusal
+> probe and the expectation was `refused`; the instruction was not to
+> authenticate to anything, and that probe went further than intended. It reached
+> no remote system and changed no service, but it did add a `known_hosts` entry
+> for `home-macbook-air.tailcd6e49.ts.net`, which was left in place rather than
+> tidied away.
+
+**Summary of the section's original three items:** the positive origin check
+passed on the user's attestation from a phone; unrelated HTTPS ports were
+verified not to serve, from the serving node; and the SSH check is **open**, with
+its configuration half clean and its behavioural half answered by a non-Tailscale
+listener.
 
 ### Why the gate exits 3 here, permanently, and why that is the correct answer
 
@@ -454,7 +566,14 @@ conditions 2–8 as `VANTAGE-LIMITED` and exits **3**, identically before and af
 [VANTAGE] 2 deployed-version  [VANTAGE] 3 backend-freshness
 [VANTAGE] 4 release-smoke     [VANTAGE] 5 cache-rotation
 [VANTAGE] 6 shell-assets      [VANTAGE] 7 resume-check  [VANTAGE] 8 busy-guard
+[PASS] 9 ingress-identity
 ```
+
+Condition 9 is in that list and changes nothing about it: it is `PASS` because
+the route was *proven to be a pass-through to this process*, which is a fact
+about topology. It read no deployed response, so it leaves all seven
+`VANTAGE-LIMITED` conditions exactly where they were and the exit code at 3. See
+§7's condition table for what it does and does not establish.
 
 **Cause.** Tailscale Serve injects no identity header for a request that
 originates from the node doing the serving. It *strips* the client's
@@ -610,9 +729,15 @@ has succeeded once, on a phone.
 and it is not a remaining defect.** Conditions 2, 4–8 and the deployed half of 3
 are unobservable from the serving node, so the gate exits 3, and no change to
 this single-node topology changes that — it needs a *different machine*, not a
-different argument (§8). What remains genuinely open to the user is narrow and
-is listed in §8: the two negative checks (unrelated HTTPS ports and SSH must
-fail), and — if a `CONVERGED` line is ever wanted in a log — running the gate
+different argument (§8). Condition 9 was added afterwards and does not move that
+answer: it proves the deployed route is a pass-through to this very process, so
+there is no second deployment hiding behind the vantage limit, but it reads no
+deployed response and therefore retires nothing.
+
+What remains genuinely open to the user is narrow and is listed in §8: the
+**SSH** half of the negative participant-identity checks (the unrelated-HTTPS-ports
+half was performed 2026-09-28 from the serving node and is recorded with its
+vantage), and — if a `CONVERGED` line is ever wanted in a log — running the gate
 itself from the phone.
 
 Two ledger facts changed in the port-manager repo on 2026-09-28 (`ebb7291`) and
@@ -620,4 +745,7 @@ are recorded here so this runbook is not the only place they are written down:
 `port-allocations.json` now declares `pantry-recipes` (bind 8007, ingress 8452),
 so `port-manager audit` classifies 8452 as `ok` rather than `unmanaged_extra`; and
 the launchd label and deploy posture went into that skill's `known-ports.md`,
-because the JSON schema has no field for either.
+because the JSON schema has no field for either. A third change followed in the
+same repo (`eb29296`): the **removed** `8451` route is traced in a *Removed
+routes* section of that same file, with the rollback command and the checksummed
+before/after snapshots in `~/Library/Logs/` under the `20260928-133003` stamp.

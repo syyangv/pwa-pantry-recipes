@@ -46,6 +46,9 @@ REAL_UPDATE_MANAGER = REPO_ROOT / "app" / "static" / "js" / "pwa" / "update-mana
 VERSION = "v9.9.9"
 LOCAL = "http://127.0.0.1:8007"
 DEPLOYED = "https://recipes.test.invalid:8452"
+#: The Serve port `DEPLOYED` names, kept as its own name because condition 9
+#: resolves a route by port and the fixture's Serve config has to agree with it.
+DEPLOYED_PORT = 8452
 
 #: Stands in for "a version this world is not running": a stale local backend, a
 #: stale deployed origin, a stale shell. A sentinel rather than a real release
@@ -163,6 +166,30 @@ class World:
             path.write_text(f"# {relative}\n", encoding="utf-8")
             os.utime(path, (OLD, OLD))
         self.responses = self._table()
+        #: The Serve route this world is served through, as condition 9 reads it
+        #: from `tailscale serve status --json`. Modelled rather than left to the
+        #: real binary: a test that only ever saw the coherent route could not
+        #: tell a pass-through proof from one that rubber-stamps whatever it is
+        #: handed. Shape and key naming are the real ones.
+        self.serve_config: dict[str, Any] = {
+            "TCP": {"8452": {"HTTPS": True}},
+            "Web": {
+                f"recipes.test.invalid:{DEPLOYED_PORT}": {
+                    "Handlers": {"/": {"Proxy": "http://127.0.0.1:8007"}}
+                }
+            },
+        }
+        #: What is holding each port, keyed by port. The (pid, start time) pair
+        #: is the identity condition 9 compares, so a test that wants "same
+        #: port, different process" changes `pid` here and nothing else.
+        self.listeners: dict[int, gate.Listener] = {
+            8007: gate.Listener(
+                port=8007,
+                pid=47250,
+                started="Mon Sep 28 12:26:32 2026",
+                command="python -m uvicorn app.main:create_app --port 8007",
+            )
+        }
         #: Applied by `options()` under any per-call override. See there.
         self.option_overrides: dict[str, Any] = {}
 
@@ -241,6 +268,12 @@ class World:
         del origin
         return self.self_addressed
 
+    def serve_status(self) -> str:
+        return json.dumps(self.serve_config)
+
+    def listener(self, port: int) -> gate.Listener | None:
+        return self.listeners.get(port)
+
     def git(self, *args: str, cwd: Path | None = None) -> str:
         self.git_calls.append(args)
         for prefix, value in self.git_overrides.items():
@@ -273,6 +306,8 @@ class World:
             "git": self.git,
             "probe": self.probe,
             "self_addressed": self.self_addressed_for,
+            "serve_status": self.serve_status,
+            "listener": self.listener,
         }
         # World-level defaults, applied *under* the call's overrides so a test
         # can still contradict the world. Exists so a fixture can change how
@@ -355,11 +390,12 @@ def test_a_sw_js_with_no_cache_version_fails_the_fixture_loudly() -> None:
         rewrite_cache_version("const CACHE_NAME = 'pwa-shell';\n", VERSION)
 
 
-def test_the_baseline_has_exactly_the_ten_numbered_conditions(world: World) -> None:
+def test_the_baseline_has_exactly_the_eleven_numbered_checks(world: World) -> None:
     """§12 numbers eight steps, and the two preconditions on them — the socket,
     and whether the gate can talk to the origin at all — are numbered 0 and 0b.
-    All ten are pinned here so adding, merging or dropping a check is a
-    deliberate diff rather than an accident.
+    All ten of those were pinned here so adding, merging or dropping a check is a
+    deliberate diff rather than an accident, and condition 9 is the eleventh,
+    added for the pass-through proof in `check_ingress_identity`.
 
     The identifiers are read back off a **real** run rather than a literal, so
     this test counts what the gate evaluates instead of restating a list that has
@@ -371,11 +407,11 @@ def test_the_baseline_has_exactly_the_ten_numbered_conditions(world: World) -> N
     numbered = [ident for ident in idents if re.match(r"^\d+ ", ident)]
     lettered = [ident for ident in idents if re.match(r"^\d+[a-z] ", ident)]
     assert lettered == ["0b identity"], f"expected exactly the 0b precondition, got {lettered}"
-    assert len(numbered) == 9, f"expected nine numbered conditions, got {numbered}"
-    assert len(idents) == 10, f"expected ten checks in total, got {idents}"
+    assert len(numbered) == 10, f"expected ten numbered conditions, got {numbered}"
+    assert len(idents) == 11, f"expected eleven checks in total, got {idents}"
     # The numbers are consecutive from 0, so a dropped check cannot hide behind a
     # rename: a merge that kept the count would still fail here.
-    assert [int(ident.split(" ", 1)[0]) for ident in numbered] == list(range(9))
+    assert [int(ident.split(" ", 1)[0]) for ident in numbered] == list(range(10))
 
 
 def test_the_help_text_counts_the_conditions_the_gate_evaluates(world: World) -> None:
@@ -387,7 +423,7 @@ def test_the_help_text_counts_the_conditions_the_gate_evaluates(world: World) ->
     and compared with the number *spelled* in the help text, so the sentence
     cannot drift away from the code again without a red test.
 
-    Nine is the numbered conditions (`0`-`8`) and ten is those plus the `0b`
+    Ten is the numbered conditions (`0`-`9`) and eleven is those plus the `0b`
     identity precondition — which is why both are asserted: dropping either
     number from the description fails here.
     """
@@ -406,6 +442,9 @@ def test_the_help_text_counts_the_conditions_the_gate_evaluates(world: World) ->
     # The old, wrong count must be gone — spelled or numeric.
     assert "eight condition" not in help_text, (
         "--help still says 'eight conditions', which is not what the gate runs"
+    )
+    assert "nine numbered" not in help_text, (
+        "--help still says 'nine numbered conditions', which is not what the gate runs"
     )
 
 
@@ -436,12 +475,22 @@ def test_an_unreachable_origin_is_reported_once_not_ten_times(world: World) -> N
     """`app/auth.py` guards every path, so a wrong identity or a dead backend
     would otherwise turn every condition into the same 401. One diagnosis, and
     the rest are suppressed — a gate that says the same thing ten times is a
-    gate nobody reads."""
+    gate nobody reads.
+
+    Condition 9 is the one that still runs, and it is not an exception to the
+    rule: it reads the Serve configuration and the process table, never the
+    origin, so it is a different fact rather than the same 401 restated. It is
+    asserted here so that stays true — a future change that made 9 probe the
+    origin would put a tenth copy of the diagnosis back in the report."""
     world.responses[f"{LOCAL}/api/version"] = gate.Response(
         url="", status=401, headers={}, body=b'{"code":"identity_missing"}'
     )
     results, code = run(world)
-    assert [result.ident for result in results] == ["0 listener", "0b identity"]
+    assert [result.ident for result in results] == [
+        "0 listener",
+        "0b identity",
+        "9 ingress-identity",
+    ]
     identity = by_id(results, "0b identity")
     assert identity.status == gate.FAIL
     assert "--owner-login" in identity.detail
@@ -466,6 +515,7 @@ def test_the_owner_login_is_reported_in_the_identity_detail(world: World) -> Non
         "6 shell-assets",
         "7 resume-check",
         "8 busy-guard",
+        "9 ingress-identity",
     ]
 
 

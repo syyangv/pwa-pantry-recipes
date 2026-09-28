@@ -257,6 +257,19 @@ VANTAGE_REMEDY: Final = (
     "attribute the request to"
 )
 
+#: Spelled out in condition 9's own output on every run, so the assumption this
+#: condition rests on travels with the result instead of living only in a
+#: comment. It is an assumption about Tailscale Serve's behaviour, and the whole
+#: reason it is written out is that a reader must never come away believing the
+#: deployed origin was *observed* when it was only proven to be the same process.
+CACHING_ASSUMPTION: Final = (
+    "CACHING ASSUMPTION: Tailscale Serve is a pass-through proxy and does not cache responses, "
+    "so it cannot serve a body other than the one this process returns. This is an ASSUMPTION "
+    "about Serve's behaviour, not an observation of the deployed origin: nothing was fetched "
+    "through the route, no deployed response was read, and the deployed half of every other "
+    "condition stays VANTAGE-LIMITED."
+)
+
 
 @dataclass(frozen=True)
 class Response:
@@ -382,6 +395,90 @@ def is_self_addressed(origin: str) -> bool:
         if not _same_address(source, str(address)):
             return False
     return True
+
+
+@dataclass(frozen=True)
+class Listener:
+    """The process holding a TCP listen socket, identified well enough to tell
+    one *process* from another.
+
+    PID alone is not an identity: PIDs are reused, and on a machine that restarts
+    services a stale sibling can arrive with the number the check remembers. The
+    start time is what makes the pair a claim about a specific process instance,
+    and it is read from `ps` rather than derived, so it is evidence rather than
+    an inference.
+    """
+
+    port: int
+    pid: int | None
+    started: str | None
+    command: str | None
+
+    def describe(self) -> str:
+        who = f"pid {self.pid}" if self.pid is not None else "an unidentified pid"
+        when = self.started or "an unreadable start time"
+        return f"port {self.port}: {who}, started {when}"
+
+
+def probe_listener(port: int) -> Listener | None:
+    """Who is listening on `port`? `None` when nothing can be read.
+
+    `lsof` names the pid and `ps` supplies the start time and the command line;
+    both are read-only and neither is a new dependency. A missing `lsof` is
+    reported as "no listener" rather than as an error, which is the safe
+    direction for a check whose failure mode is a false agreement.
+    """
+    try:
+        completed = subprocess.run(
+            ("lsof", "-nP", f"-iTCP:{port}", "-sTCP:LISTEN", "-Fp"),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return None
+    pid_text = None
+    for line in completed.stdout.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            pid_text = line[1:]
+            break
+    if pid_text is None:
+        return None
+    pid = int(pid_text)
+    try:
+        described = subprocess.run(
+            ("ps", "-o", "lstart=,command=", "-p", pid_text),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError:
+        return Listener(port=port, pid=pid, started=None, command=None)
+    fields = described.stdout.split(None, 5)
+    started = " ".join(fields[:5]) if len(fields) >= 5 else None
+    return Listener(
+        port=port,
+        pid=pid,
+        started=started,
+        command=described.stdout.strip() or None,
+    )
+
+
+def tailscale_serve_status() -> str:
+    """`tailscale serve status --json`, verbatim. Read-only by construction:
+    `status` is the one Serve subcommand that reports, never mutates."""
+    completed = subprocess.run(
+        ("tailscale", "serve", "status", "--json"),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        raise OSError(
+            f"`tailscale serve status --json` exited {completed.returncode}: "
+            f"{(completed.stderr or completed.stdout).strip()[:200]}"
+        )
+    return completed.stdout
 
 
 @dataclass(frozen=True)
@@ -613,6 +710,12 @@ class Options:
     #: actual sockets, which is the point.
     probe: Probe = identity_probe
     self_addressed: Callable[[str], bool] = is_self_addressed
+    #: The two seams condition 9 needs, injectable for the same reason as the two
+    #: above: so a test drives every branch of the pass-through proof without
+    #: shelling out to the real `tailscale` binary or reading this machine's real
+    #: process table. The defaults are the real reads.
+    serve_status: Callable[[], str] = tailscale_serve_status
+    listener: Callable[[int], Listener | None] = probe_listener
     #: Computed once by `run_gate` and shared, so the classification cannot
     #: differ between two conditions that consulted the same deployed origin.
     vantage: VantageVerdict | None = None
@@ -1658,6 +1761,257 @@ def check_busy_guard(options: Options, version: str | None) -> None:
     )
 
 
+# --------------------------------------------------------------------------
+# 9 — who is behind the route
+# --------------------------------------------------------------------------
+
+#: Hostnames that name the loopback interface whatever they are spelled as, so
+#: `localhost:8007` and `127.0.0.1:8007` are not reported as two different
+#: deployments. Anything else has to match as a literal, or after the
+#: `v4-mapped` normalisation `_same_address` already does.
+#:
+#: `urlsplit().hostname` strips IPv6 brackets, so `::1` is the only spelling that
+#: ever reaches this set, and a wildcard bind address (`0.0.0.0`) is not a
+#: destination and is deliberately absent.
+LOOPBACK_NAMES: Final = frozenset({"localhost", "127.0.0.1", "::1"})
+
+
+def _split_authority(url: str) -> tuple[str, int | None]:
+    """`http://127.0.0.1:8007` → `('127.0.0.1', 8007)`; a port-less URL → `(host, None)`."""
+    parts = urlsplit(url)
+    try:
+        port = parts.port
+    except ValueError:
+        return (parts.hostname or "", None)
+    if port is None:
+        port = 443 if parts.scheme.lower() == "https" else 80
+    return (parts.hostname or "", port)
+
+
+def _same_backend(left: str, right: str) -> bool:
+    """Do two authority strings name the same host *and* port?
+
+    Host comparison is deliberately stricter than a suffix match: a proxy target
+    on another machine is a different deployment even when the port matches, and
+    that is the case this check exists to catch.
+    """
+    first_host, first_port = _split_authority(left)
+    second_host, second_port = _split_authority(right)
+    if first_port != second_port:
+        return False
+    if first_host == second_host:
+        return True
+    if first_host.lower() in LOOPBACK_NAMES and second_host.lower() in LOOPBACK_NAMES:
+        return True
+    return _same_address(first_host, second_host)
+
+
+def _serve_route_backend(status: Mapping[str, Any], port: int) -> tuple[str | None, str]:
+    """The proxy URL of the HTTPS route on `port`, and a note naming what was
+    found instead when there is not one.
+
+    Serve's status is keyed `hostname:port`, and the hostname is this node's
+    MagicDNS name rather than whatever the operator typed into
+    `--deployed-origin`, so the match is on the port alone. Anything other than
+    a `/` Web handler carrying a `Proxy` — a TCP forward, a redirect, a
+    multi-path route — is reported as not-found with the reason, because this
+    condition speaks about pass-through Web routes and guessing at the others
+    would be the kind of inference it exists to avoid.
+    """
+    web = status.get("Web")
+    if not isinstance(web, Mapping):
+        return (None, "`tailscale serve status --json` reported no Web routes at all")
+    matches = [key for key in web if str(key).rsplit(":", 1)[-1] == str(port)]
+    if not matches:
+        return (None, f"no Serve route is configured on port {port}")
+    if len(matches) > 1:
+        return (
+            None,
+            f"port {port} is claimed by {len(matches)} Serve endpoints: {sorted(matches)}",
+        )
+    key = matches[0]
+    entry = web[key]
+    if not isinstance(entry, Mapping):
+        return (None, f"the Serve endpoint {key} is not an object")
+    handlers = entry.get("Handlers")
+    if not isinstance(handlers, Mapping) or "/" not in handlers:
+        return (None, f"the Serve endpoint {key} has no `/` handler")
+    handler = handlers["/"]
+    if not isinstance(handler, Mapping):
+        return (None, f"the `/` handler on {key} is not an object")
+    proxy = handler.get("Proxy")
+    if not isinstance(proxy, str) or not proxy:
+        return (
+            None,
+            f"the `/` handler on {key} is {sorted(handler)}, not a Proxy — this condition speaks "
+            "about pass-through Web routes only",
+        )
+    return (proxy, key)
+
+
+def check_ingress_identity(options: Options) -> None:
+    """9 — the deployed route is a pass-through to *this* process.
+
+    **What this proves, and the limit of it.** Conditions 2-8 want to compare the
+    local origin against the deployed one, and from the serving node they cannot,
+    because Serve injects no identity for a self-originated request. The tempting
+    move is to treat "they are the same process" as a way around that, and it is
+    not one: this condition proves *who* is behind the route, never *what* the
+    route returned. Nothing here fetches a deployed response, and the honest
+    outcome on a successful run is still that the deployed origin was not
+    independently observed. It is additive for exactly that reason.
+
+    **Why it is worth having anyway.** The deployed origin is
+    `https …:8452 -> http://127.0.0.1:8007` — a pass-through to the same process
+    the local origin talks to. A route that resolved to a *different* port, or to
+    the same port held by a *different* process, would be a real deployment
+    defect hiding behind the vantage limit: the gate would be reporting
+    "unobservable" while quietly comparing against a second, stale copy of the
+    app. That class of defect is locally checkable, and nothing else in this
+    script can see it.
+
+    **The one assumption.** That Serve is a pass-through and does not cache. It
+    is true of Tailscale Serve, but it is an assumption about someone else's
+    proxy rather than a fact about this deployment, so it is printed in the
+    output of every run (`CACHING_ASSUMPTION`) instead of living only here. A
+    caching proxy would break the reasoning silently: the route would still
+    resolve to this process and still be provably the same process, while
+    serving bytes from somewhere else entirely.
+    """
+    ident, title = "9 ingress-identity", "the deployed route is a pass-through to this process"
+
+    if not options.deployed_origin:
+        options.add(
+            ident,
+            title,
+            UNPROVEN,
+            "no --deployed-origin was given, so there is no route to resolve. This condition "
+            "speaks about a Serve route and the process behind it; with only the local origin "
+            "named there is nothing to compare it against.",
+        )
+        return
+
+    verdict = deployed_vantage(options)
+    if not verdict.unobservable:
+        # The deployed origin answered a direct probe, which establishes the
+        # thing this condition exists to rule out — that a second deployment is
+        # being compared — more strongly than reading a route table does. It is
+        # reported as agreeing, with the substitution stated, rather than
+        # skipped, because a condition that vanishes from the report is a
+        # condition nobody knows was considered.
+        options.add(
+            ident,
+            title,
+            PASS,
+            f"not needed and therefore not asserted: the deployed origin answered a direct probe, "
+            f"so it was observed rather than inferred ({verdict.evidence}). Conditions 2-8 "
+            "compared against it directly, which is a stronger statement than a route table.",
+        )
+        return
+
+    deployed_host, deployed_port = _split_authority(options.deployed_origin)
+    try:
+        status = json.loads(options.serve_status())
+    except (OSError, ValueError) as error:
+        options.add(
+            ident,
+            title,
+            UNPROVEN,
+            f"could not read the Serve configuration, so the pass-through could not be proven: "
+            f"{error}. This is not a deployment defect; it means `tailscale serve status --json` "
+            "is unavailable here.",
+        )
+        return
+    if not isinstance(status, Mapping):
+        options.add(
+            ident,
+            title,
+            UNPROVEN,
+            "`tailscale serve status --json` did not return an object, so the route could not "
+            f"be resolved (got {type(status).__name__})",
+        )
+        return
+
+    proxy, found = _serve_route_backend(status, deployed_port or 0)
+    if proxy is None:
+        options.add(
+            ident,
+            title,
+            UNPROVEN,
+            f"the deployed origin {options.deployed_origin} names port {deployed_port} on host "
+            f"{deployed_host}, and {found}. That is not evidence of a pass-through and not "
+            "evidence against one, so it is neither reported as agreeing nor as a defect.",
+        )
+        return
+
+    if not _same_backend(proxy, options.local_origin):
+        options.add(
+            ident,
+            title,
+            FAIL,
+            f"the deployed origin {options.deployed_origin} resolves through the Serve endpoint "
+            f"{found} to {proxy}, but the local origin {options.local_origin} is served by a "
+            "different backend. The route is not a pass-through to the process under test, so "
+            "every deployed-vs-local comparison in this gate would be comparing against a second "
+            "deployment rather than reporting on this one. Fix the route before trusting any "
+            "deployed half.",
+        )
+        return
+
+    _, backend_port = _split_authority(proxy)
+    _, local_port = _split_authority(options.local_origin)
+    # Two *independent* reads, deliberately not one read reused. When the two
+    # ports are equal — the live topology — a single lookup would make the
+    # comparison a tautology, and a backend that restarted between the route read
+    # and the process read would go unnoticed. Reading twice turns "same port"
+    # into a claim about one process instance.
+    backend_listener = options.listener(backend_port or 0)
+    local_listener = options.listener(local_port or 0)
+    if backend_listener is None or local_listener is None:
+        missing = backend_port if backend_listener is None else local_port
+        options.add(
+            ident,
+            title,
+            UNPROVEN,
+            f"the route resolves to {proxy}, the same address the local origin uses, but the "
+            f"listening process on port {missing} could not be identified, so the two were not "
+            "proven to be the same process rather than merely the same port.",
+        )
+        return
+
+    if (backend_listener.pid, backend_listener.started) != (
+        local_listener.pid,
+        local_listener.started,
+    ):
+        options.add(
+            ident,
+            title,
+            FAIL,
+            f"the Serve endpoint {found} proxies to {proxy} and the local origin is also "
+            f"{options.local_origin}, but the two reads disagree about what is holding that port: "
+            f"{backend_listener.describe()} behind the route versus {local_listener.describe()} "
+            "behind the local origin. A pid on its own is not an identity, so the start times are "
+            "compared too. Either the backend restarted between the two reads or the route is "
+            "pointing at a stale sibling; both are deployment defects, and neither is softened "
+            "here.",
+        )
+        return
+
+    options.add(
+        ident,
+        title,
+        PASS,
+        f"the Serve endpoint {found} proxies to {proxy}, the address the local origin is served "
+        f"by, and the process holding that port is the same in both reads: "
+        f"{backend_listener.describe()}. So the deployed origin is not a second copy of the app "
+        "and not a stale sibling — it is this process, reached through the proxy. "
+        + CACHING_ASSUMPTION
+        + " What this proves is who is behind the route, not what the route returned: no "
+        "deployed response was read, and the deployed half of conditions 2-8 remains "
+        "VANTAGE-LIMITED.",
+    )
+
+
 def _origins(options: Options) -> list[tuple[str, str]]:
     origins = [("local", options.local_origin)]
     if options.deployed_origin:
@@ -1693,6 +2047,11 @@ def run_gate(options: Options) -> list[CheckResult]:
         check_shell_assets(options, version)
         check_resume_version_check(options, version)
         check_busy_guard(options, version)
+    # Run last, and outside the `reachable` branch: a route pointing at the wrong
+    # process is a deployment defect worth reporting even when the backend is
+    # down, and a report that listed it before the conditions it explains would
+    # read as a precondition failure.
+    check_ingress_identity(options)
     return options.results
 
 
@@ -1792,11 +2151,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="converge_gate.py",
         description=(
-            "The release gate: nine numbered conditions (0-8) plus the 0b identity "
-            "precondition, each one able to fail. Exit 0 converged, 1 a real failure, "
+            "The release gate: ten numbered conditions (0-9) plus the 0b identity "
+            "precondition — eleven checks in all — each one able to fail. Exit 0 "
+            "converged, 1 a real failure, "
             "2 a condition could not be evaluated because the invocation was "
             "under-specified, 3 a condition could not be evaluated because the "
-            "deployed origin is not observable from this host. Only 0 is a pass."
+            "deployed origin is not observable from this host. Only 0 is a pass. "
+            "Condition 9 is additive: it proves the deployed route is a pass-through to "
+            "the same process the local origin is served by, which says nothing about "
+            "what the deployed origin returned, so it never turns a VANTAGE-LIMITED "
+            "condition into agreement."
         ),
     )
     parser.add_argument("--local-origin", default="http://127.0.0.1:8007")

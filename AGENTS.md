@@ -13,7 +13,7 @@ Serve route proxies **8452 → 127.0.0.1:8007**. The deployed origin is
 Two caveats, both load-bearing, both in `README.md` § *What does not work yet*:
 
 1. **The converge gate exits 3 when it is run from the serving host**, not 0.
-   Conditions 0, 0b and 1 pass; conditions 2–8 report **`VANTAGE-LIMITED`**, the
+   Conditions 0, 0b, 1 and 9 pass; conditions 2–8 report **`VANTAGE-LIMITED`**, the
    gate's fourth outcome, meaning *the deployed half of this comparison is not
    observable from this host*. The cause is that **Tailscale Serve injects no
    identity header for a request that originates from the node doing the
