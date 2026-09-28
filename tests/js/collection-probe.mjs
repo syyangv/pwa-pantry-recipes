@@ -27,9 +27,11 @@ import { dirname, join, relative, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 export const EXPECTED_TESTS = [
+  'tests/js/api.test.mjs',
   'tests/js/logic/chip-class.test.mjs',
   'tests/js/logic/format.test.mjs',
   'tests/js/logic/sort.test.mjs',
+  'tests/js/router.test.mjs',
   'tests/js/scaffold.test.mjs',
   'tests/js/shell_assets.test.mjs',
 ];

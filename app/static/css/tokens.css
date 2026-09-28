@@ -1,13 +1,24 @@
 /* Design tokens for the Pantry Recipes PWA.
  *
- * Only the tokens the scaffold's placeholder stylesheet consumes. The pwa-infra
- * baseline (overflow, safe areas, 44px targets, 16px inputs, sheet/toast) lives
- * in the vendored /css/pwa.css and must not be forked here.
+ * Two layers, and the split is load-bearing:
+ *   - the neutral surface tokens below (bg / fg / border / accent / danger …);
+ *   - the DOMAIN tokens at the bottom, added with the first view that renders
+ *     a match. Domain values are named by the BUCKET they colour, never by a
+ *     colour, so a chip's class carries the meaning and the token carries only
+ *     the paint.
  *
- * TODO(implementation): extend with domain tokens (pantry state colors:
- * in-stock / running-low / out; recipe difficulty; cooking-log status) once the
- * feature surfaces exist.
+ * The pwa-infra baseline (overflow, safe areas, 44px targets, 16px inputs,
+ * sheet/toast/overlay) lives in the vendored /css/pwa.css and must not be
+ * forked here. It reads these variables with fallbacks, so it also works
+ * standalone.
+ *
+ * D4's five chip buckets, and why each one is a different colour: a chip the
+ * user cannot read at a glance is the whole failure mode of an honest match
+ * display. The five are produced by logic/chip-class.js — the class names
+ * below are the contract, and `chip--manual` is an OUTLINE, not a fill, so a
+ * hand fix reads as a hand fix.
  */
+
 :root {
   /* Light theme tokens (default; system light) */
   --bg: #f4f4f6;
@@ -25,6 +36,46 @@
   --gap: 12px;
   --tap-min: 44px;
   --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 4px 12px rgba(0, 0, 0, 0.04);
+
+  /* --- Domain tokens: the five D4 chip buckets ---------------------------
+   * found, found-by-hand, assumed (a staple / an ignored 调料), and missing.
+   * The first three are "in hand" in different ways and the last is not, so
+   * the two groups differ in weight as well as in hue: a missing chip is the
+   * only one that gets a strong background, which is what makes a recipe at
+   * 0/6 unmissable in a scrolling list. */
+  --chip-found-bg: #e4f2e6;
+  --chip-found-fg: #1c5c2b;
+  --chip-found-border: #a9d3b3;
+  --chip-manual-bg: #e4f2e6;
+  --chip-manual-fg: #1c5c2b;
+  --chip-manual-border: #1c5c2b;
+  --chip-assumed-bg: #eef0f4;
+  --chip-assumed-fg: #4a5568;
+  --chip-assumed-border: #c3c9d4;
+  --chip-ignored-bg: #f0eef4;
+  --chip-ignored-fg: #5b5470;
+  --chip-ignored-border: #d2cbdd;
+  --chip-missing-bg: #fdeaea;
+  --chip-missing-fg: #a32020;
+  --chip-missing-border: #e6a3a3;
+
+  /* Chip geometry. A chip is 32px TALL but the tappable box is 44px: the
+   * extra 12px lives as padding on the chip ROW, not on the chip, so the row
+   * stays a single 44px band and the chips keep their 32px rhythm. */
+  --chip-height: 32px;
+  --chip-radius: 999px;
+  --chip-pad-x: 10px;
+  --chip-font: 0.85rem;
+
+  /* The 44px tap target minus the 32px chip, halved: 6px of row padding
+   * above and below a chip makes the whole row 44px tall and tappable. */
+  --tap-gap: 8px;
+  --chip-hit-pad: calc((var(--tap-min) - var(--chip-height)) / 2);
+
+  /* A row of chips is the app's ONLY horizontal scroller, and it uses the
+   * vendored `.scroll-row` (min-width: 0, nowrap, overflow-x: auto) — the
+   * one class that opts out of intrinsic width. */
+  --chip-gap: var(--tap-gap);
 }
 
 @media (prefers-color-scheme: dark) {
@@ -40,5 +91,25 @@
     --danger-fg: #131318;
     --skeleton: #1f1f23;
     --shadow: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px rgba(0, 0, 0, 0.3);
+
+    /* Dark pairs are lighter and less saturated, not just inverted: a dark
+     * mode built by flipping light values produces a chip that vibrates
+     * against #1c1c21. Contrast against --bg-elev stays above 4.5:1 for the
+     * foreground of all five. */
+    --chip-found-bg: #17301d;
+    --chip-found-fg: #8fd7a2;
+    --chip-found-border: #2f5a38;
+    --chip-manual-bg: #17301d;
+    --chip-manual-fg: #8fd7a2;
+    --chip-manual-border: #8fd7a2;
+    --chip-assumed-bg: #23262c;
+    --chip-assumed-fg: #a8b1c0;
+    --chip-assumed-border: #3b414b;
+    --chip-ignored-bg: #262331;
+    --chip-ignored-fg: #b6aec9;
+    --chip-ignored-border: #453d57;
+    --chip-missing-bg: #3a1c1c;
+    --chip-missing-fg: #f2a3a3;
+    --chip-missing-border: #6b3131;
   }
 }

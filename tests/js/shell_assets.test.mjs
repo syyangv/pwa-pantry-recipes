@@ -39,16 +39,35 @@ const frontendFiles = [...walkFiles(join(STATIC_DIR, 'js')), ...walkFiles(join(S
   .sort();
 
 /* Entries are literals or `'/path?v=' + CACHE_VERSION` concatenations, so the
- * quoted literal is the stable part and the query is dropped. */
+ * quoted literal is the stable part and the query is dropped.
+ *
+ * Comments are stripped before the quoted-literal regex runs, for the same
+ * reason scaffold.test.mjs does it: an apostrophe inside a comment opens a
+ * phantom "entry" that runs to the next quote, and a phantom entry is either a
+ * false alarm on a correct commit or — worse — an excuse to delete the comment
+ * instead of the real gap. See the comment in scaffold.test.mjs. */
+const stripJsComments = (js) => js.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+
 const shellAssetsBlock = sw.match(/const SHELL_ASSETS = \[([\s\S]*?)\n\];/);
 assert.ok(shellAssetsBlock, 'SHELL_ASSETS not found in sw.js');
 const precached = new Set(
-  [...shellAssetsBlock[1].matchAll(/'([^']*)'/g)]
+  [...stripJsComments(shellAssetsBlock[1]).matchAll(/'([^']*)'/g)]
     .map((match) => match[1].split('?')[0])
     // '/' is the HTML shell, served by a route rather than a static file.
     .filter((pathname) => pathname !== '/')
     .map((pathname) => pathname.replace(/^\//, ''))
 );
+
+test('every SHELL_ASSETS entry is a path, not comment debris', () => {
+  const entries = [...stripJsComments(shellAssetsBlock[1]).matchAll(/'([^']*)'/g)].map(
+    (match) => match[1],
+  );
+  assert.ok(entries.length > 0, 'SHELL_ASSETS is empty');
+  for (const entry of entries) {
+    // '/' is the HTML shell itself, served by a route rather than a file.
+    assert.match(entry, /^\/[\w./-]*(\?|$)/, `not a shell asset path: ${entry}`);
+  }
+});
 
 test('every frontend module and stylesheet is precached', () => {
   const missing = frontendFiles.filter((file) => !precached.has(file));

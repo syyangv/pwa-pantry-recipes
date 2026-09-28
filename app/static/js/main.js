@@ -1,6 +1,6 @@
 /* Pantry Recipes PWA — module entry point.
  *
- * Boot contract for the scaffold:
+ * Boot contract for the app shell:
  *   1. Publish window.__APP_VERSION__ from the serve-injected
  *      <meta name="app-version"> tag. The vendored pwa-infra update-manager
  *      reads that global (window['__APP' + '_VERSION__']) to decide whether the
@@ -10,8 +10,10 @@
  *      cold start shows "Connecting…" rather than a frozen screen.
  *   3. initUpdateManager() — this is the ONE place the service worker is
  *      registered. index.html must never call navigator.serviceWorker.register.
- *   4. dispatch 'pwa:awake' once the first real fetch resolves, which removes
- *      the waking banner.
+ *   4. initApi() — one GET /api/session for the CSRF token and the capability
+ *      flags, shared by every later request. Its settle path dispatches
+ *      'pwa:awake', which removes the waking banner.
+ *   5. initRouter() + start() — mounts the first view.
  *
  * Every import uses ?v=__APP_VERSION__. The /js/{path} route in app/main.py
  * injects the token into module *content* as well, so nested ES-module imports
@@ -21,21 +23,47 @@
 
 import { initUpdateManager, requestUpdateReload } from '/js/pwa/update-manager.js?v=__APP_VERSION__';
 import { initWakingBanner } from '/js/pwa/waking-banner.js?v=__APP_VERSION__';
+import { initApi, mutationInFlight } from '/js/api.js?v=__APP_VERSION__';
+import { initRouter, reload as reloadCurrentView } from '/js/router.js?v=__APP_VERSION__';
+import { mount as mountHome } from '/js/views/home.js?v=__APP_VERSION__';
+import { mount as mountRecipe } from '/js/views/recipe.js?v=__APP_VERSION__';
+import { mount as mountShortlists } from '/js/views/shortlists.js?v=__APP_VERSION__';
+import { mount as mountSettings } from '/js/views/settings.js?v=__APP_VERSION__';
+import { mount as mountProvenance } from '/js/views/provenance.js?v=__APP_VERSION__';
 
 const meta = document.querySelector('meta[name="app-version"]');
 const pinned = meta ? meta.getAttribute('content') : '';
 if (pinned) window['__APP' + '_VERSION__'] = pinned;
 
+/* F18 §4e busy-guard: never apply an update while a write is in flight or a
+ * modal is open. The first term is not theoretical — a forced reload can land
+ * between the user tapping 做过了 and the request completing, and the log is
+ * lost. The second is template 4e: a date picker or dialog holds input a
+ * reload would discard. */
+function isModalOpen() {
+  return Boolean(
+    document.querySelector('dialog[open], .form-sheet:not([hidden]), .date-picker:not([hidden])'),
+  );
+}
+
+function canApplyUpdate() {
+  return !mutationInFlight() && !isModalOpen();
+}
+
 // Wake the screen before any fetch can stall, then hand the service-worker
 // lifecycle to update-manager (docs/pwa-template.md Pattern G + Part 3c).
 initWakingBanner({ text: 'Connecting to pantry…' });
 initUpdateManager({
-  // auto-takeover (docs/pwa-template.md 4d) + Pattern 4e busy-guard: apply the
-  // update without a forced reload, but never while a dialog/sheet is open.
-  // Switch to { autoApply: false } + WAIT_FOR_MESSAGE=true in sw.js when the
-  // app grows forms whose input an auto-reload could discard.
-  autoApply: true,
-  canApplyUpdate: () => !document.querySelector('dialog[open], .overlay:not([hidden])'),
+  /* F18 §4d, EXPLICIT BANNER — and this is the reconciliation with the
+   * `autoApply: true` the scaffold shipped. It is not a default to keep: a
+   * mutation-bearing app must not have a reload forced on it. sw.js sets
+   * WAIT_FOR_MESSAGE = true to match, so a new worker installs and WAITS; the
+   * Reload button below is what tells it to take over. Auto-takeover would be
+   * a `SKIP_WAITING` on install, and the one moment it fires is whatever
+   * moment the deploy lands — possibly between a cook-log tap and its
+   * request. */
+  autoApply: false,
+  canApplyUpdate,
   onStale: (version) => showUpdateBanner(version),
   onFresh: (version) => showVersionBadge(version),
 });
@@ -51,10 +79,16 @@ function showUpdateBanner(version) {
   button.type = 'button';
   button.textContent = 'Reload';
   button.addEventListener('click', () => {
+    // One click, one application: disable before the await so a double tap
+    // cannot post two SKIP_WAITING messages (template 4d convergence guard).
+    if (button.disabled) return;
+    button.disabled = true;
     button.textContent = 'Updating…';
+    // Pattern E: wake the waiting worker; the manager's controllerchange guard
+    // performs the reload. The timeout is only the fallback for a browser that
+    // drops controllerchange entirely.
     void requestUpdateReload();
-    // Fallback: the browser may delay or drop controllerchange. Reload anyway.
-    setTimeout(() => window.location.reload(), 1500);
+    window.setTimeout(() => window.location.reload(), 1500);
   });
   host.appendChild(button);
 }
@@ -65,17 +99,46 @@ function showVersionBadge(version) {
     badge.textContent = version;
     badge.hidden = false;
   }
-  const scaffold = document.getElementById('scaffold-version');
-  if (scaffold) scaffold.textContent = `Backend version ${version}`;
 }
 
-// TODO(implementation): replace this probe with the first real domain call
-// (pantry catalog / recipe index) and dispatch 'pwa:awake' from its success
-// path. The /health probe only proves the process is up.
-fetch('/health', { cache: 'no-store' })
-  .then((response) => (response.ok ? response.json() : null))
-  .then((payload) => {
-    if (payload && payload.version) showVersionBadge(payload.version);
+function showRouteNotice(hash) {
+  const host = document.getElementById('route-notice');
+  if (!host) return;
+  // Non-blocking: the home view is already mounted behind it. The hash is left
+  // alone on purpose — rewriting it would push a history entry for a typo.
+  host.textContent = `Unknown route: ${hash}`;
+  host.hidden = false;
+}
+
+initRouter({
+  views: {
+    home: { mount: mountHome },
+    recipe: { mount: mountRecipe },
+    shortlists: { mount: mountShortlists },
+    settings: { mount: mountSettings },
+    provenance: { mount: mountProvenance },
+  },
+  onUnknownRoute: showRouteNotice,
+}).start();
+
+/* Pattern F — iOS resume. A BFCache restore can fire `pageshow` with
+ * e.persisted WITHOUT a visibilitychange, and a Home Screen PWA resumes a
+ * suspended snapshot without re-running startup code, so match data can be
+ * minutes stale. Re-render the current view on both surfaces. */
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') reloadCurrentView();
+});
+window.addEventListener('pageshow', (event) => {
+  if (event.persisted) reloadCurrentView();
+});
+
+/* The boot session is the first real domain call, so its settle path is what
+ * dismisses the waking banner. `.finally`, not `.then`: a backend that is
+ * refusing connections must still clear the banner or the app looks frozen
+ * with nothing to retry. */
+initApi()
+  .then((session) => {
+    if (session && session.version) showVersionBadge(session.version);
   })
   .catch(() => {})
   .finally(() => window.dispatchEvent(new Event('pwa:awake')));

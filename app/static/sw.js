@@ -21,7 +21,7 @@
  * the version injected into the HTML shell all derive from this constant, so
  * the served cache name and every reported version cannot drift. Bump on every
  * deploy. */
-const CACHE_VERSION = 'v0.2.0';
+const CACHE_VERSION = 'v0.3.0';
 const CACHE_NAME = `pwa-shell-${CACHE_VERSION}`;
 const API_CACHE_NAME = `pwa-api-${CACHE_VERSION}`;
 const OUTBOX_SYNC_TAG = 'outbox';
@@ -30,10 +30,13 @@ const NAVIGATION_FALLBACK_MS = 1500;
 /* URLs to precache at install. Leave [] to runtime-cache only.
  * These are typically the HTML shell + manifest + every module/asset the
  * app needs offline. Update on every release that adds/removes files.
- * TODO(implementation): this is the scaffold list. Every file added under
- * app/static/js (beyond the vendored pwa-infra modules, which main.js pulls in
- * as static imports) and app/static/css must be added here, or it will be
- * missing from the offline shell. */
+ *
+ * THE LIST IS GATED, NOT MEMORISED. `tests/js/shell_assets.test.mjs` walks
+ * app/static/js and app/static/css and fails when a file here is missing, in
+ * the direction that matters: a module that is imported, served, and precached
+ * by nothing works perfectly online and is simply absent from an installed
+ * app — diagnosable only by a user on a subway. Add the file HERE in the same
+ * commit that creates it (AGENTS.md #8). */
 const SHELL_ASSETS = [
   // Version-pin mutable JS/CSS with CACHE_VERSION so a deploy (bump) always
   // fetches fresh copies — unversioned assets can be served stale by the
@@ -45,6 +48,22 @@ const SHELL_ASSETS = [
   '/css/styles.css?v=' + CACHE_VERSION,
   '/css/pull-refresh.css?v=' + CACHE_VERSION,
   '/js/main.js?v=' + CACHE_VERSION,
+  // The shell graph: the hash router, the API client (CSRF lifecycle), the
+  // DOM helper, and the render-only preference store.
+  '/js/router.js?v=' + CACHE_VERSION,
+  '/js/api.js?v=' + CACHE_VERSION,
+  '/js/dom.js?v=' + CACHE_VERSION,
+  '/js/prefs.js?v=' + CACHE_VERSION,
+  // The five views behind the five routes. main.js imports all five, so the
+  // boot graph already reaches them — but `shell_assets.test.mjs` requires every
+  // module to be NAMED here, and rightly: a view added later and reached only
+  // by a hash the user has never visited is not in any import graph yet, and a
+  // precache that trusts the graph alone is how a route 404s offline.
+  '/js/views/home.js?v=' + CACHE_VERSION,
+  '/js/views/recipe.js?v=' + CACHE_VERSION,
+  '/js/views/shortlists.js?v=' + CACHE_VERSION,
+  '/js/views/settings.js?v=' + CACHE_VERSION,
+  '/js/views/provenance.js?v=' + CACHE_VERSION,
   // Pure client-side logic modules. Not imported by main.js yet, so they are
   // named here rather than pulled in by the boot graph; without the entries a
   // cold offline start would resolve them from the network and fail.
@@ -88,9 +107,14 @@ const API_SWR_PREFIXES = ['/api/items', '/api/stats'];
  * the page posts { type: 'SKIP_WAITING' } (update-manager's
  * requestUpdateReload / applyUpdate). Pair with update-manager options
  * { autoApply: false, onStale: showBanner }. First install still activates
- * immediately (no active worker exists yet). Default false = wardrobe-style
- * auto-takeover. */
-const WAIT_FOR_MESSAGE = false;
+ * immediately (no active worker exists yet).
+ *
+ * F18 (locked), §4d: TRUE. A forced auto-takeover reload can land between the
+ * user tapping 做过了 and the cook-log request completing, and the log is
+ * lost. The banner in main.js is what tells a waiting worker to take over.
+ * The scaffold shipped `false` + `autoApply: true`, which is the auto-takeover
+ * variation; both sides move together or the banner never appears. */
+const WAIT_FOR_MESSAGE = true;
 
 /* Cache-name prefixes to evict on activate. Keep your app's HISTORICAL
  * prefixes here during/after a migration to this worker so old caches are

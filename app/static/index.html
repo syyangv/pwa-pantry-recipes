@@ -43,20 +43,20 @@
 
     <div class="banners" aria-live="polite">
       <!-- update-manager injects the update banner into #update-banner when
-           a newer CACHE_VERSION is waiting. -->
+           a newer CACHE_VERSION is waiting. F18: the banner is EXPLICIT —
+           sw.js sets WAIT_FOR_MESSAGE = true and main.js passes
+           autoApply: false, so a reload never lands on its own. -->
       <aside id="update-banner"></aside>
+      <aside id="route-notice" class="banner banner-notice" hidden></aside>
       <aside id="app-error" class="banner banner-error" hidden></aside>
     </div>
 
+    <!-- The router's content root. Each view's mount(root) owns this subtree
+         and its unmount() releases it; the router clears it between views. -->
     <main id="app-root" class="content">
       <section class="panel">
-        <h2>Scaffold</h2>
-        <p class="muted">
-          Infrastructure only — no pantry, recipe, or cooking-log feature is
-          implemented yet. See <code>CONTEXT.md</code> for the domain glossary
-          and the TODOs in <code>app/main.py</code>.
-        </p>
-        <p id="scaffold-version" class="muted"></p>
+        <h2>连接中…</h2>
+        <p class="muted">正在启动本地服务。</p>
       </section>
     </main>
 

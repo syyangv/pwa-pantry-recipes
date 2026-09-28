@@ -1,22 +1,104 @@
-/* App styles for the Pantry Recipes PWA — placeholder layer only.
+/* App styles for the Pantry Recipes PWA — the app shell and the domain
+ * components. Nothing here re-declares the vendored baseline.
  *
- * The screen-fixed baseline (overflow containment, safe-area insets, 44px
- * touch targets, 16px inputs, sheet/toast/overlay) comes from the vendored
- * /css/pwa.css. Do not re-declare those rules here; extend /css/tokens.css for
- * new values instead.
+ * /css/pwa.css owns: the overflow baseline, `.scroll-row`, `.grid`,
+ * `.navbar`, `.fab`, `.bottom-bar`, `.drawer`, `.toast`, `.sheet`,
+ * `.form-sheet`, `.tap`, the 44px tap targets, the 16px input font, the
+ * safe-area utilities, and Pattern G's waking banner. Re-vendor it with
+ * `python3 ~/projects/pwa-template/scripts/vendor.py .`; never hand-edit it.
+ * New VALUES go in /css/tokens.css, not here.
  *
- * TODO(implementation): replace the scaffold panel below with the real
- * pantry / recipe / cooking-log surfaces.
+ * What is here: the app-shell layout the shell HTML uses, the two container
+ * rules that contain the app, and the domain components (recipe grid, chip row,
+ * setting rows, toggles) that the views render.
  */
+
+/* --- 2b — overflow containment for THIS app's content root ---------------
+ * The vendored baseline already lists `#app-root` next to `#app`, so this rule
+ * is a deliberate duplicate rather than a fix for a missing one: it is the
+ * load-bearing rule of the whole "no side-to-side movement" property, and a
+ * later pwa.css re-vendor that dropped the selector would take the containment
+ * with it. `hidden`, not `clip`: clip creates no BFC, so child overflow still
+ * widens the layout viewport. NEVER put overflow-x on <html> — iOS then makes
+ * it its own scroll container and offsets the visual viewport's x-origin,
+ * which is the left-gap trap. */
+#app-root {
+  overflow-x: hidden;
+}
 
 body {
   min-height: 100vh;
+  /* Option A (2a): dvh after the vh fallback, so an Android address-bar
+   * resize cannot produce a viewport taller than the visible one. */
   min-height: 100dvh;
 }
 
 .content {
   padding: 16px;
+  /* Room for the home indicator, so the last row is never under it. */
   padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 16px);
+}
+
+.banners {
+  display: flex;
+  flex-direction: column;
+  gap: var(--gap);
+  padding: 0 16px;
+}
+
+.banners:empty {
+  display: none;
+}
+
+#app-error:empty {
+  display: none;
+}
+
+#route-notice:empty {
+  display: none;
+}
+
+.banner-notice {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  color: var(--fg-muted);
+}
+
+/* --- The top bar ----------------------------------------------------------
+ * 2e: a top overlay MUST add env(safe-area-inset-top) or its content sits
+ * under the Dynamic Island — invisible in a desktop browser and in Playwright
+ * without device emulation, which is exactly why it is easy to ship wrong.
+ * The vendored `.navbar` already does this for a FIXED bar; this shell uses a
+ * sticky one (`.sticky-header`), so the rule belongs here. */
+.sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  padding-top: env(safe-area-inset-top, 0px);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.topbar {
+  display: flex;
+  align-items: flex-end;
+  gap: var(--gap);
+  padding: 10px 16px;
+}
+
+.hero {
+  min-width: 0;
+}
+
+.hero-eyebrow {
+  color: var(--fg-muted);
+  font-size: 0.75rem;
+  letter-spacing: 0.08em;
+}
+
+.hero-date {
+  margin: 2px 0 0;
+  font-size: 1.15rem;
 }
 
 .panel {
@@ -43,17 +125,213 @@ code {
   font-size: 0.85em;
 }
 
-.banners {
+/* --- The recipe grid ------------------------------------------------------
+ * 2d: `minmax(0, 1fr)`, NEVER bare `1fr`. Bare `1fr` respects an item's
+ * automatic minimum size, so one long unbroken recipe name pins a column wider
+ * than the viewport and the row is clipped by the overflow containment above —
+ * the symptom is horizontal page scroll that appears only on a device. Base
+ * rule BEFORE the @media overrides: same specificity, last one wins. */
+.recipe-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: var(--gap);
+}
+
+.recipe-grid > * {
+  min-width: 0;
+}
+
+@media (min-width: 600px) {
+  .recipe-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (min-width: 900px) {
+  .recipe-grid {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
+/* --- The chip row (D4) ----------------------------------------------------
+ * The app's ONLY horizontal scroller, and it uses the vendored `.scroll-row`
+ * (flex, nowrap, overflow-x: auto, min-width: 0). This class adds the vertical
+ * padding that makes the tappable band 44px: --chip-hit-pad is
+ * (--tap-min - --chip-height) / 2, so a 32px chip plus 6px above and below is
+ * a 44px target without a 44px-tall pill. */
+.chip-row {
+  align-items: center;
+  padding-top: var(--chip-hit-pad);
+  padding-bottom: var(--chip-hit-pad);
+  gap: var(--chip-gap);
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: var(--chip-height);
+  padding: 0 var(--chip-pad-x);
+  border-radius: var(--chip-radius);
+  border: 1px solid var(--border);
+  background: var(--bg-elev);
+  color: var(--fg);
+  font-size: var(--chip-font);
+  line-height: 1;
+  white-space: nowrap;
+  flex: 0 0 auto;
+  /* The chip is a LABEL here, not a control. A tappable chip gets 44px of its
+   * own; these 32px pills are read, and the row around them is the target. */
+  user-select: none;
+}
+
+.chip--in-stock {
+  background: var(--chip-found-bg);
+  color: var(--chip-found-fg);
+  border-color: var(--chip-found-border);
+}
+
+/* A hand fix is an OUTLINE, not a fill: a `manual` row must be able to say
+ * "this one I matched by hand" without also claiming to be the strongest
+ * evidence in the row. */
+.chip--manual {
+  background: var(--chip-manual-bg);
+  color: var(--chip-manual-fg);
+  border-color: var(--chip-manual-border);
+  border-style: solid;
+  border-width: 2px;
+}
+
+.chip--have-been-buying {
+  background: var(--chip-ignored-bg);
+  color: var(--chip-ignored-fg);
+  border-color: var(--chip-ignored-border);
+}
+
+.chip--assumed-staple {
+  background: var(--chip-assumed-bg);
+  color: var(--chip-assumed-fg);
+  border-color: var(--chip-assumed-border);
+}
+
+.chip--ignored-seasoning {
+  background: var(--chip-ignored-bg);
+  color: var(--chip-ignored-fg);
+  border-color: var(--chip-ignored-border);
+  border-style: dashed;
+}
+
+.chip--missing {
+  background: var(--chip-missing-bg);
+  color: var(--chip-missing-fg);
+  border-color: var(--chip-missing-border);
+  font-weight: 600;
+}
+
+/* --- Setting rows (设置) --------------------------------------------------
+ * The row is the tap target, so it carries the 44px minimum itself and the
+ * label column is allowed to shrink rather than pushing the control off the
+ * right edge (min-width: 0 again, on a flex child). */
+.setting-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--gap);
+  min-height: var(--tap-min);
+  padding: var(--tap-gap) 0;
+  border-top: 1px solid var(--border);
+}
+
+.setting-row__text {
   display: flex;
   flex-direction: column;
-  gap: var(--gap);
-  padding: 0 16px;
+  min-width: 0;
+  gap: 2px;
 }
 
-.banners:empty {
-  display: none;
+.setting-row__label {
+  font-weight: 600;
 }
 
-#app-error:empty {
-  display: none;
+.setting-row__note {
+  font-size: 0.8rem;
+}
+
+.settings-actions {
+  display: flex;
+  gap: var(--tap-gap);
+  padding-top: var(--tap-gap);
+}
+
+.settings-subhead {
+  margin: 20px 0 4px;
+  font-size: 0.95rem;
+  color: var(--fg-muted);
+}
+
+.button {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elev);
+  color: var(--fg);
+  /* pwa.css already guarantees min-width/min-height 44px on `button`; the
+   * padding is what makes the visual box fill that target. */
+  padding: 10px 16px;
+  font: inherit;
+  cursor: pointer;
+}
+
+.button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+.toggle {
+  appearance: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--fg);
+  padding: 10px 14px;
+  font: inherit;
+  cursor: pointer;
+  flex: 0 0 auto;
+}
+
+.toggle[aria-pressed='true'] {
+  background: var(--accent);
+  color: var(--accent-fg);
+  border-color: var(--accent);
+}
+
+/* A stepper control (a quantity +/- pair) is two 44px buttons with the value
+ * between them; the gap is --tap-gap so the targets never touch. */
+.stepper {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--tap-gap);
+}
+
+.stepper__value {
+  min-width: 3ch;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+.pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 2px 8px;
+  border-radius: var(--chip-radius);
+  border: 1px solid var(--chip-assumed-border);
+  background: var(--chip-assumed-bg);
+  color: var(--chip-assumed-fg);
+  font-size: 0.75rem;
+}
+
+.version-badge {
+  margin-left: auto;
+  color: var(--fg-muted);
+  font-size: 0.75rem;
+  font-variant-numeric: tabular-nums;
 }
