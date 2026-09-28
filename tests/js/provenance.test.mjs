@@ -43,7 +43,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import { register } from 'node:module';
 import { dirname, join } from 'node:path';
 import test from 'node:test';
@@ -67,6 +67,7 @@ const {
   mount: mountProvenance,
   tierText,
   joinCounts,
+  joinTierText,
   JOIN_STATE_LABELS,
   JOIN_STATE_SENTENCES,
   RESOLVE_LABEL,
@@ -163,6 +164,140 @@ function listPayload(recipes, overrides = {}) {
  *   - `Easy Fragrant Fried Rice` slot 0 is a hand fix (`manual`), the one
  *     `matchMethod` the app never derives.
  */
+/**
+ * §9.13.4's `stockJoin` table, as the server publishes it.
+ *
+ * These are the app's OWN frozen numbers, read out of `tests/pantry/test_stock_join.py`
+ * and the frozen `Pantry.md`: 45 product lines, 3 on the exact tier, 40 on the
+ * basename tier, 2 through `line_overrides.yaml`, 0 unresolved. A subset is
+ * reproduced here because 45 cards in a unit test buys nothing — but every row
+ * is a real row, including the three shapes the table has to get right:
+ *
+ *   - a **basename hit** — `空心菜嫩苗 0.95-1.05 磅` reaching id 83, which is not
+ *     the name on the line;
+ *   - a **duplicate-name join** — the real `organic 1% milk` collision, [90, 116],
+ *     which must publish BOTH ids or the loser vanishes with no diagnostic;
+ *   - a **tier-3 override hit** — `Sanpellegrino CIAO! Peach Sparkling Water,
+ *     24-Pack`, the line no catalog row explains without
+ *     `app/pantry/line_overrides.yaml`;
+ *   - and a **miss**, driven by the test below rather than by the shipped file:
+ *     the frozen note has zero of them, and a table that only ever renders
+ *     `joined` rows is exactly the table that would read as healthy while the
+ *     join was broken.
+ */
+const FROZEN_JOIN = {
+  lineCount: 7,
+  unjoinedCount: 2,
+  tierCounts: { exact: 1, basename: 2, override: 2 },
+  guidance:
+    '这个 join 只有三层（精确名 → basename → line_overrides.yaml），没有第四层，也没有第二次重扫：' +
+    '它没有物化的表可以重扫。三层都没命中的那一行只是不在在货名单里 —— ' +
+    '这不是“家里没有”的证据，但也不会自己变好。' +
+    'app/pantry/line_overrides.yaml 是承重的、不是装饰：没有它，一个 miss 唯一的修法就是改你自己的库。',
+  lines: [
+    {
+      lineIndex: 360,
+      section: '1',
+      text: '空心菜嫩苗 0.95-1.05 磅',
+      core: '空心菜嫩苗 0.95-1.05 磅',
+      stockJoinState: 'joined',
+      tier: 2,
+      pantryItemIds: [83],
+      overrideKey: '空心菜嫩苗 0.95-1.05 磅',
+      overrideName: null,
+      repairHint: null,
+    },
+    {
+      lineIndex: 372,
+      section: '1',
+      text: '365 By Whole Foods Market, Organic 1% Milk, 32 Fl Oz',
+      core: 'Organic 1% Milk',
+      stockJoinState: 'joined',
+      tier: 2,
+      // The real collision from `COLLISIONS`: two catalog rows, one product.
+      pantryItemIds: [90, 116],
+      overrideKey: 'organic 1% milk',
+      overrideName: null,
+      repairHint: null,
+    },
+    {
+      lineIndex: 480,
+      section: '2',
+      text: 'Sanpellegrino CIAO! Peach Sparkling Water, 24-Pack',
+      core: 'CIAO! Peach Sparkling Water 24-Pack',
+      stockJoinState: 'override',
+      tier: 3,
+      pantryItemIds: [48],
+      overrideKey: 'ciao! peach sparkling water 24-pack',
+      overrideName: null,
+      repairHint: null,
+    },
+    {
+      lineIndex: 500,
+      section: '2',
+      text: '禾苑 蟹粉鱼肉狮子头 冷冻 280 克',
+      core: '蟹粉鱼肉狮子头 冷冻',
+      stockJoinState: 'override',
+      tier: 3,
+      pantryItemIds: [108],
+      overrideKey: '蟹粉鱼肉狮子头 冷冻',
+      overrideName: null,
+      repairHint: null,
+    },
+    {
+      lineIndex: 511,
+      section: '2',
+      text: 'Manukora Manuka Honey MGO 50+',
+      core: 'Manukora Manuka Honey MGO 50+',
+      stockJoinState: 'unresolved',
+      tier: 0,
+      pantryItemIds: [],
+      overrideKey: 'manukora manuka honey mgo 50+',
+      overrideName: null,
+      // SERVER TEXT. The client prints this and composes none of it; a test
+      // below asserts the rendered row carries this string verbatim.
+      repairHint:
+        '在 app/pantry/line_overrides.yaml 的 overrides 里加一行：' +
+        '键写 manukora manuka honey mgo 50+，值写这一行真正指向的那个 Pantry Item 的 canonical_name。' +
+        '服务器不替你猜这个值 —— 三层阶梯之外没有第四层可以猜，' +
+        '猜出来的名字只会把一个诚实的 miss 变成一个错答案。',
+    },
+    {
+      lineIndex: 540,
+      section: '5',
+      text: 'POM Wonderful 100% Pomegranate Juice, 48 Fl Oz',
+      core: 'POM Wonderful 100% Pomegranate Juice',
+      stockJoinState: 'joined',
+      tier: 1,
+      pantryItemIds: [157],
+      overrideKey: 'pom wonderful 100% pomegranate juice',
+      overrideName: null,
+      repairHint: null,
+    },
+    {
+      // The second miss shape: the override tier FIRED and did not resolve, so
+      // the server has a real `canonical_name` to report — the stale one the
+      // reviewed file names. The remedy differs (fix or delete the entry, do not
+      // add a second), so the hint differs, and a table that rendered both misses
+      // with one sentence would be wrong about half of them.
+      lineIndex: 561,
+      section: '6',
+      text: 'Trader Joe’s Dark Chocolate Peanut Butter Cup 6 盎司',
+      core: 'Trader Joe’s Dark Chocolate Peanut Butter Cup',
+      stockJoinState: 'unresolved',
+      tier: 0,
+      pantryItemIds: [],
+      overrideKey: 'trader joe’s dark chocolate peanut butter cup',
+      overrideName: 'Trader Joes Dark Chocolate Peanut Butter Cups',
+      repairHint:
+        '这一行已经有一条覆盖了，但它的值 Trader Joes Dark Chocolate Peanut Butter Cups ' +
+        '在现在的 live 目录里查不到（打错了，或者产品被重新导入改了名）。' +
+        '把 app/pantry/line_overrides.yaml 里键 trader joe’s dark chocolate peanut butter cup ' +
+        '的值改成一个目录里真实存在的 canonical_name，或者删掉这一行。',
+    },
+  ],
+};
+
 const FROZEN = listPayload(
   [
     recipe('拌空心菜', [
@@ -235,7 +370,7 @@ const FROZEN = listPayload(
       slot(1, { rawValue: '🥚', parsedName: '鸡蛋' }),
     ]),
   ],
-  { stockUnjoinedCount: 2, staleMappingCount: 1, skipped: 1 },
+  { stockUnjoinedCount: 2, staleMappingCount: 1, skipped: 1, stockJoin: FROZEN_JOIN },
 );
 
 /* --- harness -------------------------------------------------------------- */
@@ -759,6 +894,54 @@ test('NO SECOND fail-closed implementation exists: only panels.js says the unava
   assert.ok(source.includes('sourceUnavailableState({ error })'));
 });
 
+test('the unavailable state is implemented EXACTLY ONCE in the whole app, not just in this view', () => {
+  /* The test above compares two files, which is the question *this view* raises.
+   * This one is the app-wide claim F1 actually needs: a 503 has one sentence,
+   * one `panelState`, and one `role`, and no second copy can appear in any module
+   * — including a module this ticket did not write. A new view that wanted to
+   * say "your pantry is unreadable" in its own words would be the failure, and a
+   * two-file comparison could not see it.
+
+   * The walk is over `app/static/js`, `js/pwa/` included, because the vendored
+   * pwa-infra modules are the least likely place to author one and the most
+   * embarrassing. */
+  const jsDir = join(REPO_ROOT, 'app', 'static', 'js');
+  const files = [];
+  const walkDir = (dir) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const full = join(dir, entry.name);
+      if (entry.isDirectory()) walkDir(full);
+      else if (entry.name.endsWith('.js')) files.push(full);
+    }
+  };
+  walkDir(jsDir);
+  assert.ok(files.length > 10, `the walk found only ${files.length} modules`);
+
+  // Three separate markers, because a copy could re-implement the state while
+  // borrowing one of the three. All three must live in exactly one file.
+  const markers = [
+    '不代表你的厨房里什么都没有',
+    "panelState: 'unavailable'",
+    "role: 'source-unavailable'",
+  ];
+  for (const marker of markers) {
+    const holders = files.filter((file) => readFileSync(file, 'utf8').includes(marker));
+    assert.deepEqual(
+      holders.map((file) => file.slice(REPO_ROOT.length + 1)),
+      ['app/static/js/panels.js'],
+      `${marker} is implemented in ${holders.length} files`,
+    );
+  }
+
+  // ... and the one implementation is a named export, so a caller has to import
+  // it rather than copy it.
+  assert.match(
+    readFileSync(PANELS_SOURCE, 'utf8'),
+    /export function sourceUnavailableState\(/,
+    'the shared implementation is no longer exported',
+  );
+});
+
 test('an ordinary failure offers a retry, and an empty list is the SHARED empty state', async () => {
   const dom = install();
   const unmount = await mountFrozen(dom, null, {
@@ -1133,6 +1316,364 @@ test('a hung re-resolve re-enables its control instead of freezing the view (§8
   dom.runTimers();
   assert.equal(resolve.disabled, false, 'the watchdog never re-enabled the control');
   assert.ok(dom.byData('resolve-stalled')[0], 'a stalled request reported nothing');
+  unmount();
+  dom.restore();
+});
+
+/* ==========================================================================
+   8. §9.13.4's per-line Stock Join table
+   ========================================================================== */
+
+test('the table renders every line, in note order, with the tier counts in numbers', async () => {
+  const dom = install();
+  const unmount = await mountFrozen(dom);
+  const table = dom.byData('join-table')[0];
+  assert.ok(table, 'no Stock Join table rendered');
+
+  // The counts are the join's own, and they are three NAMED numbers rather than
+  // a total: "3 of 45" is a health signal and "45" alone is not.
+  const pairs = fieldPairs(table);
+  assert.equal(pairs.get('join 看到的行数'), '7');
+  assert.equal(pairs.get('其中没对上的（服务器计数）'), '2');
+  assert.equal(pairs.get('第一层 精确名 命中'), '1');
+  assert.equal(pairs.get('第二层 basename 命中'), '2');
+  assert.equal(pairs.get('第三层 line_overrides.yaml 命中'), '2');
+
+  // One card per line, in `lineIndex` order — a row's position on screen is its
+  // position in the note, which is where a user looks for it.
+  const rows = dom.byData('join-line');
+  assert.equal(rows.length, 7);
+  assert.deepEqual(rows.map((node) => Number(node.dataset.line)), [360, 372, 480, 500, 511, 540, 561]);
+  assert.equal(dom.byData('join-lines')[0].dataset.count, '7');
+  unmount();
+  dom.restore();
+});
+
+test('a row shows the raw line, the product core, the state, and the tier that fired', async () => {
+  const dom = install();
+  const unmount = await mountFrozen(dom);
+  const basename = dom.byData('join-line').find((node) => node.dataset.line === '360');
+
+  // The line as written and the core the index was asked with are DIFFERENT
+  // strings, and the difference is the whole reason the basename tier exists.
+  assert.equal(fieldValue(basename, '原文 text'), '空心菜嫩苗 0.95-1.05 磅');
+  assert.equal(fieldValue(basename, '规范化 product core'), '空心菜嫩苗 0.95-1.05 磅');
+  assert.equal(fieldValue(basename, 'stockJoinState'), JOIN_STATE_LABELS.joined);
+  assert.equal(basename.dataset.state, 'joined');
+  assert.equal(fieldValue(basename, '哪一层命中的'), 'tier 2 · basename');
+  assert.equal(fieldValue(basename, 'Pantry Item'), '#83');
+  // `overrideKey` rides on EVERY row, not only a miss: it is the string a paste
+  // has to reproduce, and a reader comparing it with the file needs it on a hit.
+  assert.equal(fieldValue(basename, '覆盖表里的键 overrideKey'), '空心菜嫩苗 0.95-1.05 磅');
+  assert.equal(basename.dataset.overrideKey, '空心菜嫩苗 0.95-1.05 磅');
+
+  // The override-tier hit says so in words, not only in a number.
+  const override = dom.byData('join-line').find((node) => node.dataset.line === '480');
+  assert.equal(fieldValue(override, '哪一层命中的'), 'tier 3 · line_overrides.yaml，靠 line_overrides.yaml');
+  assert.equal(override.dataset.state, 'override');
+  assert.equal(fieldValue(override, 'Pantry Item'), '#48');
+  unmount();
+  dom.restore();
+});
+
+test('a duplicate catalog name shows BOTH candidate ids, never one', async () => {
+  const dom = install();
+  const unmount = await mountFrozen(dom);
+  const duplicate = dom.byData('join-line').find((node) => node.dataset.line === '372');
+
+  // The real `organic 1% milk` collision. One id here would have been a winner
+  // picked by insertion order, and the loser would have vanished with no
+  // diagnostic — the one failure a name lookup must never have.
+  assert.deepEqual(duplicate.dataset.itemIds.split(','), ['90', '116']);
+  assert.equal(fieldValue(duplicate, 'Pantry Item'), '#90、#116');
+  unmount();
+  dom.restore();
+});
+
+test('a miss names the key to paste, and the guidance is the SERVER\'s sentence verbatim', async () => {
+  const dom = install();
+  const unmount = await mountFrozen(dom);
+  const miss = dom.byData('join-line').find((node) => node.dataset.line === '511');
+
+  // The key is the normalized core, and it is the exact string the override file
+  // is keyed by — a raw line pasted as a key never fires and the loader refuses
+  // to start on one.
+  assert.equal(fieldValue(miss, '覆盖表里的键 overrideKey'), 'manukora manuka honey mgo 50+');
+  assert.equal(miss.dataset.overrideKey, 'manukora manuka honey mgo 50+');
+  // The server names the KEY and refuses to invent the value. `overrideName` is
+  // null here, so the row shows no value at all rather than a plausible one.
+  assert.equal(miss.dataset.overrideName, '');
+  assert.equal(fieldValue(miss, '覆盖表里的值 overrideName'), null);
+  assert.equal(miss.dataset.tier, '0');
+  assert.equal(fieldValue(miss, 'Pantry Item'), null, 'a miss published an id');
+  // TIER 0 IS NOT A TIER. All three ran and adopted nothing, which is a
+  // different fact from a slot nothing has looked at yet.
+  assert.ok(fieldValue(miss, '哪一层命中的').includes('没有层级命中'));
+  assert.equal(/tier 0 ·/.test(fieldValue(miss, '哪一层命中的')), false);
+
+  // **THE GUIDANCE IS PRINTED, NOT COMPOSED.** The rendered text is the payload's
+  // string, character for character. A client that built its own sentence from
+  // `overrideKey` plus a template would differ here, which is the assertion.
+  const repair = dom.byData('join-repair').find((node) => node.parentNode === miss);
+  assert.ok(repair, 'the miss row carries no repair guidance');
+  assert.equal(repair.textContent, FROZEN_JOIN.lines.find((l) => l.lineIndex === 511).repairHint);
+  assert.ok(repair.textContent.includes('manukora manuka honey mgo 50+'), 'the key is not named');
+  assert.ok(repair.textContent.includes('app/pantry/line_overrides.yaml'), 'the file is not named');
+  // The refusal, stated by the server and not softened here.
+  assert.ok(repair.textContent.includes('不替你猜'), repair.textContent);
+
+  // NON-VACUITY: a resolved row has nothing to repair and says nothing. A hint on
+  // a joined row would invite a repair of a line the join already explained.
+  const resolved = dom.byData('join-line').filter((node) => node.dataset.state !== 'unresolved');
+  assert.equal(resolved.length, 5);
+  assert.equal(
+    dom.byData('join-repair').length,
+    2,
+    'exactly the two misses carry guidance',
+  );
+  unmount();
+  dom.restore();
+});
+
+test('a stale override names the name it tried, and the remedy differs from a plain miss', async () => {
+  const dom = install();
+  const unmount = await mountFrozen(dom);
+  const stale = dom.byData('join-line').find((node) => node.dataset.line === '561');
+
+  assert.equal(stale.dataset.overrideName, 'Trader Joes Dark Chocolate Peanut Butter Cups');
+  assert.equal(
+    fieldValue(stale, '覆盖表里的值 overrideName'),
+    'Trader Joes Dark Chocolate Peanut Butter Cups',
+  );
+  const repair = dom.byData('join-repair').find((node) => node.parentNode === stale);
+  // A stale entry is a DIFFERENT repair from a missing one: fix or delete the
+  // existing entry. One sentence for both misses would be wrong about one of them.
+  assert.ok(repair.textContent.includes('查不到'), repair.textContent);
+  assert.equal(
+    repair.textContent,
+    FROZEN_JOIN.lines.find((l) => l.lineIndex === 561).repairHint,
+    'the stale-override guidance was composed rather than sent',
+  );
+  assert.equal(/不替你猜/.test(repair.textContent), false, 'a stale name IS known; do not refuse to name it');
+  unmount();
+  dom.restore();
+});
+
+test('the table states the join\'s weakness in the server\'s words, and never invents a name', async () => {
+  const dom = install();
+  const unmount = await mountFrozen(dom);
+  const guidance = textOf(dom.byData('join-guidance')[0]);
+
+  // Printed verbatim. A client-composed caveat would differ, and the difference
+  // is the assertion — the sentence is about a file format only the server reads.
+  assert.equal(guidance, FROZEN_JOIN.guidance);
+  // Three tiers, and NO RE-RESOLUTION PASS: there is no materialized stock-join
+  // table to re-sweep, so a miss does not repair itself. That is the fact a user
+  // needs before deciding a `have-been-buying` chip is wrong.
+  assert.ok(guidance.includes('没有第二次重扫'), guidance);
+  assert.ok(guidance.includes('app/pantry/line_overrides.yaml'), guidance);
+  assert.ok(guidance.includes('家里没有'), 'the table does not keep a miss from reading as a verdict');
+  // The section's own static caveat stays: it is the design statement, and a
+  // pre-existing test pins its wording.
+  assert.ok(textOf(dom.byData('join-caveat')[0]).includes('没有第二次重扫'));
+  unmount();
+  dom.restore();
+});
+
+test('joinTierText names all three tiers and refuses to print tier 0 as one', () => {
+  assert.equal(joinTierText(1, 'joined'), 'tier 1 · 精确名 exact');
+  assert.equal(joinTierText(2, 'joined'), 'tier 2 · basename');
+  assert.equal(joinTierText(3, 'override'), 'tier 3 · line_overrides.yaml，靠 line_overrides.yaml');
+  // No tier fired. All three ran and adopted nothing — NOT "tier 0 resolved".
+  const none = joinTierText(0, 'unresolved');
+  assert.ok(none.includes('没有层级命中'), none);
+  assert.equal(/tier 0 ·/.test(none), false);
+  // A value the server did not send is named as unrecognised, never coerced.
+  assert.ok(joinTierText(9, 'joined').includes('没见过的 join 层级'), joinTierText(9, 'joined'));
+  assert.ok(joinTierText(undefined, 'joined').includes('没有层级命中'));
+  assert.ok(joinTierText('nonsense', 'joined').includes('没有层级命中'));
+});
+
+test('F7 survives the table: toggling 调试 repaints it from the payload with ZERO requests', async () => {
+  const dom = install();
+  const unmount = await mountFrozen(dom);
+  assert.equal(dom.byData('join-line').length, 7);
+
+  const before = fetches.length;
+  setDebugEnabled(true);
+  await settle();
+  // The table is a field on the response this view already read, so the toggle
+  // repaints it like everything else here and asks for nothing.
+  assert.equal(fetches.length, before, 'toggling 调试 fetched the join table (F7: render-only)');
+  assert.equal(dom.byData('join-line').length, 7, 'the repaint lost rows');
+  assert.equal(dom.byData('join-table').length, 1, 'the repaint lost the table');
+  assert.equal(dom.byData('join-repair').length, 2, 'the repaint lost the miss guidance');
+  // And the repaint is a repaint, not a no-op: the provenance line is what the
+  // toggle is FOR, and the table is repainted in the same pass.
+  assert.equal(dom.byData('provenance').length, 8, 'the toggle did not repaint the chips');
+  // Every fetches entry is the one list read the mount made. A second route for
+  // the table would show up here as a URL the view should not have needed.
+  assert.deepEqual(
+    [...new Set(fetches.map((entry) => entry.url))],
+    ['/api/recipes?strict=0'],
+    'the view opened a data path the payload already carried',
+  );
+
+  setDebugEnabled(false);
+  await settle();
+  assert.equal(fetches.length, before, 'turning 调试 off made a request');
+  assert.equal(dom.byData('join-line').length, 7);
+  unmount();
+  dom.restore();
+});
+
+test('a 503 paints the ONE unavailable panel and NO table: there is nothing to render', async () => {
+  const dom = install();
+  const unmount = await mountFrozen(dom, null, {
+    other: () => json({ requestId: 'req-join-503', code: 'pantry_stock_unreadable' }, 503),
+  });
+
+  // A 503 body is exactly `{requestId, code}`. There is no `stockJoin` in it, and
+  // a table left over from a previous good paint would be a STALE table beside a
+  // refusal to read the source it came from — the worse of the two failures.
+  const panel = dom.byData('source-unavailable')[0];
+  assert.ok(panel, 'the 503 painted no unavailable state');
+  assert.equal(panel.dataset.panelState, 'unavailable');
+  assert.ok(textOf(panel).includes('pantry_stock_unreadable'));
+  assert.equal(dom.byData('join-table').length, 0, 'a 503 rendered a join table');
+  assert.equal(dom.byData('join-line').length, 0, 'a 503 rendered join rows');
+  assert.equal(dom.byData('join-guidance').length, 0, 'a 503 rendered the guidance');
+  assert.equal(dom.byData('join-table-absent').length, 0, 'a 503 rendered the absent-field note');
+  assert.equal(dom.byData('slot').length, 0, 'a 503 rendered slot cards');
+  assert.equal(textOf(dom.root).includes('重试'), false, 'F1\'s failure is permanent; no retry is offered');
+
+  // ... and a 503 that arrives AFTER a good paint still clears the table.
+  const dom2 = install();
+  const unmount2 = await mountFrozen(dom2);
+  assert.equal(dom2.byData('join-line').length, 7);
+  setResponder({ list: null, other: () => json({ requestId: 'r2', code: 'pantry_stock_unreadable' }, 503) });
+  dom2.window.dispatchEvent({ type: 'online' });
+  await settle();
+  assert.equal(dom2.byData('join-line').length, 0, 'a stale table survived a 503');
+  assert.equal(dom2.byData('source-unavailable').length, 1);
+  unmount2();
+  dom2.restore();
+  unmount();
+  dom.restore();
+});
+
+test('a response with no stockJoin says the field is absent, not that the join saw nothing', async () => {
+  const dom = install();
+  // A server that predates this view. The honest rendering is a named absence:
+  // an empty table here would read as "the join saw no lines", which is the one
+  // blank this table exists to prevent.
+  const { stockJoin, ...withoutTable } = FROZEN;
+  const unmount = await mountFrozen(dom, withoutTable);
+  assert.equal(dom.byData('join-table').length, 0, 'a table was invented from an absent field');
+  const note = dom.byData('join-table-absent')[0];
+  assert.ok(note, 'an absent field rendered nothing at all');
+  assert.ok(note.textContent.includes('没有 stockJoin'), note.textContent);
+  assert.equal(/0 行|没有任何产品行/.test(textOf(note)), false, 'an absence was rendered as a count');
+  // And the rest of the screen is unaffected: the slots still render.
+  assert.equal(dom.byData('slot').length, 8);
+  void stockJoin;
+  unmount();
+  dom.restore();
+});
+
+test('a clean join with zero misses still renders the table and says the count is 0', async () => {
+  const dom = install();
+  const clean = {
+    ...FROZEN_JOIN,
+    lineCount: 5,
+    unjoinedCount: 0,
+    tierCounts: { exact: 1, basename: 2, override: 2 },
+    lines: FROZEN_JOIN.lines.filter((line) => line.stockJoinState !== 'unresolved'),
+  };
+  const unmount = await mountFrozen(dom, listPayload(FROZEN.recipes, { ...FROZEN, stockJoin: clean }));
+  const pairs = fieldPairs(dom.byData('join-table')[0]);
+  // "0" is the number that trains the eye to skip the field, so it is printed.
+  assert.equal(pairs.get('其中没对上的（服务器计数）'), '0');
+  assert.equal(dom.byData('join-line').length, 5);
+  assert.equal(dom.byData('join-repair').length, 0);
+  // No misses and no empty state: the table is populated, so nothing is missing.
+  assert.equal(dom.byData('join-lines-empty').length, 0);
+  unmount();
+  dom.restore();
+});
+
+test('an empty Pantry.md renders a named empty table rather than nothing', async () => {
+  const dom = install();
+  const empty = { lineCount: 0, unjoinedCount: 0, tierCounts: { exact: 0, basename: 0, override: 0 }, guidance: FROZEN_JOIN.guidance, lines: [] };
+  const unmount = await mountFrozen(dom, listPayload(FROZEN.recipes, { ...FROZEN, stockJoin: empty }));
+  const emptyState = dom.byData('join-lines-empty')[0];
+  assert.ok(emptyState, 'an empty join rendered nothing at all');
+  // The distinction this table exists to keep: no product lines is a real
+  // answer, and it is NOT the same as "the source is unreadable" (which is a 503
+  // panel) nor as "the field is absent" (which is a different note above).
+  assert.ok(emptyState.textContent.includes('没有看到任何产品行'), emptyState.textContent);
+  assert.equal(dom.byData('join-line').length, 0);
+  unmount();
+  dom.restore();
+});
+
+test('the table renders vault- and catalog-sourced text as textContent, never as markup', async () => {
+  const dom = install();
+  // A line whose text is markup. `el()` is textContent-only, so this must land
+  // on screen as the literal characters and must not create an element.
+  const hostile = {
+    ...FROZEN_JOIN,
+    lines: [
+      {
+        ...FROZEN_JOIN.lines[0],
+        lineIndex: 999,
+        text: '<img src=x onerror="globalThis.__pwned=1"><b>bold</b>',
+        core: '<script>globalThis.__pwned=2</script>',
+        stockJoinState: 'unresolved',
+        tier: 0,
+        pantryItemIds: [],
+        overrideKey: '<img src=x>',
+        overrideName: null,
+        repairHint: '把 <b>键</b> 写进 overrides',
+      },
+    ],
+    lineCount: 1,
+    unjoinedCount: 1,
+  };
+  const unmount = await mountFrozen(dom, listPayload(FROZEN.recipes, { ...FROZEN, stockJoin: hostile }));
+  const row = dom.byData('join-line')[0];
+  assert.equal(row.dataset.line, '999');
+  assert.equal(fieldValue(row, '原文 text'), '<img src=x onerror="globalThis.__pwned=1"><b>bold</b>');
+  // No element was created from any of it.
+  assert.equal(dom.root.querySelectorAll('img').length, 0);
+  assert.equal(dom.root.querySelectorAll('b').length, 0);
+  assert.equal(dom.root.querySelectorAll('script').length, 0);
+  assert.equal(globalThis.__pwned, undefined);
+  // The guidance is text too, for the same reason.
+  assert.equal(dom.byData('join-repair')[0].textContent, '把 <b>键</b> 写进 overrides');
+  unmount();
+  dom.restore();
+});
+
+test('F17 and the path rule hold on the table: no cookable, and no path anywhere', async () => {
+  const dom = install();
+  const unmount = await mountFrozen(dom);
+  const text = textOf(dom.root);
+
+  assert.equal(/cookable/.test(text), false, 'the table names a boolean');
+  for (const node of walk(dom.root)) {
+    for (const [key, value] of Object.entries(node.dataset)) {
+      assert.equal(/cookable/i.test(`${key}=${value}`), false, `${key}=${value}`);
+    }
+  }
+  // `section` is the note's own heading NUMBER, published on purpose — it is how
+  // a reader finds the line. The directory the note lives in is server-owned
+  // layout and is never on the wire or on screen.
+  for (const row of dom.byData('join-line')) {
+    assert.match(row.dataset.section, /^\d*$/, row.dataset.section);
+  }
+  assert.equal(/\/(Users|home|var|opt|private)\//.test(text), false, 'an absolute path is on screen');
+  assert.equal(/[\w/一-鿿]+\/Pantry\.md/.test(text), false, 'the note was named with its directory');
   unmount();
   dom.restore();
 });

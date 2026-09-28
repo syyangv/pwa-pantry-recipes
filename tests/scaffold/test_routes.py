@@ -256,6 +256,7 @@ def test_every_spec_route_responds_through_the_mounted_app(domain_client: TestCl
         "staleMappingCount",
         "stockUnjoinedCount",
         "skipped",
+        "stockJoin",
     }
 
     detail = domain_client.get(f"/api/recipes/{MAIN_RECIPE}")

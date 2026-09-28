@@ -53,6 +53,26 @@
  * configured path). `el()` is textContent-only, so a Pantry Item name from the
  * catalog and a slot's `rawValue` from the vault can never become markup.
  *
+ * **§9.13.4's PER-PANTRY-LINE STOCK JOIN TABLE IS HERE, AND IT IS SERVER TEXT.**
+ * `payload.stockJoin` carries every open product line with its raw text, its
+ * normalized product core, its `stockJoinState`, the tier that fired, and — for
+ * a duplicate catalog name — **both** candidate ids, because §9.13.4 wants the
+ * ambiguity visible before it becomes a wrong chip. It is a field on the one
+ * response this view already reads, not a second route: the same `StockJoin`
+ * object produced `stockUnjoinedCount` and every slot's `stockJoinState`, and a
+ * table from a second read could contradict the count printed beside it. So the
+ * 调试 toggle repaints it like everything else here, with **zero** requests.
+ *
+ * **THE SENTENCES IN THAT TABLE ARE SENT, NOT WRITTEN.** The `guidance`
+ * paragraph and each miss's `repairHint` arrive as finished text and are
+ * printed verbatim; this file composes no sentence about `line_overrides.yaml`.
+ * That file is reviewed source whose key must already be NFKC + trim +
+ * casefolded or the app refuses to boot, so the rules about it belong to the
+ * server that reads it. A miss's `repairHint` therefore also says the honest
+ * thing: the server names the *key* to paste and refuses to invent the
+ * `canonical_name` beside it, because the join has no tier that could know one
+ * and a guess would be the fourth tier in disguise.
+ *
  * **F1's 503 IS #21's PANEL, VERBATIM, AND NOT A SECOND COPY.** A 503 body is
  * exactly `{requestId, code}` — there is no `recipes` key — so a view that
  * assumed a list would paint an empty screen, and an empty provenance table
@@ -183,6 +203,33 @@ export function tierText(slot) {
     return `tier ${tier} · unresolved：阶梯跑完了，什么都没有采用。`;
   }
   return `tier ${tier} · ${method}`;
+}
+
+/**
+ * Which of the join's three tiers fired, for one Stock Join line.
+ *
+ * **`tier 0` is NOT a tier**, and it is a *different* fact from the slot-level
+ * `tier 0` in `tierText()` above: a `材料` slot with no mapping row is "nothing
+ * has looked at this slot yet", while a pantry line at tier 0 is "all three
+ * tiers looked and adopted nothing". Both print as a non-tier for the same
+ * reason — a bare `0` reads as a tier that fired and resolved to nothing.
+ *
+ * A value the server did not send, or sent as something else, is named as
+ * unrecognised rather than folded into a real tier, for the same reason
+ * `joinStateLabel` does it.
+ */
+export function joinTierText(tier, state) {
+  const number = Number(tier);
+  if (!Number.isFinite(number) || number <= 0) {
+    return '没有层级命中（tier 0）：三层（精确名 → basename → 覆盖表）都跑过了，什么都没有采用。';
+  }
+  const names = { 1: '精确名 exact', 2: 'basename', 3: 'line_overrides.yaml' };
+  const name = names[number];
+  if (!name) {
+    return `服务器给了一个没见过的 join 层级：${String(tier)}，所以按“没法判断”显示。`;
+  }
+  const via = state === 'override' ? '，靠 line_overrides.yaml' : '';
+  return `tier ${number} · ${name}${via}`;
 }
 
 /** `sha256:…` -> a 12-char prefix. A revision, not a path and not a URL. */
@@ -325,6 +372,7 @@ export function mount(root) {
   const meta = el('p', { class: 'muted', dataset: { role: 'meta' } });
   const banner = el('div', { dataset: { role: 'banner' } });
   const joinSlot = el('div', { dataset: { role: 'join-slot' } });
+  const joinTableSlot = el('div', { dataset: { role: 'join-table-slot' } });
   const resolveSlot = el('div', { dataset: { role: 'resolve-slot' } });
   const body = el('div', { dataset: { role: 'body' } }, [loadingState('正在读菜谱和库存的溯源信息…')]);
 
@@ -387,6 +435,7 @@ export function mount(root) {
           '唯一的修法是在 app/pantry/line_overrides.yaml 里加一行被评审过的名字，而不是去改你的库。',
       }),
       joinSlot,
+      joinTableSlot,
       actions,
       resolveSlot,
       el('h3', { class: 'settings-subhead', text: '逐格溯源' }),
@@ -836,6 +885,102 @@ export function mount(root) {
     ]);
   }
 
+  /**
+   * §9.13.4's per-line Stock Join table.
+   *
+   * **A CARD PER LINE, not a `<table>`, for the reason the slot cards give**:
+   * §9.4 allows exactly ONE horizontal scroller in this app and the chip row
+   * spends it. Six fields per row is what fits a card; a `<table>` would need a
+   * second scroller or a squeezed column.
+   *
+   * **THE TEXT IS SERVER-SUPPLIED AND THIS FUNCTION COMPOSES NONE OF IT.** The
+   * `guidance` paragraph and each miss's `repairHint` arrive as finished
+   * sentences from `GET /api/recipes`, and they are printed verbatim. They are
+   * server text because they are statements about `line_overrides.yaml` — a
+   * reviewed source file whose key must already be NFKC + trim + casefolded or
+   * the app refuses to boot. A client composing that sentence would own a fact
+   * about a file it cannot read, and would compose it wrong the first time the
+   * format changed. Everything below that is a *label* or a *projection* of a
+   * field is this view's; every claim is the server's.
+   *
+   * **`el()` is textContent-only, so a `Pantry.md` line and a catalog name can
+   * never become markup.** Both are user- and catalog-sourced free text and the
+   * whole table is built through `el()`; there is no `innerHTML` anywhere below.
+   */
+  function joinLineCard(line) {
+    const ids = Array.isArray(line.pantryItemIds) ? line.pantryItemIds : [];
+    const fields = [
+      field('原文 text', line.text),
+      field('规范化 product core', line.core),
+      field('stockJoinState', joinStateLabel(line.stockJoinState)),
+      field('哪一层命中的', joinTierText(line.tier, line.stockJoinState)),
+      // BOTH ids on a duplicate name, joined by `、` — §9.13.4 wants the
+      // ambiguity visible here, before it becomes a wrong chip downstream. One
+      // id would have been a winner picked by insertion order.
+      ids.length ? field('Pantry Item', ids.map((id) => `#${id}`).join('、')) : null,
+      field('区（笔记里的小节号，不是路径）', line.section),
+      // `overrideKey` is the string a paste has to reproduce, so it is shown on
+      // EVERY row and not only on a miss: it is the same `fold_name` the override
+      // file is keyed by, and a reader comparing it against the file needs to
+      // see it on a hit too.
+      field('覆盖表里的键 overrideKey', line.overrideKey),
+      line.overrideName ? field('覆盖表里的值 overrideName', line.overrideName) : null,
+    ].filter(Boolean);
+    return el(
+      'div',
+      {
+        class: 'recipe-row',
+        dataset: {
+          role: 'join-line',
+          line: String(line.lineIndex),
+          section: String(line.section === null || line.section === undefined ? '' : line.section),
+          state: String(line.stockJoinState),
+          tier: String(line.tier),
+          itemIds: ids.join(','),
+          overrideKey: String(line.overrideKey === null || line.overrideKey === undefined ? '' : line.overrideKey),
+          overrideName: String(line.overrideName === null || line.overrideName === undefined ? '' : line.overrideName),
+        },
+      },
+      [
+        el('p', { class: 'recipe-row__name', dataset: { role: 'join-line-head' }, text: line.text }),
+        el('div', { class: 'fields' }, fields),
+        // The miss guidance, verbatim. Rendered ONLY when the server sent one,
+        // so a client-composed replacement cannot exist here to be asserted
+        // against: the sentence is a payload field or it is nothing.
+        line.repairHint
+          ? el('p', { class: 'muted', dataset: { role: 'join-repair' }, text: line.repairHint })
+          : null,
+      ],
+    );
+  }
+
+  function joinTable(join) {
+    const lines = Array.isArray(join && join.lines) ? join.lines : [];
+    const tiers = (join && join.tierCounts) || {};
+    return el('div', { dataset: { role: 'join-table' } }, [
+      el('div', { class: 'fields' }, [
+        field('join 看到的行数', Number(join && join.lineCount) || 0),
+        field('其中没对上的（服务器计数）', Number(join && join.unjoinedCount) || 0),
+        field('第一层 精确名 命中', Number(tiers.exact) || 0),
+        field('第二层 basename 命中', Number(tiers.basename) || 0),
+        field('第三层 line_overrides.yaml 命中', Number(tiers.override) || 0),
+      ].filter(Boolean)),
+      // The weakness, in the server's words. `tier 0` and "没有层级命中" are
+      // different facts and this row is where a miss says so in numbers.
+      el('p', {
+        class: 'muted',
+        dataset: { role: 'join-guidance' },
+        text: String((join && join.guidance) || ''),
+      }),
+      lines.length
+        ? el('div', { dataset: { role: 'join-lines', count: String(lines.length) } }, [
+            el('p', { class: 'muted', text: `下面 ${lines.length} 行是 Pantry.md 里的产品行，按笔记里的行序排列。` }),
+            ...lines.map(joinLineCard),
+          ])
+        : el('p', { class: 'muted', dataset: { role: 'join-lines-empty' }, text: 'join 没有看到任何产品行。' }),
+    ]);
+  }
+
   function paint(next) {
     payload = next;
     meta.textContent = metaLine(next);
@@ -851,6 +996,23 @@ export function mount(root) {
     }
     joinSlot.textContent = '';
     joinSlot.appendChild(joinSummary(next));
+    joinTableSlot.textContent = '';
+    // `stockJoin` is unconditional on the list (F7), so a successful response
+    // always carries it. A response without it is a *server* that predates this
+    // view, and the honest thing is to say so rather than render an empty table
+    // that reads as "the join saw nothing" — the exact blank this table exists
+    // to avoid.
+    if (next.stockJoin) {
+      joinTableSlot.appendChild(joinTable(next.stockJoin));
+    } else {
+      joinTableSlot.appendChild(
+        el('p', {
+          class: 'muted',
+          dataset: { role: 'join-table-absent' },
+          text: '这次响应里没有 stockJoin 字段，所以没有表可以画。这不是“零行”，是服务器没有发这一段。',
+        }),
+      );
+    }
     body.textContent = '';
     if (!next.recipes.length) {
       // The SHARED empty state, and reachable only from a SUCCESSFUL empty
@@ -892,6 +1054,13 @@ export function mount(root) {
   function paintFailure(error) {
     body.textContent = '';
     joinSlot.textContent = '';
+    // Cleared on EVERY failure, and the 503 case below matters most: a 503 body
+    // is exactly `{requestId, code}`, so there is no `stockJoin` to render and a
+    // table left over from the last good paint would be a *stale* table beside
+    // a refusal to read the source it came from. The unavailable panel replaces
+    // it. There is deliberately no second unavailable state here — see the
+    // header note and `sourceUnavailableState`'s own definition.
+    joinTableSlot.textContent = '';
     if (isSourceUnavailable(error)) {
       // #21's panel, verbatim. A 503 body is exactly `{requestId, code}`: there
       // is no `recipes` key to render, and an empty table here would read as

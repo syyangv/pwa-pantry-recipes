@@ -31,6 +31,7 @@ are all written per test under `tmp_path` from the committed literals in
 
 from __future__ import annotations
 
+import json
 import os
 import stat
 from collections.abc import Iterator
@@ -66,9 +67,9 @@ from tests.api.conftest import (
 )
 
 #: §9.16's success key set for the list, plus the `skipped` count §5 requires
-#: next to the other two. Asserted as an exact set on every list test, so a
-#: payload that grew a field — or lost one — fails here rather than being noticed
-#: by a user.
+#: next to the other two, plus §9.13.4's `stockJoin` table. Asserted as an exact
+#: set on every list test, so a payload that grew a field — or lost one — fails
+#: here rather than being noticed by a user.
 LIST_KEYS: frozenset[str] = frozenset(
     {
         "recipes",
@@ -78,8 +79,33 @@ LIST_KEYS: frozenset[str] = frozenset(
         "staleMappingCount",
         "stockUnjoinedCount",
         "skipped",
+        "stockJoin",
     }
 )
+
+#: §9.13.4's per-line table. Six keys on a row, identical for a hit and a miss
+#: except where the join's answer differs (`stockJoinState`, `tier`,
+#: `pantryItemIds`, and the override half), so a client renders one shape.
+#: `overrideName` is `null` on a plain miss by design: the server names the key
+#: to paste and refuses to invent the `canonical_name` beside it.
+JOIN_TABLE_KEYS: frozenset[str] = frozenset(
+    {"lineCount", "unjoinedCount", "tierCounts", "guidance", "lines"}
+)
+JOIN_LINE_KEYS: frozenset[str] = frozenset(
+    {
+        "lineIndex",
+        "section",
+        "text",
+        "core",
+        "stockJoinState",
+        "tier",
+        "pantryItemIds",
+        "overrideKey",
+        "overrideName",
+        "repairHint",
+    }
+)
+JOIN_TIER_COUNT_KEYS: frozenset[str] = frozenset({"exact", "basename", "override"})
 
 #: One recipe row's key set. `steps` and `history` are the *detail* additions and
 #: must not leak into the list — a list that carried every step body would be a
@@ -684,31 +710,285 @@ def test_stock_unjoined_count_surfaces_f1s_misses_without_the_debug_view(
     """F1's escape hatch is load-bearing, and the counter is how it is noticed.
 
     Two of the five pantry lines resolve to nothing in the catalog, so
-    `stockUnjoinedCount` is 2 without the client opening the provenance view.
-    §9.13.4's join *table* is a later ticket's render; the count is this ticket's
-    obligation, and a UI that never renders the table still gets a rising number.
+    `stockUnjoinedCount` is 2 without the client opening the provenance view —
+    and §9.13.4's table, which now ships in the same payload, must agree with it
+    row for row. The agreement is the assertion: a table from a second read of
+    `Pantry.md` could show one miss while this counter said two, and two numbers
+    about one join that disagree is worse than no second number.
     """
     body = client.get("/api/recipes").json()
 
     assert body["stockUnjoinedCount"] == 2
     assert _by_value(body["recipes"][0], "🐟 不存在的鱼")["pantryItemId"] is None
+    table = body["stockJoin"]
+    assert table["unjoinedCount"] == 2 == body["stockUnjoinedCount"]
+    unresolved = [line for line in table["lines"] if line["stockJoinState"] == "unresolved"]
+    assert len(unresolved) == 2 == body["stockUnjoinedCount"]
 
 
-def test_no_pantry_line_text_is_published(client: TestClient) -> None:
-    """The join's *evidence* stays server-side; only its state and count travel.
+def test_a_pantry_line_travels_only_inside_the_stock_join_table(client: TestClient) -> None:
+    """A pantry line reaches the wire, and **only** inside `stockJoin`.
 
-    §9.13.4's table lists each open line with its raw text and its normalized
-    product core, and it is a **view** — a later ticket's render. Nothing here may
-    publish a line, because `GET /api/recipes` is the payload every screen holds
-    and a pantry line is the user's own to-do text.
+    This test used to assert the opposite — that no line text is published
+    anywhere — which was the state before §9.13.4's table existed and is exactly
+    what this ticket exists to change. The claim that survived the change is the
+    one worth keeping, and it is a *scope* claim rather than an absence claim: a
+    `Pantry.md` line is the user's own free text, and it belongs in the one
+    structure that is about lines and nowhere else. A line leaking into a
+    recipe's `rawValue`, into `notePath`, or into a top-level key would be a
+    pantry task masquerading as a recipe Ingredient, and the client cannot tell
+    the difference once it is a string in the wrong field.
     """
-    response = client.get("/api/recipes")
-    # `完全不存在的商品` is a pantry line and no recipe's `材料`, so its absence is
-    # the whole assertion. `🐟 不存在的鱼` is deliberately **not** in this list: it
-    # is also slot 3 of the fixture recipe, and a recipe's own `rawValue` is the
-    # one string in this payload that has to be there — D1's audit anchor.
-    for line in ("完全不存在的商品", "冰箱", "干货", "库存"):
-        assert line not in response.text, line
+    body = client.get("/api/recipes").json()
+
+    # `完全不存在的商品` is a pantry line and no recipe's `材料`, so finding it
+    # anywhere outside the table is the whole assertion. `🐟 不存在的鱼` is
+    # deliberately **not** the probe: it is also slot 3 of the fixture recipe, and
+    # a recipe's own `rawValue` is the one string here that has to be there —
+    # D1's audit anchor, and a line whose two homes are indistinguishable in a
+    # substring search.
+    pantry_only = "完全不存在的商品"
+    table_texts = [line["text"] for line in body["stockJoin"]["lines"]]
+    assert pantry_only in table_texts, "the table does not carry the line at all"
+    assert set(body["recipes"][0]["ingredients"][0]) == SLOT_KEYS
+
+    without_table = {key: value for key, value in body.items() if key != "stockJoin"}
+    assert pantry_only not in json.dumps(without_table, ensure_ascii=False)
+
+    # The note's own HEADINGS are the other half: a section number is published
+    # (`section`, which is `1`, not a path) but the title the user wrote beside it
+    # is not, because the title is not what identifies a line for a repair.
+    assert "冰箱" not in json.dumps(body["stockJoin"], ensure_ascii=False)
+    for section in (line["section"] for line in body["stockJoin"]["lines"]):
+        assert section in {"1", "2"}
+
+
+# --- §9.13.4's per-line Stock Join table --------------------------------------
+
+
+def test_the_join_table_carries_every_product_line_with_its_own_provenance(
+    client: TestClient,
+) -> None:
+    """The whole join, in note order, with a real hit and a real miss in it.
+
+    **The row shape is asserted as an exact set**, hit and miss alike, because a
+    client that renders one shape cannot render a miss that grew a key: the
+    `unresolved` row is the actionable one and a conditional key on it is a
+    crash on the row that matters most.
+    """
+    table = client.get("/api/recipes").json()["stockJoin"]
+
+    assert set(table) == JOIN_TABLE_KEYS
+    assert set(table["tierCounts"]) == JOIN_TIER_COUNT_KEYS
+    for line in table["lines"]:
+        assert set(line) == JOIN_LINE_KEYS, line
+
+    # Five open lines in the fixture note, one of which is a `k/N`-free product
+    # line per row; the `[x]` 空心菜嫩苗 row is `done` and therefore not a line
+    # the join sees at all. `lineCount` counts hits AND misses — a miss rate
+    # computed over resolved lines only reads 0% however badly the join is doing.
+    assert table["lineCount"] == len(table["lines"]) == 4
+    assert sum(table["tierCounts"].values()) == table["lineCount"] - table["unjoinedCount"]
+
+    # Note order, so a row's position on screen is its position in the vault.
+    indexes = [line["lineIndex"] for line in table["lines"]]
+    assert indexes == sorted(indexes)
+    assert len(set(indexes)) == len(indexes), "one note line produced two rows"
+
+    joined = [line for line in table["lines"] if line["stockJoinState"] == "joined"]
+    misses = [line for line in table["lines"] if line["stockJoinState"] == "unresolved"]
+    assert joined and misses, "the fixture must exercise both answers"
+    # The catalog is read-only to this app, so every resolved id is one the
+    # catalog really holds — a join that invented an id would be the confident
+    # wrong answer this whole module exists to avoid.
+    assert {line["text"]: line["pantryItemIds"] for line in joined} == {
+        "番茄": [1],
+        "鸡蛋": [2],
+    }
+    for line in misses:
+        assert line["pantryItemIds"] == [], line
+        assert line["tier"] == 0, line
+
+
+def test_a_miss_row_names_the_key_to_paste_and_refuses_to_invent_the_name(
+    client: TestClient,
+) -> None:
+    """§9.13.4's actionable row, and the honesty constraint on it.
+
+    The spec asks each `unresolved` row to name the `canonical_name` to add. The
+    server cannot know one: this join has three tiers and no fourth, a miss is
+    by definition a line no tier could explain, and naming a value would be a
+    fourth tier in disguise. So the row names the half the server *does* know —
+    `overrideKey`, the normalized core the file is keyed by — and its
+    `repairHint` says plainly that the value is the user's reviewed choice. The
+    test pins both halves, because the tempting failure is a server that fills in
+    a plausible name to make the row look complete.
+    """
+    table = client.get("/api/recipes").json()["stockJoin"]
+    misses = [line for line in table["lines"] if line["stockJoinState"] == "unresolved"]
+
+    for line in misses:
+        assert line["overrideName"] is None, "the server invented a canonical_name"
+        assert line["overrideKey"] == line["core"], "the key to paste is not the core"
+        # The key is in the form `load_line_overrides` accepts: a raw line pasted
+        # as a key produces an entry that can never fire, and the loader refuses
+        # to start on one.
+        assert line["overrideKey"] == line["overrideKey"].strip().casefold()
+        hint = line["repairHint"]
+        assert isinstance(hint, str) and hint, line
+        assert "app/pantry/line_overrides.yaml" in hint, hint
+        assert line["overrideKey"] in hint, "the hint does not name the key to paste"
+        # The refusal, stated rather than implied. A miss the server had "helpfully"
+        # filled in would read as a repair and be one.
+        assert "canonical_name" in hint and "不替你猜" in hint, hint
+
+    # A HIT publishes no hint at all: there is nothing to repair, and a hint on
+    # a resolved row would invite a repair of a line the join already explained.
+    for line in table["lines"]:
+        if line["stockJoinState"] != "unresolved":
+            assert line["repairHint"] is None, line
+            assert line["overrideName"] is None, line
+
+
+def test_a_stale_override_reports_the_name_it_tried(settings: Settings, note: Path) -> None:
+    """An override that fired and did *not* resolve names the name it tried.
+
+    A distinct failure from a plain miss, and worth reporting: the key is in the
+    reviewed file, the value is a name the live catalog does not hold, and
+    nothing else in the app would ever say so. The remedy is also different —
+    fix or delete the existing entry, do not add a second one.
+    """
+    stale = (
+        "---\nmodified_at: 2026-09-27\n---\n# 1 冰箱\n"
+        "- [ ] 一个目录里没有的商品 💵 $1.00 ➕ 2026-09-22\n"
+    ).encode()
+    write_pantry_note(settings.vault_path, stale)
+    import app.pantry.stock as stock_module
+
+    original = stock_module.LINE_OVERRIDES
+    # An entry whose value is a real name for nothing: the loader's own schema
+    # accepts it, and the join is what discovers it does not resolve.
+    stock_module.LINE_OVERRIDES = {"一个目录里没有的商品": "A Product That Does Not Exist"}
+    try:
+        with client_for(settings) as client:
+            table = client.get("/api/recipes").json()["stockJoin"]
+    finally:
+        stock_module.LINE_OVERRIDES = original
+
+    line = next(row for row in table["lines"] if row["stockJoinState"] == "unresolved")
+    assert line["overrideName"] == "A Product That Does Not Exist"
+    assert "A Product That Does Not Exist" in line["repairHint"]
+    assert "查不到" in line["repairHint"], "a stale entry is not a missing one"
+    assert line["tier"] == 0 and line["pantryItemIds"] == []
+
+
+def test_a_duplicate_name_publishes_both_candidate_ids(settings: Settings, note: Path) -> None:
+    """Eight catalog keys hold two rows each, and the table shows both.
+
+    §9.13.4 requires it so the ambiguity is visible *before* it becomes a wrong
+    chip. A single id here would have been a winner chosen by insertion order, and
+    the loser would have vanished with no diagnostic — the one failure a name
+    lookup must never have.
+    """
+    rows = (
+        (1, "番茄", "1.1", "[]", None),
+        (2, "鸡蛋", "1.1d", "[]", None),
+        (3, "空心菜嫩苗", "1.1", "[]", None),
+        (4, "李锦记 蒸鱼豉油 14 盎司", "1.1c", "[]", None),
+        (5, "Shampoo", "3.1", "[]", "Shampoo"),
+        (6, "豆腐", "1.1", "[]", None),
+        # Two rows that reduce to the SAME product core, so one pantry line
+        # reaches both and the union in `_resolve` has to keep them both. The
+        # second row's name carries a size the stripper removes, which is the
+        # real shape of a re-ingested duplicate (the same product bought twice,
+        # catalogued under two names) rather than two arbitrary rows.
+        (7, "小白菜心", "1.1", "[]", None),
+        (8, "小白菜心 300 克", "1.1", "[]", None),
+    )
+    seed_catalog(settings.pantry_items_db, rows)
+    write_pantry_note(
+        settings.vault_path,
+        ("---\nmodified_at: 2026-09-27\n---\n# 1 冰箱\n- [ ] 小白菜心 300 克\n").encode(),
+    )
+    with client_for(settings) as client:
+        table = client.get("/api/recipes").json()["stockJoin"]
+
+    line = next(row for row in table["lines"] if row["stockJoinState"] == "joined")
+    assert line["pantryItemIds"] == [7, 8], "one candidate was dropped"
+    # `text` is the line as written and `core` is what the index was asked with,
+    # and the two are different strings on purpose: the size survived the line and
+    # not the core, which is exactly the asymmetry the basename tier exists for.
+    assert line["text"] == "小白菜心 300 克"
+    assert line["core"] == "小白菜心"
+    # The join reported the BEST tier that fired, and the key it looked up, so a
+    # reader can see that one line reached a key two catalog rows hold.
+    assert line["tier"] == 1
+    assert line["overrideKey"] == "小白菜心"
+
+
+def test_the_join_table_publishes_no_path_and_no_boolean(
+    client: TestClient, runtime_root: Path
+) -> None:
+    """Two whole-payload claims, asserted by walking the JSON rather than the top
+    level — a nested `notePath` or a boolean three levels down is exactly what a
+    `set(body) == LIST_KEYS` cannot see.
+
+    No absolute path: the line text is the user's own, the section is the note's
+    own heading number, and neither may ever carry server-owned filesystem layout
+    (§9.19). No boolean: F17 forbids a `cookable` in any response in any casing,
+    and a per-line table is 45 more rows in which one could hide.
+    """
+    body = client.get("/api/recipes").json()
+    encoded = json.dumps(body, ensure_ascii=False)
+
+    # The server's own root, spelled out rather than pattern-matched: the vault
+    # and the catalog DB both live under it, so this is the one string that would
+    # appear in a leaked path and in nothing else.
+    assert str(runtime_root) not in encoded, "an absolute server path is on the wire"
+    for line in body["stockJoin"]["lines"]:
+        for key, value in line.items():
+            assert not str(value).startswith("/"), (key, value)
+            assert not isinstance(value, bool), (key, value)
+        assert isinstance(line["tier"], int) and not isinstance(line["tier"], bool)
+        assert isinstance(line["lineIndex"], int)
+    assert "cookable" not in encoded.lower()
+
+    # NON-VACUITY: the fixture really does carry a vault-relative recipe path, so
+    # "no absolute path" is a decision this module made rather than an accident of
+    # a fixture that had none to leak. The server root itself is `runtime_root`,
+    # which is under `tmp_path` and so is named in every path the app owns.
+    assert body["recipes"][0]["notePath"].startswith(RECIPES_ROOT)
+    assert not body["recipes"][0]["notePath"].startswith("/")
+    for section in (line["section"] for line in body["stockJoin"]["lines"]):
+        # A heading number, never a directory: `1` is what a repair needs to find
+        # the line, and `Logistics/库存` is server-owned layout this table must not
+        # republish.
+        assert section is None or (section.isdigit())
+
+
+def test_the_join_table_guidance_states_the_three_tiers_and_the_absence_of_a_repass(
+    client: TestClient,
+) -> None:
+    """The weakness has to be *legible*, and this is the sentence that makes it so.
+
+    Three tiers and no fourth, and **no re-resolution pass** — because there is
+    no materialized stock-join table to re-sweep, so a miss does not repair itself
+    when the catalog changes. That is the fact a user has to know before deciding
+    a `have-been-buying` chip is wrong, and it is server text because
+    `line_overrides.yaml`'s key format is a fact the client cannot see.
+    """
+    guidance = client.get("/api/recipes").json()["stockJoin"]["guidance"]
+
+    assert isinstance(guidance, str) and guidance
+    for fragment in ("三层", "line_overrides.yaml", "没有第二次重扫", "重扫"):
+        assert fragment in guidance, guidance
+    # The sentence that keeps the whole table from reading as a verdict, and the
+    # name of the only file a user may edit to fix a row.
+    assert "家里没有" in guidance
+    assert "app/pantry/line_overrides.yaml" in guidance
+    # Not a boolean and not a number dressed as one: the tier counts are the
+    # numbers, and they are three separate named keys rather than a total.
+    assert isinstance(guidance, str)
 
 
 # --- the detail route -------------------------------------------------------

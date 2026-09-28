@@ -21,7 +21,7 @@
  * the version injected into the HTML shell all derive from this constant, so
  * the served cache name and every reported version cannot drift. Bump on every
  * deploy. */
-const CACHE_VERSION = 'v0.7.0';
+const CACHE_VERSION = 'v0.7.1';
 const CACHE_NAME = `pwa-shell-${CACHE_VERSION}`;
 const API_CACHE_NAME = `pwa-api-${CACHE_VERSION}`;
 const OUTBOX_SYNC_TAG = 'outbox';

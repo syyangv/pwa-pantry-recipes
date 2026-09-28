@@ -201,6 +201,7 @@ LIST_KEYS = frozenset(
         "staleMappingCount",
         "stockRevision",
         "stockUnjoinedCount",
+        "stockJoin",
         "strict",
     }
 )

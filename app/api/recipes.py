@@ -80,10 +80,53 @@ it is never derived from `inStock`: "the join did not explain this product" and
 "this product is not on the shelf" are different facts, and conflating them would
 reproduce the bug F1 exists to prevent.
 
-**Nothing here publishes a pantry line's text.** §9.13.4's join table — the open
-lines with their normalized cores — is the provenance *view*, and rendering it is
-a later ticket's job. The state counters (`stockUnjoinedCount`,
-`unjoinedLineCount`) are what this ticket owes, and they are counts.
+**§9.13.4's per-line Stock Join table rides in THIS payload, under one key,
+`stockJoin` — and a separate route was the option weighed and rejected.** The
+reason is F7, and it is not a style preference: this response already publishes
+two *derived* views of the same `StockJoin` object — `stockUnjoinedCount` and
+every slot's `stockJoinState` — so a second route serving the same join would be
+a second read of `Pantry.md` through a second TTL window, able to disagree with
+the count printed beside it in the first. The join's only defence is that its
+misses are visible, and a table that can contradict its own counter is not
+visible, it is confusing. F7 also forbids the fetch the separate route would
+need: the 调试 toggle is render-only, and a view whose provenance arrives on a
+second response is a view with a second data path.
+
+The size is real and is measured rather than estimated: on the frozen note the
+table is **45 rows, 11,960 bytes** of JSON against a **34,501-byte** 16-recipe
+list — the response goes to 46,474 bytes, **+35%**, on every read, for one view.
+That is affordable because the list is already that size, it is loopback and
+`no-store`, and the alternative pays the same bytes plus a second request and a
+drift window. It would *not* be affordable if the list were ten recipes; the
+ratio, not the kilobytes, is the number that would change this decision, and a
+per-recipe list of 34 KB is a fact about the recipe→catalog join and not about
+this one.
+
+**The table is §9.13.4's, and it is server-owned text wherever the server has
+text to give.** A row's `text`, `core`, `overrideKey`, and `overrideName` are
+projections, but `guidance` and `repairHint` are **sentences composed here** —
+`line_overrides.yaml` is reviewed source whose key must already be NFKC + trim +
+casefolded or the app refuses to boot, and that rule is `app/pantry/stock.py`'s
+to state. A client that composed the sentence would own a fact about a file
+format it cannot see, and would compose it wrong the first time the format
+changed. A miss's `repairHint` also says the thing a join with **no** fuzzy tier
+must say honestly: the server names the *key* to paste and refuses to invent the
+`canonical_name` to paste beside it, because naming one would be a fourth tier
+wearing a disguise — the exact confident-wrong-answer class `AGENTS.md` #3 rules
+out. When the override fired and did *not* resolve, the server does have a name
+to report (`StockJoinMiss.override`) and reports it; a plain miss publishes
+`overrideName: null` and says so.
+
+**`pantryItemIds` is a LIST, not an id.** §9.13.4 requires a duplicate-name join
+to be shown with *both* candidate ids so the ambiguity is visible before it
+becomes a wrong chip, and eight basename keys in the frozen catalog hold two
+rows each. A join that reported one of the two would have picked a winner by
+insertion order — the one failure a name lookup must never have.
+
+**No path, absolute or relative, is published here.** `section` is the note's
+own heading number (`1`, `1.1`), not a filesystem location, and `text` is the
+user's own line. `/health` and the error envelope leak no server-owned path
+(§9.19) and neither does this.
 """
 
 from __future__ import annotations
@@ -110,8 +153,14 @@ from ..mapping.store import (
     UnknownPantryItem,
     candidate_payload,
 )
-from ..pantry.catalog import CatalogError, CatalogSnapshot
-from ..pantry.stock import PantryStockIndex, StockJoin, StockJoinState
+from ..pantry.catalog import CatalogError, CatalogSnapshot, fold_name
+from ..pantry.stock import (
+    PantryStockIndex,
+    StockJoin,
+    StockJoinHit,
+    StockJoinMiss,
+    StockJoinState,
+)
 from ..recipes.ingredients import parse_ingredient_value
 from ..recipes.matcher import MatchCandidate, resolve_ingredient
 from ..recipes.reader import RecipeNote, RecipeSnapshot
@@ -163,6 +212,43 @@ RESOLVE_LOCK_STATE_KEY: Final = "recipes_resolve_lock"
 #: not grow a sixth name independently of it.
 FOUND_WITHOUT_STOCK: Final[frozenset[str]] = frozenset({"manual", "staples"})
 
+#: §9.13.4's table guidance, and the reason it is a **server** string. The join
+#: has three tiers and no fourth, and it has **no re-resolution pass** because
+#: there is no materialized stock-join table to re-sweep — stock is volatile, the
+#: user toggles a task in Obsidian while this PWA is open, and persisting the
+#: join would make the chip colour wrong. So `line_overrides.yaml` is the
+#: load-bearing escape hatch and a miss does not fix itself. The client renders
+#: this verbatim; it does not compose a sentence about a file it cannot read.
+STOCK_JOIN_GUIDANCE: Final = (
+    "这个 join 只有三层（精确名 → basename → line_overrides.yaml），"
+    "没有第四层，也没有第二次重扫："
+    "它没有物化的表可以重扫。"
+    "三层都没命中的那一行只是不在在货名单里 —— "
+    "这不是“家里没有”的证据，但也不会自己变好。"
+    "app/pantry/line_overrides.yaml 是承重的、不是装饰："
+    "没有它，一个 miss 唯一的修法就是改你自己的库。"
+)
+
+#: The per-miss repair sentence. Two shapes, and the second is the one that
+#: matters: a **plain** miss gets the key to paste and an explicit refusal to
+#: name the `canonical_name`, because the join has no tier that could know it
+#: and a server that guessed one would be the fourth tier in disguise. When the
+#: override tier *fired and did not resolve*, `StockJoinMiss.override` carries
+#: the name that was tried, and that is a real fact about a stale entry in a
+#: reviewed file, so it is reported verbatim.
+REPAIR_HINT_NO_NAME: Final = (
+    "在 app/pantry/line_overrides.yaml 的 overrides 里加一行："
+    "键写 {key}，值写这一行真正指向的那个 Pantry Item 的 canonical_name。"
+    "服务器不替你猜这个值 —— 三层阶梯之外没有第四层可以猜，"
+    "猜出来的名字只会把一个诚实的 miss 变成一个错答案。"
+)
+REPAIR_HINT_STALE_NAME: Final = (
+    "这一行已经有一条覆盖了，但它的值 {name} 在现在的 live 目录里查不到"
+    "（打错了，或者产品被重新导入改了名）。"
+    "把 app/pantry/line_overrides.yaml 里键 {key} 的值改成一个目录里真实存在的 "
+    "canonical_name，或者删掉这一行。"
+)
+
 
 class ManualMappingRequest(BaseModel):
     """`PUT …/ingredients/{index}/mapping`'s whole body. `extra="forbid"`.
@@ -205,6 +291,11 @@ def build_recipes_router() -> APIRouter:
                 "strict": strict,
                 "staleMappingCount": len(stale),
                 "stockUnjoinedCount": context.join.unjoined_count,
+                # §9.13.4's per-line Stock Join table, projected from the SAME
+                # `context.join` the count above came from — so the two cannot
+                # disagree, which a separate route reading `Pantry.md` through a
+                # second TTL window could. See the module docstring.
+                "stockJoin": _stock_join_body(context.join),
                 # F7's unconditional provenance, at the same level as the two
                 # counters above: a note that vanished from the list without a
                 # number attached is indistinguishable from one that was never
@@ -556,6 +647,96 @@ def _join_state_for(
     if pantry_item_id is None:
         return "unresolved"
     return join_state.get(pantry_item_id, "unresolved")
+
+
+def _stock_join_body(join: StockJoin) -> dict[str, Any]:
+    """§9.13.4's per-line table: the whole join, in `Pantry.md` line order.
+
+    One materialization, one read: this projects the **same** `StockJoin` the
+    response's `stockUnjoinedCount` and every slot's `stockJoinState` came from,
+    which is the whole reason the table is a field here rather than a route (see
+    the module docstring). Ordering is by `line_index`, so a row's position on
+    screen is its position in the note — the order a user is looking for a line
+    in. It is a sort of an already-materialized list, not a re-read.
+
+    `guidance` and `repairHint` are server-composed sentences for the reasons in
+    the module docstring. `overrideName` is `null` on a plain miss by design: the
+    server names the key to paste and refuses to invent the value beside it.
+    """
+    return {
+        "lineCount": join.line_count,
+        "unjoinedCount": join.unjoined_count,
+        "tierCounts": {
+            "exact": join.exact_tier_count,
+            "basename": join.basename_tier_count,
+            "override": join.override_tier_count,
+        },
+        "guidance": STOCK_JOIN_GUIDANCE,
+        "lines": sorted(
+            [_hit_line(hit) for hit in join.hits] + [_miss_line(miss) for miss in join.unjoined],
+            key=lambda line: line["lineIndex"],
+        ),
+    }
+
+
+def _line_common(text: str, core: str, line_index: int, section: str | None) -> dict[str, Any]:
+    """The four keys a hit and a miss share, so the two row shapes differ only
+    where the join's answer differs: state, tier, ids, and the override half."""
+    return {
+        "lineIndex": line_index,
+        "section": section,
+        "text": text,
+        "core": core,
+    }
+
+
+def _hit_line(hit: StockJoinHit) -> dict[str, Any]:
+    """One resolved line. `pantryItemIds` is the whole tuple, both candidates on
+    a duplicate — §9.13.4 wants the ambiguity visible before it becomes a wrong
+    chip, and a name lookup that picked a winner by insertion order is the one
+    failure `app/pantry/stock.py` forbids.
+
+    `overrideName` is `None` on every hit. §9.13.4 requires the `canonical_name`
+    only for the **unresolved** rows, and a resolved row's repair value is a fact
+    about a file the client has no business reading: publishing it would need a
+    new accessor on `PantryStockIndex` for a field nothing renders. A tier-3 hit
+    already says `override` in its state and names its own `overrideKey`.
+    """
+    return {
+        **_line_common(hit.text, hit.core, hit.line_index, hit.section),
+        "stockJoinState": hit.state,
+        "tier": hit.tier,
+        "pantryItemIds": list(hit.item_ids),
+        "overrideKey": hit.key,
+        "overrideName": None,
+        "repairHint": None,
+    }
+
+
+def _miss_line(miss: StockJoinMiss) -> dict[str, Any]:
+    """One line no tier resolved. The actionable row, so it carries the most.
+
+    `overrideKey` is the normalized core the override file is **keyed by**, and
+    it is the string a paste has to reproduce: `load_line_overrides` refuses any
+    key that is not already `fold_name`-normalized, so a raw `Pantry.md` line
+    pasted as a key would produce an entry that can never fire.
+
+    `overrideName` is the *stale* value when the override fired and did not
+    resolve, and `None` on a plain miss. `tier` is `0` and `pantryItemIds` is
+    empty, and both are honest: no tier fired, and a name nobody resolved must
+    not be able to put an id in this table.
+    """
+    return {
+        **_line_common(miss.text, miss.core, miss.line_index, miss.section),
+        "stockJoinState": "unresolved",
+        "tier": 0,
+        "pantryItemIds": [],
+        "overrideKey": fold_name(miss.core),
+        "overrideName": miss.override,
+        "repairHint": (REPAIR_HINT_STALE_NAME if miss.override else REPAIR_HINT_NO_NAME).format(
+            key=fold_name(miss.core), name=miss.override or ""
+        ),
+    }
 
 
 def _slot_body(
