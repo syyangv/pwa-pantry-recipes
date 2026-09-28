@@ -49,6 +49,7 @@ app = [
     "static/js/*",
     "static/js/logic/*",
     "static/js/pwa/*",
+    "static/js/views/*",
     "static/icons/*",
 ]
 "app.recipes" = ["lexicon/*.yaml"]
