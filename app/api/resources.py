@@ -33,6 +33,7 @@ from ..mapping.store import IngredientMappingStore
 from ..pantry.catalog import PantryCatalog
 from ..pantry.stock import PantryStockIndex
 from ..recipes.reader import RecipeIndex
+from ..shortlists.store import MealShortlistStore
 
 #: §9.19's four readers plus the `AtomicNoteStore` the two vault readers share.
 #: Named here rather than in `app/main.py` so the router and the lifespan cannot
@@ -41,6 +42,13 @@ RECIPE_INDEX_STATE_KEY: Final = "recipe_index"
 PANTRY_CATALOG_STATE_KEY: Final = "pantry_catalog"
 PANTRY_STOCK_STATE_KEY: Final = "pantry_stock"
 MAPPING_STORE_STATE_KEY: Final = "ingredient_mapping_store"
+
+#: The Meal Shortlist store (D3). It is the one resource here that is **not** a
+#: reader of the vault — it owns a table in the PWA's SQLite and reads the vault
+#: only through a `Callable[[], frozenset[str]]` of recipe basenames — and the key
+#: sits here with the rest anyway, because the argument at the top of this module
+#: is about the two sides agreeing on a name, not about what the thing is.
+MEAL_SHORTLIST_STORE_STATE_KEY: Final = "meal_shortlist_store"
 
 #: §9.15's 503 for "the lifespan never published this". Distinct from
 #: `pantry_stock_unreadable`, which means "the vault's `Pantry.md` could not be
@@ -59,7 +67,13 @@ class ResourceUnavailable(RuntimeError):
 #: rather than `Any` so `_get` returns the concrete class the caller asked for —
 #: a `-> object` here would push a `cast` into every route, and a `cast` is
 #: exactly where a wrong key would go unnoticed.
-Resource = RecipeIndex | PantryCatalog | PantryStockIndex | IngredientMappingStore
+Resource = (
+    RecipeIndex
+    | PantryCatalog
+    | PantryStockIndex
+    | IngredientMappingStore
+    | MealShortlistStore
+)
 
 
 def recipe_index(request: Request) -> RecipeIndex:
@@ -78,6 +92,10 @@ def mapping_store(request: Request) -> IngredientMappingStore:
     return _get(request, MAPPING_STORE_STATE_KEY, IngredientMappingStore)
 
 
+def meal_shortlist_store(request: Request) -> MealShortlistStore:
+    return _get(request, MEAL_SHORTLIST_STORE_STATE_KEY, MealShortlistStore)
+
+
 def _get[ResourceT: Resource](
     request: Request, key: str, expected: type[ResourceT]
 ) -> ResourceT:
@@ -89,12 +107,14 @@ def _get[ResourceT: Resource](
 
 __all__ = [
     "MAPPING_STORE_STATE_KEY",
+    "MEAL_SHORTLIST_STORE_STATE_KEY",
     "PANTRY_CATALOG_STATE_KEY",
     "PANTRY_STOCK_STATE_KEY",
     "RECIPE_INDEX_STATE_KEY",
     "RESOURCE_UNAVAILABLE_CODE",
     "ResourceUnavailable",
     "mapping_store",
+    "meal_shortlist_store",
     "pantry_catalog",
     "pantry_stock",
     "recipe_index",

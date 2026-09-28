@@ -42,6 +42,7 @@ from fastapi.testclient import TestClient
 from app.api.cooklog import COOK_LOG_WRITER_STATE_KEY
 from app.api.resources import (
     MAPPING_STORE_STATE_KEY,
+    MEAL_SHORTLIST_STORE_STATE_KEY,
     PANTRY_CATALOG_STATE_KEY,
     PANTRY_STOCK_STATE_KEY,
     RECIPE_INDEX_STATE_KEY,
@@ -79,7 +80,7 @@ def settings(runtime_root: Path) -> Settings:
 
 
 def test_every_reader_is_published_on_app_state(settings: Settings) -> None:
-    """All five, under the keys `app/api/resources.py` names.
+    """All six, under the keys `app/api/resources.py` names.
 
     Asserted as the concrete classes, not merely as "something is there": a key
     that resolves to the wrong object would satisfy `is not None` and then fail
@@ -89,6 +90,7 @@ def test_every_reader_is_published_on_app_state(settings: Settings) -> None:
     from app.pantry.catalog import PantryCatalog
     from app.pantry.stock import PantryStockIndex
     from app.recipes.reader import RecipeIndex
+    from app.shortlists.store import MealShortlistStore
 
     with client_for(settings) as client:
         state = client.app.state
@@ -96,6 +98,7 @@ def test_every_reader_is_published_on_app_state(settings: Settings) -> None:
         assert isinstance(getattr(state, PANTRY_CATALOG_STATE_KEY), PantryCatalog)
         assert isinstance(getattr(state, PANTRY_STOCK_STATE_KEY), PantryStockIndex)
         assert isinstance(getattr(state, MAPPING_STORE_STATE_KEY), IngredientMappingStore)
+        assert isinstance(getattr(state, MEAL_SHORTLIST_STORE_STATE_KEY), MealShortlistStore)
         assert isinstance(getattr(state, COOK_LOG_WRITER_STATE_KEY), CookingLogWriter)
 
 
@@ -234,11 +237,12 @@ def test_an_exception_inside_the_lifespan_still_closes_what_was_already_open(
 ) -> None:
     """**The exception path, and the test that makes the `finally` mean something.**
 
-    A failure is injected where the `CookingLogWriter` is constructed — the step
-    immediately after the `AtomicNoteStore` exists — which is the exact window a
-    per-resource `try` would leak. The store must come out closed, the descriptor
-    count must return to where it started, and nothing may be published, so no
-    request can reach a half-built app.
+    A failure is injected where the `CookingLogWriter` is constructed — which is
+    the **last** step of the boot, so every resource above it already exists: the
+    four closable readers, the mapping store, and the shortlist store. That is the
+    exact window a per-resource `try` would leak. The store must come out closed,
+    the descriptor count must return to where it started, and nothing may be
+    published, so no request can reach a half-built app.
 
     This is why the closers are appended as each resource is constructed rather
     than listed at the top: a list written before the loop would not contain the
@@ -264,6 +268,7 @@ def test_an_exception_inside_the_lifespan_still_closes_what_was_already_open(
         PANTRY_CATALOG_STATE_KEY,
         PANTRY_STOCK_STATE_KEY,
         MAPPING_STORE_STATE_KEY,
+        MEAL_SHORTLIST_STORE_STATE_KEY,
         COOK_LOG_WRITER_STATE_KEY,
     ):
         assert not hasattr(application.state, key), key

@@ -85,6 +85,10 @@ EXPECTED_ROUTE_TABLE: list[str] = [
     "/api/pantry/items",
     "/api/cook-logs",
     "/api/cook-logs",
+    "/api/shortlists",
+    "/api/shortlists/{slot}",
+    "/api/shortlists/{slot}/{note_name}",
+    "/api/shortlists/{slot}/order",
     CATCH_ALL_PATH,
     "",
 ]
@@ -342,7 +346,12 @@ def test_the_static_mount_is_last_and_the_catch_all_is_after_the_domain_routers(
     a formality by comparison.
     """
     paths = registered_paths(built_app)
-    domain = ["/api/recipes", "/api/pantry/items", "/api/cook-logs"]
+    domain = [
+        "/api/recipes",
+        "/api/pantry/items",
+        "/api/cook-logs",
+        "/api/shortlists",
+    ]
     catch_all = paths.index(CATCH_ALL_PATH)
 
     assert paths[-1] == "", "the static mount must be registered last"

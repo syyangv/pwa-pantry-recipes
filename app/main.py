@@ -19,12 +19,14 @@ killed three ways of breaking it.
 **The `lifespan` owns every resource, and its `finally` owns every descriptor.**
 §9.19: open the `PantryCatalog`, the `RecipeIndex`, the `PantryStockIndex`, the
 `AtomicNoteStore`, the `IngredientMappingStore`, the `CookingLogWriter`, and run
-`init_db()`; close all of them in a `finally`. A descriptor leak must not outlive
-shutdown — the LaunchAgent's `SoftResourceLimits NumberOfFiles 8192` exists
-because launchd's default 256 is not the shell's `ulimit -n`, so a leak here only
-ever shows up in production. **There is no creation service in the lifespan**
-(F4): `DailyNoteCreationService` does not exist, and a missing daily note is a
-404.
+`init_db()`; close all of them in a `finally`. The `MealShortlistStore` (D3) is
+opened there too and is closed by not being held open: it owns no descriptor, only
+a connection factory and a `Callable[[], frozenset[str]]` of recipe basenames. A
+descriptor leak must not outlive shutdown — the LaunchAgent's `SoftResourceLimits
+NumberOfFiles 8192` exists because launchd's default 256 is not the shell's
+`ulimit -n`, so a leak here only ever shows up in production. **There is no
+creation service in the lifespan** (F4): `DailyNoteCreationService` does not
+exist, and a missing daily note is a 404.
 
 Start the server with the factory so the environment is read at boot, not at
 import:  uvicorn app.main:create_app --factory
@@ -53,11 +55,13 @@ from .api.pantry import build_pantry_router
 from .api.recipes import build_recipes_router
 from .api.resources import (
     MAPPING_STORE_STATE_KEY,
+    MEAL_SHORTLIST_STORE_STATE_KEY,
     PANTRY_CATALOG_STATE_KEY,
     PANTRY_STOCK_STATE_KEY,
     RECIPE_INDEX_STATE_KEY,
     ResourceUnavailable,
 )
+from .api.shortlists import build_shortlists_router
 from .auth import install_security_middleware
 from .config import ConfigurationError, Settings, validate_bind_invariant
 from .cooklog.writer import CookingLogWriter
@@ -67,6 +71,7 @@ from .pantry.catalog import CatalogError, PantryCatalog
 from .pantry.stock import PantryStockIndex
 from .pwa_version import derive_version, install_pwa_version
 from .recipes.reader import RecipeIndex
+from .shortlists.store import MealShortlistStore
 from .vault.atomic_write import AtomicNoteStore
 from .vault.daily_paths import DailyNotePathPolicy
 from .vault.pantry import PantryError
@@ -185,7 +190,18 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                     # cannot.
                     pass
 
-            # 8. The Cooking Log writer (F4, D2). It writes the daily note and
+            # 8. The Meal Shortlist store (D3). It owns `meal_lists` and reads
+            #    the vault only through a `Callable[[], frozenset[str]]` of recipe
+            #    basenames, so it has no descriptor, no `close()`, and no path.
+            #    Constructed here — before the writer, and before anything is
+            #    published — so that a boot failing anywhere below it leaves it
+            #    unpublished, which is the same invariant the closers list gives
+            #    the four readers.
+            shortlists = MealShortlistStore(
+                partial(connect_db, runtime), recipe_basenames(recipes)
+            )
+
+            # 9. The Cooking Log writer (F4, D2). It writes the daily note and
             #    appends to `cook_log_receipts`, both through the same store and
             #    the same database. F5: it is online-only and is **not** wired
             #    into the offline outbox, and nothing here enqueues anything.
@@ -199,6 +215,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
             application.state[PANTRY_CATALOG_STATE_KEY] = catalog
             application.state[PANTRY_STOCK_STATE_KEY] = stock
             application.state[MAPPING_STORE_STATE_KEY] = mappings
+            application.state[MEAL_SHORTLIST_STORE_STATE_KEY] = shortlists
             application.state[COOK_LOG_WRITER_STATE_KEY] = writer
             yield
         finally:
@@ -378,6 +395,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     application.include_router(build_recipes_router())
     application.include_router(build_pantry_router())
     application.include_router(build_cook_log_router())
+    application.include_router(build_shortlists_router())
 
     @application.api_route(
         "/api/{unmatched_path:path}",
@@ -393,6 +411,27 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # Registered LAST: a catch-all mount shadows anything added after it.
     application.mount("/", StaticFiles(directory=STATIC_ROOT, html=True), name="static")
     return application
+
+
+def recipe_basenames(index: RecipeIndex) -> Callable[[], frozenset[str]]:
+    """The live recipe basenames, as the `RecipeNames` provider the shortlist
+    store takes.
+
+    A `RecipeIndex` and a `frozenset` of names is the whole interface, and
+    adapting here rather than handing the index over is what keeps the store free
+    of a path, a TTL cache, and a `ConfigurationError` on a missing folder — none
+    of which it can use, and one of which would turn "the folder is empty" into a
+    503 for three panels that have nothing to do with it.
+
+    Called per read, so it inherits `RecipeIndex`'s TTL and nothing more: the
+    store's `resolved` flag is therefore as stale as the index's own snapshot and
+    no staler, which is the one bound that is honest to publish.
+    """
+
+    def names() -> frozenset[str]:
+        return frozenset(note.note_name for note in index.notes())
+
+    return names
 
 
 def _api_error(request: Request, status: int, code: str) -> Response:
