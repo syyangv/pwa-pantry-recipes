@@ -111,13 +111,14 @@ def normalize_identity(value: str) -> str | None:
     if not cleaned or len(cleaned) > MAX_IDENTITY_CHARS:
         return None
     # One rule: the value must be printable ASCII. Control characters are
-    # refused, and so is anything above U+007F — Starlette decodes headers as
+    # refused, and so is anything above U+007E — Starlette decodes headers as
     # latin-1, so a non-ASCII byte arrives as a high code point, and
     # `hmac.compare_digest` raises `TypeError` on a `str` that has one. Both
     # fields are ASCII by construction (a Tailscale login is an email or a
     # username, a CSRF token is `secrets.token_urlsafe(32)`), so rejecting
-    # non-ASCII here costs nothing and keeps a 4xx where a 500 belongs.
-    if any(ord(character) < 32 or ord(character) > 127 for character in cleaned):
+    # non-ASCII here costs nothing and keeps a 4xx where a 500 belongs. The
+    # bound is `> 126`, not `> 127`, so U+007F stays rejected as it was.
+    if any(ord(character) < 32 or ord(character) > 126 for character in cleaned):
         return None
     return cleaned
 

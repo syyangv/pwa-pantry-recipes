@@ -398,10 +398,61 @@ def test_trusted_mode_non_ascii_identity_is_rejected_before_the_comparison() -> 
     # `normalize_identity` refuses the value. Were the non-ASCII filter dropped,
     # the encoded comparison would mismatch and answer `identity_denied`
     # instead, which is the wrong (and less specific) 401.
-    for value in ("José", "josé@test.invalid", "JosÃ©", "\x80", "ÿ"):
+    for value in ("José", "josé@test.invalid", "JosÃ©", "\x80", "ÿ", "\x7f"):
         assert normalize_identity(value) is None, value
     assert normalize_identity(OWNER) == OWNER
     assert normalize_identity(f" \t{OWNER}\t ") == OWNER
+
+
+@pytest.mark.parametrize(
+    ("code_point", "accepted"),
+    [
+        (0x00, False),
+        (0x1F, False),  # last C0 control
+        (0x20, True),  # first printable -- space, the OWS trim boundary
+        (0x21, True),
+        (0x41, True),
+        (0x61, True),
+        (0x7D, True),  # '}'
+        (0x7E, True),  # '~', the last accepted code point
+        (0x7F, False),  # DEL, the boundary itself
+        (0x80, False),  # first non-ASCII
+        (0xFF, False),
+    ],
+)
+def test_normalize_identity_accepted_range_is_printable_ascii(
+    code_point: int, accepted: bool
+) -> None:
+    # The bug lived in the gap between the two halves of the rule: the original
+    # predicate rejected `ord < 32 or character == "\x7f"`, and 1dd52f6 widened
+    # the second half to `ord > 127`, which admits U+007F. DEL is a control
+    # character; it was rejected before and has to be rejected now. The correct
+    # bound is `> 126` -- rejects 0-31 and >= 127, i.e. exactly printable ASCII.
+    # Both directions are pinned: this kills `> 127` (under-rejecting, admits
+    # DEL) *and* `> 125` (over-rejecting, refuses '~'), so a bound that merely
+    # shifts the edge in either direction fails.
+    value = f"a{chr(code_point)}b"
+    result = normalize_identity(value)
+    assert (result is not None) is accepted, f"U+{code_point:04X} -> {result!r}"
+    if accepted:
+        assert result == value
+
+
+@pytest.mark.parametrize("login", ["a\x7fb", "owner@test.invalid\x7f", "\x7f"])
+def test_trusted_mode_del_identity_is_401_identity_invalid(
+    prod_client: TestClient, login: str
+) -> None:
+    # End to end, and the exact code: DEL is ASCII, so it is not caught by an
+    # `isascii()`-shaped check, and it is a control character, so it must not
+    # reach the owner comparison. With the filter at `> 126` it is
+    # `identity_invalid`; at `> 127` the encoded comparison would mismatch and
+    # answer `identity_denied` instead -- still a 401, but a different contract,
+    # and the regression this commit fixes.
+    response = prod_client.get("/api/session", headers={"Tailscale-User-Login": login})
+    assert (response.status_code, _assert_envelope(response)["code"]) == (
+        401,
+        "identity_invalid",
+    )
 
 
 def test_a_non_ascii_owner_login_is_a_4xx_not_a_server_error(runtime_root: Path) -> None:
@@ -670,6 +721,25 @@ def test_verify_compares_bytes_so_a_non_ascii_candidate_cannot_raise(
     store = create_app(dev_settings).state.csrf
     store._tokens["é"] = time.monotonic()
     assert store.verify("forged-token") is False
+
+
+def test_verify_treats_a_del_token_as_a_mismatch_not_an_exception(
+    dev_settings: Settings,
+) -> None:
+    # DEL is a control character but it *is* ASCII, so `verify`'s `isascii()`
+    # guard lets it through by design -- that guard exists to keep a non-ASCII
+    # `str` from making `hmac.compare_digest` raise, and DEL cannot. So DEL
+    # does reach the comparison, and the answer must be a plain `False` from the
+    # byte comparison, never a `TypeError`. Issued candidates are
+    # `secrets.token_urlsafe(32)`, so no issued token can contain DEL either.
+    store = create_app(dev_settings).state.csrf
+    store.issue()
+    assert store.verify("a\x7fb") is False
+    assert store.verify("\x7f") is False
+    # And with a poisoned store, DEL still only mismatches.
+    store._tokens["a\x7fb"] = time.monotonic()
+    assert store.verify("a\x7fb") is True
+    assert store.verify("a\x7fc") is False
 
 
 # --- 6. Origin -----------------------------------------------------------
