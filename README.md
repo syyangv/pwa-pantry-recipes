@@ -235,7 +235,7 @@ the port is listening.
 |---|---|
 | `scripts/pwa-pantry-recipes.example.plist` | The template, now actually rendered and installed. `__UPPER_CASE__` placeholders, loopback bind on 8007, `SoftResourceLimits NumberOfFiles 8192`, `ThrottleInterval 2`, `KeepAlive`, `--timeout-graceful-shutdown 5`, and the full `EnvironmentVariables` contract. `tests/deploy/test_launchagent_template.py` asserts each of those against the file and against `app/config.py`. |
 | `scripts/install_launchagent.sh` | Three stages: render + `plutil -lint` (no side effects), `--apply` (creates `APP_DATA_DIR` 0700 and the log directory, copies the plist, **starts nothing**), `--bootstrap` (bootout + bootstrap; run 2026-09-28). Plus `--teardown` for the rollback. |
-| `scripts/converge_gate.py` | The release gate: ten conditions, stdlib-only, exit `0` converged / `1` a real failure / `2` under-specified invocation / `3` vantage-limited. Only `0` is a pass. |
+| `scripts/converge_gate.py` | The release gate: eleven checks — the ten numbered conditions `0`–`9` plus the `0b` identity precondition — stdlib-only, exit `0` converged / `1` a real failure / `2` under-specified invocation / `3` vantage-limited. Only `0` is a pass. |
 | `scripts/converge-smoke.json` | The release-specific half of condition 4. **Edit it in every release.** |
 | [`docs/runbook/deployment.md`](docs/runbook/deployment.md) | The operational form: the Serve commands with the audit before and after, the install stages, the restart rules, and the participant-identity validation. |
 

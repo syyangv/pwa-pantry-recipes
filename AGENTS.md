@@ -326,7 +326,8 @@ settings running and reports success. After any restart, prove the listener with
 proves a process is alive, not that the socket is listening.
 
 **The converge gate is `scripts/converge_gate.py`, and it is the release check,
-not a checklist.** Nine conditions, stdlib-only, and four exit codes of which
+not a checklist.** Eleven checks — the ten numbered conditions `0`–`9` plus the
+`0b` identity precondition — stdlib-only, and four exit codes of which
 **only `0` is a pass**: `0` converged · `1` a real failure · `2` a condition
 could not be evaluated because the invocation was under-specified (a missing
 flag, an unreadable file) · `3` a condition could not be evaluated because the

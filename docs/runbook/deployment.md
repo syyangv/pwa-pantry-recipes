@@ -33,7 +33,7 @@ create a half-deployed state, and the reason each one is where it is.
 |---|---|
 | `scripts/pwa-pantry-recipes.example.plist` | A template, and the source of the installed plist. Renders, lints, and is asserted against `app/config.py` by `tests/deploy/test_launchagent_template.py`. Rendered by the installer, not installed by hand. |
 | `scripts/install_launchagent.sh` | Three stages. **All three have been run** (2026-09-28), the third under explicit in-session authorization. |
-| `scripts/converge_gate.py` | The release gate. Runs against a live service; verified in full against a loopback dev server and proved able to fail on all ten conditions. **Exits 3 against the deployed pair from the serving host — see §9b.** |
+| `scripts/converge_gate.py` | The release gate. Runs against a live service; verified in full against a loopback dev server and proved able to fail on all eleven checks — the ten numbered conditions `0`–`9` plus the `0b` identity precondition. **Exits 3 against the deployed pair from the serving host — see §9b.** |
 | `scripts/converge-smoke.json` | The release-specific half of gate condition 4. Edited every release. |
 | `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` | **Installed** 2026-09-28. |
 | `com.syang.pwa-pantry-recipes` in `launchctl` | **Loaded**, `state = running`. |
@@ -257,6 +257,13 @@ the person deciding whether to bootstrap the agent.
 | 7 `resume-check` | 6 | the **served** `update-manager.js` re-checks on `pageshow`, `visibilitychange` and `focus`. |
 | 8 `busy-guard` | 7 | `WAIT_FOR_MESSAGE` is `true` and the served update manager exposes `canApplyUpdate` / `requestUpdateReload`. |
 | 9 `ingress-identity` | — | The Serve route for the `--deployed-origin` port resolves to the **same address the local origin is served by**, and the process holding that port — pid *and* start time — is the same in both reads. Proves **who** is behind the route, never **what** it returned; see below. |
+
+**The count above is asserted, not written by hand.** `tests/deploy/test_converge_gate.py::test_the_help_text_counts_the_conditions_the_gate_evaluates`
+derives both numbers from a real run of the gate and then reads the count out of
+this runbook, `AGENTS.md` and `README.md` too, so the eleven and the ten cannot
+drift away from the code. Adding a condition fails that test until the number is
+updated here **with** the condition, not after it — the count has already been
+wrong twice this way (`eight`, then `nine` and `ten` after condition 9 landed).
 
 ### Condition 9, and why it is additive and not a loophole
 

@@ -74,6 +74,17 @@ STARTUP_LOADED_SAMPLES = (
     "app/db/schema.sql",
 )
 
+#: The prose that states how many checks the gate evaluates. All three carried a
+#: wrong count at the same time — "nine conditions" in one, "ten conditions" in
+#: the other two — which is what a freehand number does: it survives until
+#: somebody goes looking. The `--help` count test below reads them the same way
+#: it reads the help text.
+COUNT_DOCS = (
+    REPO_ROOT / "AGENTS.md",
+    REPO_ROOT / "README.md",
+    REPO_ROOT / "docs" / "runbook" / "deployment.md",
+)
+
 
 def cache_version_of(sw_text: str) -> str:
     """The `CACHE_VERSION` the gate would read out of this `sw.js` text."""
@@ -415,7 +426,8 @@ def test_the_baseline_has_exactly_the_eleven_numbered_checks(world: World) -> No
 
 
 def test_the_help_text_counts_the_conditions_the_gate_evaluates(world: World) -> None:
-    """The `--help` description must state the count the gate actually runs.
+    """The `--help` description must state the count the gate actually runs —
+    and so must the three documents that state it in prose.
 
     It said "eight conditions" while the gate ran ten checks, and nothing
     caught it, because a wrong count in prose is only a wrong count in prose
@@ -426,6 +438,15 @@ def test_the_help_text_counts_the_conditions_the_gate_evaluates(world: World) ->
     Ten is the numbered conditions (`0`-`9`) and eleven is those plus the `0b`
     identity precondition — which is why both are asserted: dropping either
     number from the description fails here.
+
+    `COUNT_DOCS` came next, for the same reason: `AGENTS.md` said "nine
+    conditions" while `README.md` and the runbook said "ten conditions", all at
+    once, and all three were fixed by hand in one commit. The assertion is
+    deliberately loose about *wording* — it reads the number out of a
+    number-plus-noun phrase and ignores everything else in the sentence, so a
+    sentence can be rewritten as long as the number is still there and still
+    right. What it will not tolerate is a number that has gone stale, which is
+    the failure it exists to catch.
     """
     help_text = gate.build_parser().format_help()
     results, _ = run(world)
@@ -446,6 +467,26 @@ def test_the_help_text_counts_the_conditions_the_gate_evaluates(world: World) ->
     assert "nine numbered" not in help_text, (
         "--help still says 'nine numbered conditions', which is not what the gate runs"
     )
+
+    for path in COUNT_DOCS:
+        stated = _stated_counts(path.read_text(encoding="utf-8"))
+        assert numbered_count in stated, (
+            f"{path.name} never states the numbered-condition count ({numbered_count}) in a "
+            "`<number> conditions` or `<number> checks` phrase"
+        )
+        assert total_count in stated, (
+            f"{path.name} never states the total check count ({total_count}) in a "
+            "`<number> conditions` or `<number> checks` phrase"
+        )
+        # The two counts the prose has actually carried while wrong. Named rather
+        # than derived, because the point is not "some number disagrees" but "the
+        # number this document said last time still disagrees".
+        stale = {count for count in (8, 9) if count in stated}
+        assert not stale, (
+            f"{path.name} still states "
+            f"{sorted(_number_word(count) for count in stale)} conditions, which is not what "
+            f"the gate runs ({total_count} checks: {numbered_count} numbered plus 0b)"
+        )
 
 
 def _number_word(value: int) -> str:
@@ -469,6 +510,38 @@ def _number_word(value: int) -> str:
         12: "twelve",
     }
     return words[value]
+
+
+#: A count a document states about the gate's checks, in either spelling. The
+#: number is what is matched and the noun is what makes the match a count at
+#: all; whatever sits between the two is ignored, so "eleven checks", "all
+#: eleven checks" and "the ten numbered conditions" all read without the
+#: pattern having to know the sentence. A range ("conditions 2-8") and an
+#: ordinal ("a tenth copy of this one") are deliberately not matches: neither
+#: claims how many checks the gate runs. Case-insensitive because prose capitalises
+#: the number at the start of a sentence ("Eleven checks") at least as often as it
+#: does not.
+_COUNT_PHRASE = re.compile(
+    r"\b(\d+|" + "|".join(_number_word(value) for value in range(1, 13)) + r")\b"
+    r"[\s-]+(?:\w+[\s-]+)?(?:checks|conditions)\b",
+    re.IGNORECASE,
+)
+
+
+def _stated_counts(text: str) -> set[int]:
+    """Every check/condition count `text` states, as integers.
+
+    Returns a set rather than a mapping because the assertion is membership:
+    a document may legitimately state a scoped sub-count ("all seven deployed
+    conditions"), and the only thing that must be present is the two counts
+    that describe the gate as a whole.
+    """
+    words = {_number_word(value): value for value in range(1, 13)}
+    found: set[int] = set()
+    for match in _COUNT_PHRASE.finditer(text):
+        token = match.group(1).lower()
+        found.add(int(token) if token.isdigit() else words[token])
+    return found
 
 
 def test_an_unreachable_origin_is_reported_once_not_ten_times(world: World) -> None:
