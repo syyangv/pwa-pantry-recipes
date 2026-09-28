@@ -96,7 +96,7 @@ def _write_db(path: Path, rows: tuple[tuple[Any, ...], ...] = _SEED) -> Path:
 
 
 def _run(
-    *args: str, db: Path, out: Path, vault: Path | None = None
+    *args: str, db: Path, out: Path, job: str = "catalog", vault: Path | None = None
 ) -> subprocess.CompletedProcess[str]:
     """The script as a developer runs it: a fresh process, `cwd` at the repo root.
 
@@ -104,8 +104,24 @@ def _run(
     the *command line*: which flag combination writes and which does not. An
     in-process `main([...])` would also exercise the argparse branch, but the
     exit code a shell sees is the contract a human or a pre-commit hook reads.
+
+    `--job` is always passed, never left to the `all` default, and that is the
+    point: `all` runs the recipes job too, so a run without it inherits the vault
+    — and a machine without the vault would fail a catalog assertion for a reason
+    that has nothing to do with the catalog. The CLI keeps `all` as its default
+    because "are my frozen inputs current?" is the question a developer usually
+    has; a test asks a narrower one and has to say so.
     """
-    command = [sys.executable, str(SCRIPT), "--db", str(db), "--out", str(out)]
+    command = [
+        sys.executable,
+        str(SCRIPT),
+        "--job",
+        job,
+        "--db",
+        str(db),
+        "--out",
+        str(out),
+    ]
     if vault is not None:
         command += ["--vault", str(vault)]
     command += list(args)
@@ -312,7 +328,7 @@ def test_a_note_the_vault_gained_is_reported_and_not_frozen_without_the_flag(
 ) -> None:
     frozen = _frozen_dir(tmp_path, ("盐焗鸡.md",))
     result = _run(
-        "--job", "recipes", "--recipes-out", str(frozen), db=db, out=out, vault=vault
+        "--recipes-out", str(frozen), db=db, out=out, job="recipes", vault=vault
     )
     assert result.returncode == 1
     assert "番茄炒蛋.md: in the vault, not frozen here" in result.stdout
@@ -325,13 +341,12 @@ def test_regenerating_the_recipes_copies_bytes_and_reports_rather_than_deletes(
 ) -> None:
     frozen = _frozen_dir(tmp_path, ("盐焗鸡.md", "_deleted_upstream.md"))
     result = _run(
-        "--job",
-        "recipes",
         "--regenerate",
         "--recipes-out",
         str(frozen),
         db=db,
         out=out,
+        job="recipes",
         vault=vault,
     )
     assert result.returncode == 1, "a stale frozen note is a problem to report"
@@ -351,7 +366,7 @@ def test_the_recipes_job_is_clean_when_every_note_matches(
     for name in ("盐焗鸡.md", "番茄炒蛋.md"):
         (frozen / name).write_bytes((notes / name).read_bytes())
     result = _run(
-        "--job", "recipes", "--recipes-out", str(frozen), db=db, out=out, vault=vault
+        "--recipes-out", str(frozen), db=db, out=out, job="recipes", vault=vault
     )
     assert result.returncode == 0, result.stdout
     assert "every frozen note is byte-identical to the vault" in result.stdout
@@ -362,12 +377,11 @@ def test_a_missing_vault_folder_is_an_error_not_a_silent_pass(
 ) -> None:
     frozen = _frozen_dir(tmp_path, ())
     result = _run(
-        "--job",
-        "recipes",
         "--recipes-out",
         str(frozen),
         db=db,
         out=out,
+        job="recipes",
         vault=tmp_path / "no-such-vault",
     )
     assert result.returncode == 1
