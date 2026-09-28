@@ -118,9 +118,9 @@ rm -rf /tmp/wheel build pwa_pantry_recipes.egg-info
 `pip wheel .` is not hermetic here, and it fails **silently** — the build
 reports success either way. `setuptools` copies sources into `build/lib` and
 **never cleans it**, so any file present in a previous build ships in the next
-wheel even if it no longer exists in the tree. Verified here: with a leftover
-`build/lib/app/STALE_LEFTOVER.txt`, the same command produced a **45**-file wheel
-containing that file; after `rm -rf build` it produced the correct **44**-file
+wheel even if it no longer exists in the tree. Verified here: with a leftover:
+`build/lib/app/STALE_LEFTOVER.txt`, the same command produced a **48**-file wheel
+containing that file; after `rm -rf build` it produced the correct **47**-file
 wheel. `include-package-data = true` also reads
 `pwa_pantry_recipes.egg-info/SOURCES.txt`, which is git-ignored, so a stale one
 can describe a tree that no longer exists. Cleaning both makes the local number
@@ -196,25 +196,21 @@ can check against the tree, not as a claim about intent.
   non-loopback `BIND_HOST` in every mode, so the earlier "loopback-safe by
   construction only" caveat no longer applies. It guards an app with no domain
   routes behind it, which is not the same as being production-ready.
-- **Three shell modules do not ship in the wheel.**
-  `app/static/js/logic/{chip-class,format,sort}.js` are in `sw.js`'s
-  `SHELL_ASSETS` but **not** in the built wheel: `[tool.setuptools.package-data]`
-  globs `static/js/*` (which matches only `main.js` and the sub*directories*) and
-  `static/js/pwa/*`, with no `static/js/logic/*` entry, so the three files are
-  absent from all **44** entries of the wheel. Nothing breaks today because
-  `main.js` does not import them yet, and neither the CI wheel check nor
-  `test_every_package_data_key_resolves_to_a_package_and_a_real_file` can see it
-  — the first only lists files it already knows about, the second only asserts
-  each glob matches *at least one* file. Any installed app that precaches those
-  three paths will 404 them offline. Adding the glob is a `pyproject.toml`
-  change, deliberately not made here.
-- **`sw.js` `SHELL_ASSETS` must be extended for every new static file.** The
-  precache list covers every file currently in the tree, and
+- **`sw.js` `SHELL_ASSETS` and `package-data` must be extended for every new
+  static file.** The precache list covers every file currently in the tree, and
   `tests/js/shell_assets.test.mjs` fails a commit that adds a module or
   stylesheet under `app/static/js` (beyond the vendored `js/pwa/` boot modules)
   or `app/static/css` without a matching precache entry, in either direction. An
   omission is a silent offline-shell hole: the file works online and is simply
-  absent from the installed app.
+  absent from the installed app. The wheel side of the same hole is gated too —
+  `test_every_static_file_is_covered_by_a_package_data_glob` fails a commit that
+  adds a file under `app/static/` that no `package-data` glob matches, which is
+  what let `app/static/js/logic/*.js` ship in `SHELL_ASSETS` but in no wheel
+  (`static/js/*` matched `main.js` and the *subdirectories*, and glob `*` does
+  not cross a `/`). Note the registration is per directory: a new subdirectory
+  under `static/js/` needs its own `static/js/<name>/*` entry, and all three of
+  `SHELL_ASSETS`, `package-data`, and CI's wheel `required` list have to be
+  extended together or the app works online and 404s offline.
 - **`npm test`'s glob is load-bearing and fragile.** `package.json` runs
   `node --test 'tests/js/**/*.test.mjs'` with the pattern **quoted**, because
   `npm` invokes the script through `/bin/sh`, which has no `globstar`: an

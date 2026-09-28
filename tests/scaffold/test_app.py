@@ -21,16 +21,21 @@ later, and that a later feature PR could silently undo:
      the spec added. Both are decisions about what is NOT there as much as
      about what is: a reintroduced CLI field, or `playwright` in `[test]`,
      silently undoes a locked decision.
-  5. The packaging registration. One-directional on purpose: every package the
-     build registers must exist on disk, and every `package-data` glob must
-     match a real file. It deliberately does NOT claim the converse — that every
-     directory under `app/` is registered — because a ticket only owns its own
-     diff, so a completeness scan turns red on directories another ticket has
-     not created yet and on `__pycache__` appearing.
+  5. The packaging registration. Every package the build registers must exist
+     on disk, and every `package-data` glob must match a real file. For
+     *packages* that is one-directional on purpose: it deliberately does NOT
+     claim the converse — that every directory under `app/` is registered —
+     because a ticket only owns its own diff, so a completeness scan turns red
+     on directories another ticket has not created yet and on `__pycache__`
+     appearing. For the `app` key's `static/` globs it IS both directions:
+     every file under `app/static/` must be matched by some glob, because a
+     static file that no glob ships is precached by `sw.js` and 404s in an
+     installed app, and nothing under `static/` is legitimately unshipped.
 """
 
 from __future__ import annotations
 
+import glob
 import re
 import tomllib
 from dataclasses import fields
@@ -419,6 +424,24 @@ def test_discovery_does_not_pick_up_data_directories() -> None:
     assert "app.recipes.lexicon" not in packages
 
 
+def _globbed_files(package: str, pattern: str) -> set[Path]:
+    """The files `pattern` really matches for `package`, on the backend's terms.
+
+    `glob.glob` rather than `fnmatch`, and that distinction is the whole point:
+    `fnmatch`'s `*` crosses a `/`, so `fnmatch("static/js/logic/sort.js",
+    "static/js/*")` is true, while `glob.glob("static/js/*")` from the package
+    directory yields `main.js` plus the `logic/` and `pwa/` *directories* and
+    none of their contents. setuptools expands these patterns with `glob`, so
+    only `glob` says what the wheel will contain. A non-empty check written
+    with `fnmatch` therefore reports `static/js/*` as covering the logic
+    modules when the build drops all three.
+    """
+
+    package_dir = REPO_ROOT / package.replace(".", "/")
+    matched = {package_dir / name for name in glob.glob(pattern, root_dir=package_dir)}
+    return {path for path in matched if path.is_file()}
+
+
 def test_every_package_data_key_resolves_to_a_package_and_a_real_file() -> None:
     # A key for a package that is not on disk ships nothing; a glob that matches
     # nothing ships nothing. Both are the same silent-green hole the wheel
@@ -429,16 +452,48 @@ def test_every_package_data_key_resolves_to_a_package_and_a_real_file() -> None:
 
     assert set(package_data).issubset(packages)
     for package, patterns in package_data.items():
-        package_dir = REPO_ROOT / package.replace(".", "/")
-        prefix = f"{package.replace('.', '/')}/"
         for pattern in patterns:
-            matched = [
-                path
-                for path in package_dir.rglob("*")
-                if path.is_file()
-                and fnmatch(path.relative_to(REPO_ROOT).as_posix(), f"{prefix}{pattern}")
-            ]
+            matched = _globbed_files(package, pattern)
             assert matched, f"{package!r} pattern {pattern!r} matches no file on disk"
+
+
+def test_every_static_file_is_covered_by_a_package_data_glob() -> None:
+    """The completeness half of the claim above, for the `app` key.
+
+    Non-empty-per-glob is satisfied by one lucky file: `static/js/*` matched
+    `main.js` while shipping none of `static/js/logic/`, and all three logic
+    modules are in `sw.js`'s `SHELL_ASSETS` — so an installed app precached
+    three paths it does not contain and 404'd them offline. This asserts the
+    other direction: everything on disk under `app/static/` is matched by some
+    `app` glob, so adding a static file without registering it fails here
+    instead of in a user's installed app.
+
+    Scoped to `app`/`static` deliberately. The same hole exists under
+    `app.recipes` and `app.db`, but a data file there that is *meant* to stay
+    out of the wheel is plausible, and a blanket claim over every
+    `package-data` key would be a maintenance burden rather than a gate. Every
+    file under `static/` is served or precached, so none of them can be
+    legitimately unshipped.
+
+    The dotfile exposure is the one `tests/js/shell_assets.test.mjs` already
+    carries: it walks `static/js` and `static/css` with no dotfile filter, so a
+    stray `.DS_Store` is a pre-existing condition of this tree, not one added
+    here.
+    """
+
+    patterns = _pyproject()["tool"]["setuptools"]["package-data"]["app"]
+    covered: set[Path] = set()
+    for pattern in patterns:
+        covered |= _globbed_files("app", pattern)
+    static_dir = REPO_ROOT / "app" / "static"
+    on_disk = {path for path in static_dir.rglob("*") if path.is_file()}
+
+    assert not on_disk - covered, (
+        "static files no package-data glob ships (absent from every wheel): "
+        + ", ".join(
+            sorted(path.relative_to(REPO_ROOT).as_posix() for path in on_disk - covered)
+        )
+    )
 
 
 def test_dotted_package_data_keys_are_quoted() -> None:

@@ -37,7 +37,20 @@ namespaces = false
 # those resolve. Dotted keys MUST stay quoted: an unquoted `app.recipes` tries
 # to add a sub-key to the already-defined `app` table and the whole file fails
 # to parse.
-app = ["static/*", "static/css/*", "static/js/*", "static/js/pwa/*", "static/icons/*"]
+#
+# One entry per directory, one level deep. `static/js/*` matches `main.js` plus
+# the `logic/` and `pwa/` *directories* -- glob `*` does not cross a `/` -- so
+# it ships neither directory's contents. Each subdirectory therefore needs its
+# own entry; omitting one produces a wheel that 404s the file offline while the
+# build still reports success.
+app = [
+    "static/*",
+    "static/css/*",
+    "static/js/*",
+    "static/js/logic/*",
+    "static/js/pwa/*",
+    "static/icons/*",
+]
 "app.recipes" = ["lexicon/*.yaml"]
 "app.db" = ["schema.sql"]
 

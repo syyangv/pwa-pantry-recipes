@@ -90,10 +90,12 @@ previews/            VENDORED pwa-infra device frames (dev-only)
 
 Two things about that tree that a `find` will not tell you:
 
-- **`app/static/js/logic/*.js` does not ship in the wheel.** The
-  `package-data` globs cover `static/js/*` and `static/js/pwa/*` but not
-  `static/js/logic/*`, so those three precached modules are absent from the
-  built wheel. Recorded in `README.md` § *What does not work yet*.
+- **`package-data` is registered per directory, one level deep.** A glob's `*`
+  does not cross a `/`, so `static/js/*` matches `main.js` and the `logic/` and
+  `pwa/` *directories* and none of their contents. A new subdirectory under
+  `static/js/` needs its own `static/js/<name>/*` entry, or its modules are
+  precached by `sw.js`, absent from every wheel, and 404 offline.
+  `test_every_static_file_is_covered_by_a_package_data_glob` fails that commit.
 - **`package.json`'s test glob is quoted on purpose.** `'tests/js/**/*.test.mjs'`
   reaches `/bin/sh`, which has no `globstar`; unquoted, the runner silently
   collects a subset and reports 0 failures. `tests/js/collection-probe.mjs`
