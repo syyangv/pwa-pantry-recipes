@@ -936,3 +936,56 @@ because the JSON schema has no field for either. A third change followed in the
 same repo (`eb29296`): the **removed** `8451` route is traced in a *Removed
 routes* section of that same file, with the rollback command and the checksummed
 before/after snapshots in `~/Library/Logs/` under the `20260928-133003` stamp.
+
+## 9f. The terminal state for a single-node, single-iPhone deploy — 2026-09-29
+
+The user runs this PWA **only on one iPhone** and deploys it from **only this
+Mac**. That is the whole topology, it is deliberate, and under it the converge
+gate's answer is settled. This section exists so the next reader — or the next
+agent — does not mistake a **correct, final** verdict for an **open** one and go
+looking for a fix that is not there.
+
+**What is settled: the gate exits 3, `VANTAGE-LIMITED`, and that is the answer,
+not a gap.** Conditions 2–8 compare the local origin against the deployed one.
+Tailscale Serve attributes no identity to a request that originates from the node
+doing the serving, so from `home-macbook-air` the deployed half of each
+comparison is unobservable. One serving node cannot observe itself through its
+own proxy, and no amount of re-running changes that (§9b, §9c). The remedy the
+gate's design points at — a *different machine* on the tailnet — is deliberately
+**not** part of this deployment model, so it will not be pursued. **Exit 3 is the
+terminal state here.** It is not a soft pass, not a deferred check, and not a
+defect awaiting a fix; it is the gate correctly reporting the outer edge of what a
+lone server can know.
+
+**This is a statement of limits, never a pass.** Recording it here does not
+promote exit 3 to exit 0, does not satisfy any condition, and does not retire a
+single one of 2–8. If a `CONVERGED` line is ever genuinely wanted, it comes only
+from running the gate on a second, non-serving machine (or a cloud host with a
+tailnet route) — never from `--baseline`, a relaxed comparison, or editing a
+condition to agree, all of which this repo forbids.
+
+**The iPhone is the client, not a vantage point, and the distinction matters.**
+The user's phone (`mieiphone`) is a *participant*: it renders the app through the
+proxy, which is how the injected-identity chain is known to work end to end (§8,
+§9d). But a phone is **not** a place the gate can be run — it is a Python script
+and iOS has no interpreter for it — so "run the gate from the phone," which older
+wording in this file gestured at, is **not** an available action and is corrected
+here. The client and the observer are different roles, and this topology staffs
+only the client.
+
+**What the client-side evidence actually is, stated once.** The 食材 tab and the
+`v0.7.4` shell rendering on the phone are a **user attestation** (§9d) — real,
+and the best any single-node deploy can offer, but observed by a person and not by
+any tool in this repository. Combined with the machine-observed local half
+(conditions 0, 0b, 1, 9 — all `PASS`), the honest total is: **the local origin is
+fully verified; the deployed origin has been seen refusing closed and, once,
+answering on a real client; it has never been read as a response body by a
+machine.** That sentence is the ceiling of a single-node deploy, and nothing in
+this section raises it.
+
+**The one item still genuinely open is not a check at all:** live
+`cook_log_receipts` held 0 rows at deploy, so the amber staleness panel
+(`⚠ 有 N 次记录还没算进上面的次数`) and the `待 Obsidian 同步` badge clearing have
+never run against real data (§9d). That is closed by **using the app** — log one
+cook — not by any command on this host. Everything else in this runbook is either
+done or is the settled limit recorded above.
