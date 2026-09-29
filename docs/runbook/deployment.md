@@ -851,6 +851,39 @@ now **checked** rather than assumed: `tests/scaffold/test_smoke_spec.py` compare
 the spec against `LIST_RECIPE_KEYS` and `SLOT_KEYS` offline on every `pytest` and
 asserts no retired key survives in the file.
 
+### The 食材 tab, attested under `v0.7.4` — the same class of evidence, one step further
+
+The `v0.7.4` row above records the **version string** rendering on the phone. On
+2026-09-29 the user additionally reported that **the 食材 tab itself renders** —
+the second tab, `js/tabbar.js`'s bar, and `views/pantry.js` mounted against the
+live `GET /api/recipes`. That is one step further than the version string, because
+it means the client **executed** three modules that only exist in `66c43cd`
+(`js/tabbar.js`, `js/views/pantry.js`, `js/logic/ingredient-index.js`) and grouped
+50 Pantry Items out of a real payload.
+
+**It is a user attestation, and it is recorded as one.** No agent, tool, gate run
+or test in this repository observed it. What it establishes is **asset freshness
+on a client** — the same class of claim as the version string, and no more.
+
+**It closes nothing about convergence.** No deployed *response body* was
+observed, the gate's verdict is unchanged at **exit 3** with conditions 2–8
+`VANTAGE-LIMITED`, and the phone is still the only vantage that can see the
+deployed origin. A tab rendering is not a response any more than a version string
+is. The honest summary is that the *rotation question* has now been answered
+positively for both `v0.7.3` and `v0.7.4` on a client, while every
+machine-observable claim about the deployed origin remains unobserved from the
+serving node — which is the permanent condition §9b and §9c describe, not a gap
+this release closed.
+
+**The machine-observable half of the same release *was* checked here**, and is
+worth keeping distinct: on the serving node, `GET /api/version`, the on-disk
+`CACHE_VERSION` and the **served** `/sw.js` all read `v0.7.4`; the tab bar is
+present in the served `index.html` and sits **after** `</main>`, outside the
+`#app-root` subtree the router clears on navigation; and all three new modules
+return `200` carrying the `v0.7.4` token. Those are observations of the **local**
+origin only, which is exactly what conditions 0, 0b and 1 cover — and it is why
+the local half passes while the deployed half cannot be evaluated from here.
+
 **Still unexercised, and only the user can close it.** Live `cook_log_receipts`
 held **0 rows** at deploy time, so the new amber staleness panel
 (`⚠ 有 N 次记录还没算进上面的次数`) has never rendered against real data, and the

@@ -57,6 +57,7 @@ from tests.api.conftest import (
     DUPLICATE_RECIPE,
     DUPLICATE_RECIPE_BYTES,
     MAIN_RECIPE,
+    MAIN_RECIPE_BYTES,
     ORIGIN,
     PANTRY_NOTE,
     RECIPES_ROOT,
@@ -66,6 +67,14 @@ from tests.api.conftest import (
     write_pantry_note,
     write_recipe,
 )
+
+#: A third note whose name sorts AFTER both shared fixtures, written from
+#: `MAIN_RECIPE`'s own bytes. It exists so the enumeration order provably differs
+#: from code-point order, which is what gives the "the server does not sort" test
+#: teeth — see that test's docstring. It is not a new fixture: it is the same note
+#: under a third name, and F2's duplicate-slot rule is per-recipe, so it cannot
+#: interact with the other two.
+UNSORTED_PROBE = "zzz probe"
 
 #: §9.16's success key set for the list, plus the `skipped` count §5 requires
 #: next to the other two, plus §9.13.4's `stockJoin` table. Asserted as an exact
@@ -256,6 +265,27 @@ def _names(body: dict[str, Any]) -> list[str]:
     return [recipe["noteName"] for recipe in body["recipes"]]
 
 
+def _scandir_recipe_names(vault: Path) -> list[str]:
+    """The recipe names in the order `app/recipes/reader.py` will enumerate them.
+
+    Mirrors the reader's own admission rule — a `.md` suffix, not dot-prefixed,
+    a regular file — so the comparison below is "the server returned the reader's
+    order", not "the server returned whatever `ls` says". Deliberately a bare
+    `os.scandir` with **no sort**: sorting here would re-introduce the very
+    platform assumption that made the hardcoded version of this assertion fail on
+    Linux, and it would hide a server that started sorting.
+    """
+    root = vault / RECIPES_ROOT
+    with os.scandir(root) as entries:
+        return [
+            entry.name[: -len(".md")]
+            for entry in entries
+            if entry.name.lower().endswith(".md")
+            and not entry.name.startswith(".")
+            and entry.is_file(follow_symlinks=False)
+        ]
+
+
 # --- the list ---------------------------------------------------------------
 
 
@@ -321,20 +351,48 @@ def test_the_order_is_vault_enumeration_order_and_is_not_sorted(
     while the app is running is invisible for up to a minute. That is the designed
     staleness of a projection the user edits in Obsidian, and the reason the
     fixture cannot add a note mid-test and expect it to appear.
+
+    **The expected order is read from `os.scandir`, not hardcoded, and that is
+    the fix rather than a softening.** `app/recipes/reader.py` enumerates with a
+    bare `os.scandir(self._root)` and deliberately does not sort, so "enumeration
+    order" is by definition whatever the filesystem hands back. A literal
+    `[MAIN_RECIPE, DUPLICATE_RECIPE]` therefore asserted *the test runner's
+    filesystem*, and it failed on `ubuntu-latest` for exactly that reason while
+    passing on macOS: the server was right on both.
+
+    **AND THE TEST IS NOT ALLOWED TO BE VACUOUS.** Comparing against `scandir`
+    only detects a server-side sort when the enumeration *differs* from code-point
+    order — and on a filesystem where the two coincide, the old assertion and this
+    one are equally blind. So a third note (`zzz probe`, written from the same
+    bytes) is added to force a difference, and if the filesystem still enumerates
+    in sorted order the test **skips and says so** instead of reporting a green it
+    has not earned. The three outcomes are then distinct and each means one thing:
+    a pass means "did not sort", a failure means "sorted", and a skip means "this
+    filesystem cannot tell". A silently-vacuous pass is the one outcome this
+    cannot produce.
     """
     write_recipe(vault, MAIN_RECIPE)
     write_recipe(vault, DUPLICATE_RECIPE, DUPLICATE_RECIPE_BYTES)
+    write_recipe(vault, UNSORTED_PROBE, MAIN_RECIPE_BYTES)
     with client_for(settings) as client:
         body = client.get("/api/recipes").json()
 
-    assert _names(body) == [MAIN_RECIPE, DUPLICATE_RECIPE]
+    enumerated = _scandir_recipe_names(vault)
+    assert sorted(enumerated) == sorted([MAIN_RECIPE, DUPLICATE_RECIPE, UNSORTED_PROBE])
+    if enumerated == sorted(enumerated):
+        pytest.skip(
+            "this filesystem enumerates in code-point order, so a server-side sort "
+            "would be indistinguishable from the reader's order here"
+        )
+    assert _names(body) == enumerated
     # A `1/2` recipe is a first-class row. D4 forbids a threshold, a collapse and
     # a "show more", and the only way to assert that is to show the worse one.
     # `MAIN_RECIPE` scores `2/4` because `空心菜` is bought-and-finished and
     # `🐟 不存在的鱼` resolved to nothing; `DUPLICATE_RECIPE` scores `1/2` because
     # F2's duplicate-slot catch downgrades its second `番茄` and the pantry holds
-    # that one open. Neither row is hidden or collapsed.
-    assert [r["found"] / r["total"] for r in body["recipes"]] == [0.5, 0.5]
+    # that one open. Neither row is hidden or collapsed. Compared as a set,
+    # because the order is the thing under test and must not be assumed here.
+    assert sorted(r["found"] / r["total"] for r in body["recipes"]) == [0.5, 0.5, 0.5]
 
 
 def test_no_response_in_any_mode_publishes_a_cookable_boolean(client: TestClient) -> None:

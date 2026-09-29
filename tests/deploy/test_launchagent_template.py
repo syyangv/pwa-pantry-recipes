@@ -30,6 +30,7 @@ from __future__ import annotations
 import ast
 import plistlib
 import re
+import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,20 @@ GATE = REPO_ROOT / "scripts" / "converge_gate.py"
 CONFIG_PY = REPO_ROOT / "app" / "config.py"
 PLIST_LABEL = "com.syang.pwa-pantry-recipes"
 PLACEHOLDER = re.compile(r"__[A-Z0-9_]+__")
+
+#: `plutil -lint` is macOS-only and CI runs `ubuntu-latest`, so this one test
+#: failed there with `FileNotFoundError: 'plutil'` while every static test in this
+#: file ran and passed. The same guard, in the same words, already exists in
+#: `test_installer_render.py` for the render stage; this one needs only `plutil`,
+#: not `PlistBuddy`, so it asks for less.
+#:
+#: It is a SKIP and not a deletion: the template still has to lint, and on the
+#: machine that installs it — the one serving the tailnet — this runs. What
+#: cannot lint a plist on Linux is a fact about Linux.
+requires_plutil = pytest.mark.skipif(
+    shutil.which("plutil") is None,
+    reason="linting the template calls plutil, which is macOS-only",
+)
 
 #: The two ports, and the only two. `docs/spec/2026-09-27-pantry-recipes.md` §4
 #: and §12 own the numbers; `.env.example` records the 2026-09-27 audit; the
@@ -120,6 +135,7 @@ def _argument_after(plist: dict[str, Any], flag: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+@requires_plutil
 def test_the_template_lints() -> None:
     completed = subprocess.run(
         ("plutil", "-lint", str(TEMPLATE)), capture_output=True, text=True, check=False

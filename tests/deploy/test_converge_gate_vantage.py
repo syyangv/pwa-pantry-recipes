@@ -270,6 +270,29 @@ def test_error_code_reads_the_envelope_and_tolerates_junk() -> None:
 # ---------------------------------------------------------------------------
 
 
+def _require_a_tailnet_node(origin: str) -> None:
+    """Skip unless this host actually runs the tailnet the deployed origin is on.
+
+    The docstring below has always said the third case is machine-specific; only
+    the assertion was missing a guard, so on `ubuntu-latest` the test asserted a
+    fact about the runner and failed — `is_self_addressed` correctly answered
+    `False` for a name that does not resolve to the CI machine.
+
+    The guard asks the real `tailscale`, in the same shape and with the same
+    wording as `test_converge_gate_ingress.py`'s own seam test: a test that fails
+    on someone else's checkout is a test that gets deleted, and this one deletes
+    the only place the detector is run against a real MagicDNS name. **It is
+    deliberately not `is_self_addressed` itself** — gating the detector's positive
+    case on the detector would make the assertion unfalsifiable.
+    """
+    if origin.split("//", 1)[-1].split(":", 1)[0] in {"127.0.0.1", "localhost", "[::1]"}:
+        return
+    try:
+        json.loads(gate.tailscale_serve_status())
+    except (OSError, ValueError) as error:
+        pytest.skip(f"no readable Tailscale Serve configuration here: {error}")
+
+
 @pytest.mark.parametrize(
     "origin",
     [
@@ -287,8 +310,10 @@ def test_the_address_test_reads_this_machines_own_routing_table(origin: str) -> 
     which is the entire fact the vantage limit turns on. On a host that is *not*
     the serving node it resolves elsewhere and returns `False` — which is the
     correct answer, and the reason the check is a measurement and not a name
-    match.
+    match. `_require_a_tailnet_node` skips it there instead of failing; the two
+    loopback cases are universal and run everywhere.
     """
+    _require_a_tailnet_node(origin)
     assert gate.is_self_addressed(origin) is True, origin
 
 
