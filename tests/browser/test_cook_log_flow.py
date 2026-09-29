@@ -1068,11 +1068,32 @@ def test_f18_an_update_cannot_land_between_the_tap_and_the_request(
         page.evaluate(
             "addEventListener('pagehide', () => { window.__alive = false; })"
         )
+        # Two recorders, installed BEFORE the update exists so they cover the whole
+        # race. They observe the APP's own actions rather than the browser's
+        # registration state — see the note on step 6 for why that distinction is
+        # the whole test.
+        page.evaluate(
+            """() => {
+              window.__swActivations = [];
+              window.__ctrlChanges = 0;
+              const post = ServiceWorker.prototype.postMessage;
+              ServiceWorker.prototype.postMessage = function (m, ...rest) {
+                window.__swActivations.push((m && m.type) || String(m));
+                return post.call(this, m, ...rest);
+              };
+              navigator.serviceWorker.addEventListener('controllerchange', () => {
+                window.__ctrlChanges += 1;
+              });
+            }"""
+        )
 
         # 3. A deploy: a NEW worker installs and WAITS (F18 §4d), and the server
         #    starts reporting a newer version.
         gated.serve_new_worker.set()
         page.evaluate("navigator.serviceWorker.getRegistration().then((r) => r.update())")
+        # A worker that has finished installing and is waiting for permission to
+        # take over. See the note on step 6 for what this state is and is not
+        # guaranteed to be on every platform.
         page.wait_for_function(
             "() => navigator.serviceWorker.getRegistration().then((r) => Boolean(r.waiting))",
             timeout=CONTENT_TIMEOUT_MS,
@@ -1107,9 +1128,53 @@ def test_f18_an_update_cannot_land_between_the_tap_and_the_request(
             "the document navigated while a cook-log write was in flight: the "
             "update was applied across a live mutation and the log is lost"
         )
-        assert page.evaluate(
-            "navigator.serviceWorker.getRegistration().then((r) => Boolean(r.waiting))"
-        ), "the waiting worker was activated while a write was in flight"
+        # **What is asserted is what the APP did, not what the browser's
+        # registration object holds** — and that is a correction, not a
+        # preference. This step used to assert `Boolean(r.waiting)`, which reads
+        # like "the app did not activate the waiting worker" but is not that: it
+        # reads a browser lifecycle field, and on `ubuntu-latest` it failed
+        # reproducibly while passing on macOS. Measured there, with the page's own
+        # `postMessage` and `controllerchange` both instrumented:
+        #
+        #   * `waiting` was already empty again by the next line, with a **fresh
+        #     install** in progress — and the same worker, left alone for 3 s
+        #     **without** the `focus` dispatch, stayed `waiting` the whole time.
+        #     So the browser drops it in response to the focus-driven version
+        #     check, not to anything the write did;
+        #   * the page posted **no** `SKIP_WAITING` at any point (`acts == []`), so
+        #     the app never asked for activation — and `autoApply: false` means it
+        #     has no path from a version check to one;
+        #   * `controllerchange` fired **zero** times, so no worker ever took the
+        #     page over, which is what an activation would cause.
+        #
+        # So the guard held on both platforms and the old assertion was measuring
+        # Chromium's timing. These three read the app's own behaviour instead, they
+        # hold identically on macOS and Linux, and `__ctrlChanges` is the direct
+        # consequence of an activation rather than an inference from it. Step 8
+        # proves the recorder can see a real activation, so "none happened" is a
+        # reading rather than a stuck flag.
+        #
+        # **AND THE GUARD ITSELF IS PINNED SOMEWHERE DETERMINISTIC, so nothing here
+        # depends on this flow being able to catch a regression.** Verified by
+        # mutation, not assumed: setting `autoApply: true` in `main.js` fails
+        # `tests/js/scaffold.test.mjs` ("the update UX is the F18 explicit banner,
+        # not auto-takeover"), and the two terms of `canApplyUpdate` are composed
+        # and asserted in `tests/js/views.test.mjs` — false for the whole cook-log
+        # write, true again once it lands and the picker closes. This flow cannot
+        # catch either mutation on `ubuntu-latest`, and provably so: with no
+        # waiting worker present, `applyUpdate` takes its documented "leave the
+        # page intact if no waiting worker appeared" branch and does nothing at all,
+        # guard or no guard. So the division is deliberate — **the node gates pin
+        # the guard's inputs, and this flow observes the end-to-end consequence in a
+        # real browser**, which is the only thing here that needs a browser.
+        assert page.evaluate("window.__swActivations") == [], (
+            "the page asked a waiting worker to activate while a cook-log write was "
+            f"in flight: {page.evaluate('window.__swActivations')}"
+        )
+        assert page.evaluate("window.__ctrlChanges") == 0, (
+            "a service worker took the page over while a cook-log write was in "
+            "flight: the update was applied across a live mutation"
+        )
 
         # 7. Release the write and let it land. The log must survive.
         gated.release_write.set()
@@ -1120,6 +1185,49 @@ def test_f18_an_update_cannot_land_between_the_tap_and_the_request(
             timeout=CONTENT_TIMEOUT_MS,
         )
         assert f"已记到 {note_path(TODAY)}" == str(page.text_content(LOG_STATUS))
+
+        # 8. **The controls, so step 6 cannot pass vacuously.** Every assertion in
+        # step 6 is a negative — the document did not navigate, the page did not
+        # ask for activation, no worker took over — and a test made entirely of
+        # negatives proves nothing unless its detectors are shown to fire.
+        #
+        # Two, because they answer two different questions. (a) The liveness
+        # recorder is *live*: `pagehide` really does flip `__alive`, so step 6's
+        # `__alive is True` is a reading and not a stuck flag. It is fired
+        # synthetically rather than by navigating, because `__alive` cannot survive
+        # a real reload — the value dies with the document that held it, which is
+        # precisely why a navigation shows up as `false` at all.
+        page.evaluate("window.__alive = true; dispatchEvent(new Event('pagehide'))")
+        assert page.evaluate("window.__alive") is False, (
+            "the pagehide recorder never fired, so step 6's `__alive is True` was "
+            "not evidence of anything"
+        )
+        # (b) **The recorder can see a REAL `SKIP_WAITING`**, which is the control
+        # that matters, because step 6's two assertions are both "nothing was
+        # requested". If the recorder cannot see one when one definitely happens,
+        # its empty reading in step 6 means nothing.
+        #
+        # The message is posted **directly** rather than through
+        # `requestUpdateReload()`, and that is deliberate: the app's own path only
+        # posts when `registration.waiting` is non-null, and on `ubuntu-latest` it
+        # is not — that method falls back to `location.reload()` instead, which is
+        # correct app behaviour and useless as a control. Posting to whichever
+        # worker the registration does have is deterministic on both platforms and
+        # exercises exactly what step 6 relies on: the `postMessage` trap.
+        recorded = page.evaluate(
+            """async () => {
+              const r = await navigator.serviceWorker.getRegistration();
+              const target = (r && (r.waiting || r.active)) || null;
+              if (!target) return 'no-worker';
+              target.postMessage({ type: 'SKIP_WAITING' });
+              return window.__swActivations.slice();
+            }"""
+        )
+        assert recorded != "no-worker", "no service worker to post to, so the control is void"
+        assert "SKIP_WAITING" in recorded, (
+            "the activation recorder never saw a SKIP_WAITING, so step 6's empty "
+            f"list was not evidence: {recorded}"
+        )
     finally:
         context.close()
         gated.stop()
