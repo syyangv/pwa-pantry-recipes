@@ -84,6 +84,7 @@ EXPECTED_ROUTE_TABLE: list[str] = [
     "/api/recipes/{note_name}/ingredients/{index}/mapping",
     "/api/pantry/items",
     "/api/cook-logs",
+    "/api/cook-logs/{log_date}/{note_name}",
     "/api/cook-logs",
     "/api/shortlists",
     "/api/shortlists/{slot}",

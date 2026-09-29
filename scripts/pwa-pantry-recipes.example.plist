@@ -192,6 +192,10 @@
              hostile file is refused before it is parsed. -->
         <key>MAX_RECIPE_BYTES</key>
         <string>2000000</string>
+        <!-- Hours after it was written that a Cooking Record may be retracted
+             from the PWA. Past this it is history, edited in Obsidian. -->
+        <key>COOK_LOG_UNDO_HOURS</key>
+        <string>72</string>
     </dict>
 
     <!-- Keep the loopback server alive; restart on crash. -->

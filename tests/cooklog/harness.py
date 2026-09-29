@@ -34,6 +34,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+from datetime import timedelta
 from functools import partial
 from pathlib import Path
 from typing import Final
@@ -124,7 +125,10 @@ def initialise_db(settings: Settings) -> None:
 def writer_for(settings: Settings, store: AtomicNoteStore) -> CookingLogWriter:
     """A writer over the real store, the real path policy, and a real database."""
     return CookingLogWriter(
-        store, DailyNotePathPolicy.from_settings(settings), partial(connect_db, settings)
+        store,
+        DailyNotePathPolicy.from_settings(settings),
+        partial(connect_db, settings),
+        undo_window=timedelta(hours=settings.cook_log_undo_hours),
     )
 
 

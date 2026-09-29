@@ -100,11 +100,21 @@ CREATE TABLE IF NOT EXISTS cook_log_receipts (
     -- recipe detail route, as a read. Do NOT re-add it: a column that means
     -- "nobody implemented this" is one read away from being load-bearing again.
     note_revision            TEXT    NOT NULL,   -- 'sha256:…' of the committed note
-    written_at               TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
+    written_at               TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now')),
+    -- Set when the user retracts the Cooking Record inside the undo window. The
+    -- row is kept (audit trail: "the app wrote this, then removed it") and stops
+    -- counting as a cook; `_migrate_003_receipt_retraction` adds the column to a
+    -- table created before it existed.
+    retracted_at             TEXT
 );
 
+-- Active rows only: a retracted row must not keep its recipe and date reserved,
+-- or a cook retracted by mistake could never be logged again. On a database
+-- created before `retracted_at`, this statement is skipped by name and the
+-- migration replaces the old total index.
 CREATE UNIQUE INDEX IF NOT EXISTS ux_cook_log_receipts_recipe_date
-    ON cook_log_receipts(recipe_note, log_date);
+    ON cook_log_receipts(recipe_note, log_date)
+    WHERE retracted_at IS NULL;
 
 -- Exactly-once offline replay of a shortlist mutation. The startup migration
 -- _migrate_001_shortlist_intents also stamps the ledger version; the mutation

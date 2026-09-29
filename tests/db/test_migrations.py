@@ -34,6 +34,7 @@ from app.config import Settings
 from app.db.database import (
     MIGRATION_001,
     MIGRATION_002,
+    MIGRATION_003,
     apply_pragmas,
     connect_db,
     db_path,
@@ -329,7 +330,7 @@ def test_the_migration_is_a_no_op_on_a_fresh_install(settings: Settings) -> None
             ).fetchall()
             return [str(row[0]) for row in rows]
 
-    assert asyncio.run(versions()) == [MIGRATION_001, MIGRATION_002]
+    assert asyncio.run(versions()) == [MIGRATION_001, MIGRATION_002, MIGRATION_003]
 
 
 def test_cook_log_receipts_dedupes_the_same_recipe_and_date(settings: Settings) -> None:
@@ -352,6 +353,96 @@ def test_cook_log_receipts_dedupes_the_same_recipe_and_date(settings: Settings) 
         asyncio.run(receipt("盐焗鸡", "2026-09-27"))
     # A different date is a real second cook, not a duplicate submit.
     asyncio.run(receipt("盐焗鸡", "2026-09-28"))
+
+
+def test_a_retracted_receipt_frees_its_recipe_and_date_for_a_second_log(
+    settings: Settings,
+) -> None:
+    """Migration 003's whole point: the dedupe index covers ACTIVE rows only.
+
+    With the old total index a retracted row would keep the pair reserved
+    forever, so a cook retracted by mistake could never be logged again. Two
+    active rows for the same pair must still be refused, or the double-submit
+    ledger (F13) is gone.
+    """
+    asyncio.run(init_db(settings))
+
+    async def run(sql: str, *args: str) -> None:
+        async with connect_db(settings) as conn:
+            await conn.execute(sql, args)
+            await conn.commit()
+
+    insert = (
+        "INSERT INTO cook_log_receipts"
+        " (recipe_note, log_date, relative_path, note_revision)"
+        " VALUES ('盐焗鸡', '2026-09-27', '日记/2026/2026-09-27.md', 'sha256:x')"
+    )
+    asyncio.run(run(insert))
+    asyncio.run(
+        run(
+            "UPDATE cook_log_receipts SET retracted_at = '2026-09-28T01:00:00.000Z'"
+            " WHERE recipe_note = ?",
+            "盐焗鸡",
+        )
+    )
+    asyncio.run(run(insert))  # allowed: the first row is retracted
+    with pytest.raises(sqlite3.IntegrityError):
+        asyncio.run(run(insert))  # refused: an active row already holds the pair
+
+
+def test_the_migration_adds_retracted_at_to_a_populated_legacy_database(
+    settings: Settings,
+) -> None:
+    """The upgrade path: an old table with rows and the OLD total unique index.
+
+    `schema.sql` runs first on every start and its `CREATE UNIQUE INDEX IF NOT
+    EXISTS` is skipped by name, so it is the migration alone that must replace
+    the total index with the partial one. Existing rows survive as active.
+    """
+    path = db_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    legacy = sqlite3.connect(path)
+    try:
+        legacy.executescript(
+            "CREATE TABLE cook_log_receipts ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " recipe_note TEXT NOT NULL,"
+            " log_date TEXT NOT NULL,"
+            " relative_path TEXT NOT NULL,"
+            " note_revision TEXT NOT NULL,"
+            " written_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+            ");"
+            "CREATE UNIQUE INDEX ux_cook_log_receipts_recipe_date"
+            " ON cook_log_receipts(recipe_note, log_date);"
+            "INSERT INTO cook_log_receipts"
+            " (recipe_note, log_date, relative_path, note_revision)"
+            " VALUES ('盐焗鸡', '2026-09-27', '日记/x.md', 'sha256:x');"
+        )
+        legacy.commit()
+    finally:
+        legacy.close()
+
+    asyncio.run(init_db(settings))
+    asyncio.run(init_db(settings))  # the re-run is a no-op
+
+    async def state() -> tuple[list[str], list[tuple[str, str | None]], str]:
+        async with connect_db(settings) as conn:
+            info = await (await conn.execute("PRAGMA table_info(cook_log_receipts)")).fetchall()
+            columns = [str(r["name"]) for r in info]
+            rows = await (
+                await conn.execute("SELECT recipe_note, retracted_at FROM cook_log_receipts")
+            ).fetchall()
+            index_sql = await (
+                await conn.execute(
+                    "SELECT sql FROM sqlite_master WHERE name = 'ux_cook_log_receipts_recipe_date'"
+                )
+            ).fetchone()
+            return columns, [(str(r[0]), r[1]) for r in rows], str(index_sql[0])
+
+    columns, rows, index_sql = asyncio.run(state())
+    assert "retracted_at" in columns
+    assert rows == [("盐焗鸡", None)]  # survived, and is active
+    assert "retracted_at IS NULL" in index_sql
 
 
 def test_shortlist_intents_creates_the_exactly_once_ledger(settings: Settings) -> None:
@@ -477,10 +568,10 @@ def test_schema_migrations_records_every_version(settings: Settings) -> None:
             ).fetchall()
             return [str(row[0]) for row in rows]
 
-    # BOTH versions, in order. The list is the migration ledger's whole
+    # All three versions, in order. The list is the migration ledger's whole
     # contract, so a new migration that is not added here fails rather than
     # being applied silently forever.
-    assert asyncio.run(versions()) == [MIGRATION_001, MIGRATION_002]
+    assert asyncio.run(versions()) == [MIGRATION_001, MIGRATION_002, MIGRATION_003]
 
 
 def test_a_rerun_is_a_no_op_and_does_not_disturb_ledger_rows(settings: Settings) -> None:
@@ -523,7 +614,7 @@ def test_a_rerun_is_a_no_op_and_does_not_disturb_ledger_rows(settings: Settings)
     applied_after, ledger_count, intent_count = asyncio.run(after_rerun())
 
     assert applied_after == first_applied
-    assert ledger_count == 2
+    assert ledger_count == 3
     # The guard short-circuits, so a re-run cannot destroy a replayed intent.
     assert intent_count == 1
 

@@ -39,8 +39,10 @@ import sqlite3
 import uuid
 from collections.abc import AsyncIterator, Awaitable, Callable
 from contextlib import asynccontextmanager
+from datetime import timedelta
 from functools import partial
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request, Response
 from fastapi.exceptions import RequestValidationError
@@ -220,6 +222,8 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 store,
                 DailyNotePathPolicy.from_settings(runtime),
                 partial(connect_db, runtime),
+                undo_window=timedelta(hours=runtime.cook_log_undo_hours),
+                timezone=ZoneInfo(runtime.app_timezone),
             )
 
             application.state[RECIPE_INDEX_STATE_KEY] = recipes

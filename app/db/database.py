@@ -16,6 +16,7 @@ DB_FILENAME = "recipes.sqlite3"
 # depends on an earlier one must be appended after it.
 MIGRATION_001 = "001_shortlist_intents"
 MIGRATION_002 = "002_drop_recipe_tracker_synced"
+MIGRATION_003 = "003_receipt_retraction"
 
 
 def db_path(settings: Settings) -> Path:
@@ -63,6 +64,7 @@ async def init_db(settings: Settings | None = None) -> None:
         await conn.commit()
         await _migrate_001_shortlist_intents(conn)
         await _migrate_002_drop_recipe_tracker_synced(conn)
+        await _migrate_003_receipt_retraction(conn)
 
 
 async def _migrate_001_shortlist_intents(conn: aiosqlite.Connection) -> None:
@@ -134,5 +136,43 @@ async def _migrate_002_drop_recipe_tracker_synced(conn: aiosqlite.Connection) ->
         await conn.execute("ALTER TABLE cook_log_receipts DROP COLUMN recipe_tracker_synced")
     await conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)", (MIGRATION_002,)
+    )
+    await conn.commit()
+
+
+async def _migrate_003_receipt_retraction(conn: aiosqlite.Connection) -> None:
+    """Add `cook_log_receipts.retracted_at` and make the dedupe index partial.
+
+    A retracted Cooking Record keeps its row (the audit trail can still answer
+    "did the app write this?"), so the unique index on `(recipe_note, log_date)`
+    has to stop covering it: with the total index a retracted row would reserve
+    its pair forever and the cook could never be logged again.
+
+    **`schema.sql` cannot do this on an existing database**, because its `CREATE
+    UNIQUE INDEX IF NOT EXISTS` is skipped by name, so the old total index stays.
+    The migration therefore drops and recreates it. Both steps are guarded by
+    asking the database what it has, so the same code is a no-op on a fresh
+    install (where `schema.sql` already made the partial index) and on a re-run.
+    Existing rows get `retracted_at IS NULL`, i.e. they stay active.
+    """
+    columns = {
+        str(row["name"])
+        for row in await (await conn.execute("PRAGMA table_info(cook_log_receipts)")).fetchall()
+    }
+    if "retracted_at" not in columns:
+        await conn.execute("ALTER TABLE cook_log_receipts ADD COLUMN retracted_at TEXT")
+    index = await (
+        await conn.execute(
+            "SELECT sql FROM sqlite_master WHERE name = 'ux_cook_log_receipts_recipe_date'"
+        )
+    ).fetchone()
+    if index is None or "retracted_at IS NULL" not in str(index["sql"]):
+        await conn.execute("DROP INDEX IF EXISTS ux_cook_log_receipts_recipe_date")
+        await conn.execute(
+            "CREATE UNIQUE INDEX ux_cook_log_receipts_recipe_date"
+            " ON cook_log_receipts(recipe_note, log_date) WHERE retracted_at IS NULL"
+        )
+    await conn.execute(
+        "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)", (MIGRATION_003,)
     )
     await conn.commit()

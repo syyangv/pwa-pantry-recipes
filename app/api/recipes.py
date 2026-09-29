@@ -141,7 +141,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from ..config import ConfigurationError
-from ..cooklog.writer import CookLogError
+from ..cooklog.writer import CookLogError, CookLogState
 from ..mapping.store import (
     DUPLICATE_SLOT_CONFLICT,
     CandidateRecord,
@@ -344,12 +344,21 @@ def build_recipes_router() -> APIRouter:
         await _current(request, context.store, (note,))
         try:
             pending = await writer.cook_log_dates(note.note_name)
+            state = await writer.cook_log_state(
+                note.note_name,
+                last_cooked=(
+                    note.history.last_cooked.isoformat() if note.history.last_cooked else None
+                ),
+                auto_updated=note.history.auto_updated,
+            )
         except CookLogError as exc:
             return _fail(request, exc.status_code, exc.code)
         return JSONResponse(
             {
                 "recipe": await context.detail(
-                    note, pending_cook_dates=_pending_cook_dates(note, pending)
+                    note,
+                    pending_cook_dates=_pending_cook_dates(note, pending),
+                    cook_log_state=state,
                 )
             }
         )
@@ -553,11 +562,18 @@ class _Context:
         return await self._recipe(note, include_body=False)
 
     async def detail(
-        self, note: RecipeNote, *, pending_cook_dates: tuple[str, ...] = ()
+        self,
+        note: RecipeNote,
+        *,
+        pending_cook_dates: tuple[str, ...] = (),
+        cook_log_state: CookLogState | None = None,
     ) -> dict[str, Any]:
         """The detail body: the same, plus `steps`, the Cooking History, and staleness."""
         return await self._recipe(
-            note, include_body=True, pending_cook_dates=pending_cook_dates
+            note,
+            include_body=True,
+            pending_cook_dates=pending_cook_dates,
+            cook_log_state=cook_log_state,
         )
 
     async def _recipe(
@@ -566,6 +582,7 @@ class _Context:
         *,
         include_body: bool,
         pending_cook_dates: tuple[str, ...] = (),
+        cook_log_state: CookLogState | None = None,
     ) -> dict[str, Any]:
         slots = await self._slots(note)
         found, total = self._score(slots)
@@ -602,6 +619,19 @@ class _Context:
             # count the client has to take on faith is the thing this key exists
             # to replace; the dates are the evidence and they cost one array.
             body["pendingCookDates"] = list(pending_cook_dates)
+            # What the 撤销 control needs, computed on the server's clock so the
+            # deadline never depends on the phone's. Empty rather than absent,
+            # for the same reason `pendingCookDates` is.
+            state = cook_log_state or CookLogState(retractable=(), pending_retractions=())
+            body["retractableCooks"] = [
+                {
+                    "date": cook.log_date,
+                    "writtenAt": cook.written_at,
+                    "retractableUntil": cook.retractable_until,
+                }
+                for cook in state.retractable
+            ]
+            body["pendingRetractionDates"] = list(state.pending_retractions)
         return body
 
     async def _slots(self, note: RecipeNote) -> list[dict[str, Any]]:

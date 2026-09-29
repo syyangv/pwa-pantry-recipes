@@ -287,6 +287,7 @@ def test_settings_exposes_exactly_the_locked_field_set() -> None:
         "stock_cache_seconds",
         "recipe_cache_seconds",
         "max_recipe_bytes",
+        "cook_log_undo_hours",
     }
 
 
@@ -298,6 +299,7 @@ def test_new_settings_capture_their_documented_defaults(settings: Settings) -> N
     assert settings.stock_cache_seconds == 30.0
     assert settings.recipe_cache_seconds == 60.0
     assert settings.max_recipe_bytes == 2_000_000
+    assert settings.cook_log_undo_hours == 72.0
 
 
 def test_overridden_settings_capture_the_operator_values(runtime_root: Path) -> None:
@@ -310,6 +312,7 @@ def test_overridden_settings_capture_the_operator_values(runtime_root: Path) -> 
         "STOCK_CACHE_SECONDS": "5",
         "RECIPE_CACHE_SECONDS": "3600",
         "MAX_RECIPE_BYTES": "4096",
+        "COOK_LOG_UNDO_HOURS": "24",
     }
     settings = Settings.from_mapping(values)
     assert settings.pantry_note_relative == "库存/Kitchen/Pantry note.md"
@@ -319,6 +322,7 @@ def test_overridden_settings_capture_the_operator_values(runtime_root: Path) -> 
     assert settings.stock_cache_seconds == 5.0
     assert settings.recipe_cache_seconds == 3600.0
     assert settings.max_recipe_bytes == 4096
+    assert settings.cook_log_undo_hours == 24.0
 
 
 @pytest.mark.parametrize(
@@ -343,6 +347,12 @@ def test_overridden_settings_capture_the_operator_values(runtime_root: Path) -> 
         ("STOCK_CACHE_SECONDS", "600.5", "invalid_stock_cache_seconds"),
         ("RECIPE_CACHE_SECONDS", "0", "invalid_recipe_cache_seconds"),
         ("RECIPE_CACHE_SECONDS", "3601", "invalid_recipe_cache_seconds"),
+        ("COOK_LOG_UNDO_HOURS", "0", "invalid_cook_log_undo_hours"),
+        ("COOK_LOG_UNDO_HOURS", "-1", "invalid_cook_log_undo_hours"),
+        ("COOK_LOG_UNDO_HOURS", "720.5", "invalid_cook_log_undo_hours"),
+        ("COOK_LOG_UNDO_HOURS", "nan", "invalid_cook_log_undo_hours"),
+        ("COOK_LOG_UNDO_HOURS", "three days", "invalid_cook_log_undo_hours"),
+        ("COOK_LOG_UNDO_HOURS", "", "invalid_cook_log_undo_hours"),
         ("MAX_RECIPE_BYTES", "1023", "invalid_max_recipe_bytes"),
         ("MAX_RECIPE_BYTES", "20000001", "invalid_max_recipe_bytes"),
         ("MAX_RECIPE_BYTES", "2.5", "invalid_max_recipe_bytes"),

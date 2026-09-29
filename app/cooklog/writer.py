@@ -65,6 +65,7 @@ import sqlite3
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta, tzinfo
 from typing import Final, Literal
 
 import aiosqlite
@@ -102,6 +103,7 @@ MAX_RECIPE_NOTE_CHARS: Final = 200
 _UNSAFE_RECIPE_NOTE: Final = re.compile(r"[\[\]\\\x00-\x1f\x7f/]")
 
 CookLogStatus = Literal["logged", "duplicate"]
+RetractStatus = Literal["retracted", "already_retracted"]
 
 #: `DailyNotePathError` codes that describe a broken operator configuration
 #: rather than a request. Both are reachable only when `DAILY_NOTES_ROOT` or
@@ -235,6 +237,82 @@ class DailyNoteWriteUnverified(CookLogError):
     status_code = 500
 
 
+class CookRecordNotFound(CookLogError):
+    """No active receipt for this recipe and date, so the app wrote nothing to undo.
+
+    This is the ownership rule: a receipt exists only for a line the app itself
+    appended (a `duplicate` over a hand-typed link writes none), so the absence of
+    one means the link, if there is one, is the user's and is not this route's to
+    delete.
+    """
+
+    code = "cook_record_not_found"
+    status_code = 404
+
+
+class CookRecordNotRemovable(CookLogError):
+    """The note no longer holds exactly the one line the app wrote.
+
+    The line was edited, the recipe is linked more than once, or the link is in
+    another form. Which link is "the app's" is then a guess, and a guess deletes
+    the user's history, so the route refuses and the user edits the note in
+    Obsidian.
+    """
+
+    code = "cook_record_not_removable"
+    status_code = 409
+
+
+class RetractionWindowClosed(CookLogError):
+    """Older than `COOK_LOG_UNDO_HOURS`: history now, edited in Obsidian."""
+
+    code = "retraction_window_closed"
+    status_code = 409
+
+
+@dataclass(frozen=True)
+class CookRetractResult:
+    """The outcome of one `retract`.
+
+    `wrote` distinguishes a real edit of the note from a convergence: the line was
+    already gone (the user deleted it in Obsidian) and only the ledger moved.
+    `note_revision` is `None` only on `already_retracted`, where the note is not
+    read and may not exist.
+    """
+
+    status: RetractStatus
+    wrote: bool
+    recipe_note: str
+    log_date: str
+    relative_path: str
+    note_revision: str | None
+    retracted_at: str | None = None
+
+
+@dataclass(frozen=True)
+class RetractableCook:
+    """An active Cooking Record still inside the undo window."""
+
+    log_date: str
+    written_at: str
+    retractable_until: str
+
+
+@dataclass(frozen=True)
+class CookLogState:
+    """What the recipe view needs about one recipe's receipts, beyond the pending dates.
+
+    `retractable` is computed on the server's clock, never the browser's.
+    `pending_retractions` are retracted dates the tracker's frontmatter may still
+    count: the date is the recipe's `last_cooked`, no active receipt holds it, and
+    the tracker has not run since the retraction. It is deliberately narrow — see
+    `CookingLogWriter.cook_log_state`.
+    """
+
+    retractable: tuple[RetractableCook, ...]
+    pending_retractions: tuple[str, ...]
+
+
 @dataclass(frozen=True)
 class CookLogResult:
     """The outcome of one `append`.
@@ -353,6 +431,36 @@ def already_linked(source: bytes, recipe_note: str) -> bool:
     return pattern.search(source) is not None
 
 
+def remove_cook_link(source: bytes, recipe_note: str) -> bytes | None:
+    """The exact inverse of `append_cook_link`: delete the one line the app wrote.
+
+    Returns `None` when the note does not link the recipe at all (nothing to
+    remove), and raises `CookRecordNotRemovable` when it does but not as exactly
+    one bare `- [[<recipe_note>]]` line. The line goes together with its own
+    terminator, so LF, CRLF and lone-CR notes are each left in their own style
+    and the pre-image comes back byte for byte.
+
+    "Links the recipe" uses the same predicate as `already_linked` on purpose: it
+    is the tracker's own match, so a note the tracker would count is never
+    reported as unlinked here. The price is that a longer name containing this one
+    (`[[红烧盐焗鸡]]`) counts as a second link and the removal is refused, which is
+    the safe direction.
+    """
+    name = re.escape(recipe_note.encode("utf-8"))
+    any_link = re.compile(b"\\[\\[[^\\]]*\\|?\\s*" + name + b"\\s*\\]\\]")
+    links = len(any_link.findall(source))
+    if links == 0:
+        return None
+    line = re.compile(b"(?:\\A|(?<=[\\r\\n]))- \\[\\[" + name + b"\\]\\](\\r\\n|\\n|\\r)")
+    lines = list(line.finditer(source))
+    if links != 1 or len(lines) != 1:
+        raise CookRecordNotRemovable(
+            "cook_record_not_removable: the note no longer holds exactly the line the app wrote"
+        )
+    match = lines[0]
+    return source[: match.start()] + source[match.end() :]
+
+
 def note_revision(source: bytes) -> str:
     """`sha256:<hex>` of the exact note bytes — the optimistic-concurrency token."""
     return "sha256:" + hashlib.sha256(source).hexdigest()
@@ -417,7 +525,7 @@ class CookLogReceipts:
         # the wire that is the absence of an implementation rather than a fact
         # about Obsidian. See `CookLogEntry`.
         "SELECT recipe_note, written_at"
-        " FROM cook_log_receipts WHERE log_date = ? ORDER BY id"
+        " FROM cook_log_receipts WHERE log_date = ? AND retracted_at IS NULL ORDER BY id"
     )
 
     async def record(
@@ -467,7 +575,7 @@ class CookLogReceipts:
         """
         cursor = await connection.execute(
             "SELECT written_at FROM cook_log_receipts"
-            " WHERE recipe_note = ? AND log_date = ?",
+            " WHERE recipe_note = ? AND log_date = ? AND retracted_at IS NULL",
             (recipe_note, log_date),
         )
         row = await cursor.fetchone()
@@ -498,11 +606,63 @@ class CookLogReceipts:
         rows = await (
             await connection.execute(
                 "SELECT log_date FROM cook_log_receipts"
-                " WHERE recipe_note = ? ORDER BY log_date",
+                " WHERE recipe_note = ? AND retracted_at IS NULL ORDER BY log_date",
                 (recipe_note,),
             )
         ).fetchall()
         return tuple(str(row["log_date"]) for row in rows)
+
+
+    async def retract(
+        self,
+        connection: aiosqlite.Connection,
+        *,
+        recipe_note: str,
+        log_date: str,
+        retracted_at: str,
+    ) -> bool:
+        """Stamp the active receipt as retracted; `False` when there was none.
+
+        The row is kept for the audit trail. `retracted_at IS NULL` in the WHERE
+        is what makes a second call a no-op rather than moving the timestamp.
+        """
+        cursor = await connection.execute(
+            "UPDATE cook_log_receipts SET retracted_at = ?"
+            " WHERE recipe_note = ? AND log_date = ? AND retracted_at IS NULL",
+            (retracted_at, recipe_note, log_date),
+        )
+        await connection.commit()
+        return cursor.rowcount > 0
+
+    async def states(
+        self, connection: aiosqlite.Connection, *, recipe_note: str
+    ) -> tuple[tuple[str, str, str | None], ...]:
+        """`(log_date, written_at, retracted_at)` for every receipt of a recipe."""
+        rows = await (
+            await connection.execute(
+                "SELECT log_date, written_at, retracted_at FROM cook_log_receipts"
+                " WHERE recipe_note = ? ORDER BY log_date, id",
+                (recipe_note,),
+            )
+        ).fetchall()
+        return tuple(
+            (
+                str(r["log_date"]),
+                str(r["written_at"]),
+                None if r["retracted_at"] is None else str(r["retracted_at"]),
+            )
+            for r in rows
+        )
+
+    async def was_retracted(
+        self, connection: aiosqlite.Connection, *, recipe_note: str, log_date: str
+    ) -> bool:
+        cursor = await connection.execute(
+            "SELECT 1 FROM cook_log_receipts"
+            " WHERE recipe_note = ? AND log_date = ? AND retracted_at IS NOT NULL",
+            (recipe_note, log_date),
+        )
+        return await cursor.fetchone() is not None
 
 
 #: `app.db.connect_db` is an `asynccontextmanager`, so the writer depends on a
@@ -525,11 +685,18 @@ class CookingLogWriter:
         store: AtomicNoteStore,
         path_policy: DailyNotePathPolicy,
         connect: ConnectFactory,
+        *,
+        undo_window: timedelta = timedelta(hours=72),
+        clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+        timezone: tzinfo = UTC,
     ) -> None:
         self._store = store
         self._policy = path_policy
         self._connect = connect
         self._receipts = CookLogReceipts()
+        self._undo_window = undo_window
+        self._clock = clock
+        self._timezone = timezone
 
     # --- the write ------------------------------------------------------
 
@@ -589,6 +756,184 @@ class CookingLogWriter:
             relative_path=plan.relative_path,
             note_revision=revision,
         )
+
+    # --- the retraction -------------------------------------------------
+
+    async def retract(
+        self, recipe_note: str, log_date: str, base_revision: str | None = None
+    ) -> CookRetractResult:
+        """Undo one Cooking Record the app wrote, inside `undo_window`.
+
+        The order is the safety argument:
+
+        1. **Ownership** — an active receipt must exist. A hand-typed link has no
+           receipt (a `duplicate` writes none), so it is never this route's to
+           delete.
+        2. **Window** — measured from the receipt's `written_at`, the server's
+           own clock, never a client-supplied time.
+        3. **Compare-and-swap** on `base_revision`, exactly as the append does.
+        4. **Splice** — `remove_cook_link` under `transform_existing`'s flock,
+           re-derived from the bytes it re-reads. A line that is not exactly the
+           one the app wrote is refused, not guessed at.
+        5. **Ledger last.** The note is the source of truth (the tracker reads
+           it), so it changes first. If the ledger write then fails, the answer is
+           a retryable 503 and the retry finds the line already gone, so it only
+           has to close the ledger. Either order of failure converges.
+        """
+        recipe_note = _require_recipe_note(recipe_note)
+        relative = self._resolve(log_date)
+
+        async with self._connect() as connection:
+            try:
+                written_at = await self._receipts.written_at(
+                    connection, recipe_note=recipe_note, log_date=log_date
+                )
+                if written_at is None:
+                    if not await self._receipts.was_retracted(
+                        connection, recipe_note=recipe_note, log_date=log_date
+                    ):
+                        raise CookRecordNotFound(
+                            f"cook_record_not_found: {recipe_note} {log_date}",
+                            relative_path=relative,
+                            log_date=log_date,
+                        )
+                    return CookRetractResult(
+                        status="already_retracted",
+                        wrote=False,
+                        recipe_note=recipe_note,
+                        log_date=log_date,
+                        relative_path=relative,
+                        note_revision=None,
+                    )
+            except sqlite3.Error as exc:
+                raise CookLogReceiptsUnavailable(
+                    f"cook_log_receipts_unavailable: {exc}", relative_path=relative
+                ) from exc
+
+        if self._clock() - datetime.fromisoformat(written_at) > self._undo_window:
+            raise RetractionWindowClosed(
+                f"retraction_window_closed: {recipe_note} {log_date}",
+                relative_path=relative,
+                log_date=log_date,
+            )
+
+        source = await asyncio.to_thread(self._read_required, relative, log_date)
+        current = note_revision(source)
+        if base_revision is not None and base_revision != current:
+            raise DailyNoteChanged(
+                f"daily_note_changed: {relative}",
+                relative_path=relative,
+                log_date=log_date,
+                current_revision=current,
+                retryable=True,
+            )
+
+        removed = False
+
+        def transform(fresh: bytes) -> bytes:
+            nonlocal removed
+            try:
+                spliced = remove_cook_link(fresh, recipe_note)
+            except CookRecordNotRemovable as exc:
+                raise CookRecordNotRemovable(
+                    str(exc), relative_path=relative, log_date=log_date
+                ) from exc
+            removed = spliced is not None
+            return fresh if spliced is None else spliced
+
+        committed = await asyncio.to_thread(
+            self._transform_note, relative, log_date, current, transform
+        )
+        stamp = self._clock().astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+        async with self._connect() as connection:
+            try:
+                await self._receipts.retract(
+                    connection, recipe_note=recipe_note, log_date=log_date, retracted_at=stamp
+                )
+            except sqlite3.Error as exc:
+                landed = "日记笔记已更新" if removed else "日记笔记未被修改"
+                raise CookLogReceiptsUnavailable(
+                    f"{landed}，但 cook_log_receipts 更新失败：{exc}。请重试。",
+                    relative_path=relative,
+                    log_date=log_date,
+                    retryable=True,
+                ) from exc
+        return CookRetractResult(
+            status="retracted",
+            wrote=removed,
+            recipe_note=recipe_note,
+            log_date=log_date,
+            relative_path=relative,
+            note_revision=note_revision(committed),
+            retracted_at=stamp,
+        )
+
+    async def cook_log_state(
+        self, recipe_note: str, *, last_cooked: str | None, auto_updated: str | None
+    ) -> CookLogState:
+        """Which cooks can still be retracted, and which retractions await the tracker.
+
+        **`pending_retractions` is narrow on purpose.** The tracker rewrites a
+        recipe's frontmatter only when its numbers change, so "retracted after the
+        last run" would stay true forever for a cook the count never included, and
+        the badge would never clear. A retraction is reported only when it must
+        change the numbers: the retracted date **is** `last_cooked`, so the count
+        certainly includes it, and the next run necessarily moves `last_cooked`
+        off it. A retraction of an older counted date leaves a stale count that
+        this does not flag; the sync in the vault corrects it within seconds when
+        Obsidian is open, and opening the recipe does otherwise.
+
+        `auto_updated` is the tracker's own local-time text (`YYYY-MM-DD HH:mm`),
+        read in the configured timezone. Text that does not parse is treated as
+        "the tracker has not run" — the conservative answer.
+        """
+        recipe_note = _require_recipe_note(recipe_note)
+        async with self._connect() as connection:
+            try:
+                rows = await self._receipts.states(connection, recipe_note=recipe_note)
+            except sqlite3.Error as exc:
+                raise CookLogReceiptsUnavailable(f"cook_log_receipts_unavailable: {exc}") from exc
+
+        now = self._clock()
+        retractable = tuple(
+            RetractableCook(
+                log_date=date,
+                written_at=written_at,
+                retractable_until=(datetime.fromisoformat(written_at) + self._undo_window)
+                .astimezone(UTC)
+                .strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3]
+                + "Z",
+            )
+            for date, written_at, retracted_at in rows
+            if retracted_at is None
+            and now - datetime.fromisoformat(written_at) <= self._undo_window
+        )
+        active = {date for date, _, retracted_at in rows if retracted_at is None}
+        latest_retraction: dict[str, str] = {}
+        for date, _, retracted_at in rows:
+            if retracted_at is not None:
+                latest_retraction[date] = max(retracted_at, latest_retraction.get(date, ""))
+        ran_at = self._tracker_ran_at(auto_updated)
+        pending = tuple(
+            sorted(
+                date
+                for date, retracted_at in latest_retraction.items()
+                if date == last_cooked
+                and date not in active
+                and (ran_at is None or ran_at <= datetime.fromisoformat(retracted_at))
+            )
+        )
+        return CookLogState(retractable=retractable, pending_retractions=pending)
+
+    def _tracker_ran_at(self, auto_updated: str | None) -> datetime | None:
+        if not auto_updated:
+            return None
+        try:
+            return datetime.strptime(auto_updated.strip(), "%Y-%m-%d %H:%M").replace(
+                tzinfo=self._timezone
+            )
+        except ValueError:
+            return None
 
     # --- the read-back --------------------------------------------------
 
@@ -768,6 +1113,51 @@ class CookingLogWriter:
             note_revision=current,
         )
 
+    def _transform_note(
+        self,
+        relative: str,
+        log_date: str,
+        current_revision: str,
+        transform: Callable[[bytes], bytes],
+    ) -> bytes:
+        """`transform_existing`, with its failures mapped to the typed refusals.
+
+        Shared by the append and the retraction so that a lost race, a failed
+        read-back, or an unsafe path is the same error with the same code
+        whichever direction the write was going.
+        """
+        try:
+            return self._store.transform_existing(relative, transform)
+        except ConcurrentFileChange as exc:
+            # Includes the case §9.15 step 5 names: the target vanished before the
+            # replace. That is a lost race, so it is the **existing** 409 code and
+            # never `daily_note_missing`.
+            raise DailyNoteChanged(
+                f"daily_note_changed: {exc}",
+                relative_path=relative,
+                log_date=log_date,
+                current_revision=current_revision,
+                retryable=True,
+            ) from exc
+        except PostWriteVerificationError as exc:
+            raise DailyNoteWriteUnverified(
+                f"daily_note_write_unverified: {exc}",
+                relative_path=relative,
+                log_date=log_date,
+            ) from exc
+        except PathSafetyError as exc:
+            raise DailyNoteUnreadable(
+                f"daily_note_unreadable: {exc}",
+                relative_path=relative,
+                log_date=log_date,
+            ) from exc
+        except ValueError as exc:  # note_too_large, from transform_existing
+            raise DailyNoteUnreadable(
+                f"daily_note_unreadable: {exc}",
+                relative_path=relative,
+                log_date=log_date,
+            ) from exc
+
     def _commit(self, plan: _Plan) -> tuple[bytes, bool]:
         """Step 6, and the whole safety argument of this module.
 
@@ -808,37 +1198,9 @@ class CookingLogWriter:
             appended = True
             return append_cook_link(fresh, region, plan.link_line)
 
-        try:
-            committed = self._store.transform_existing(plan.relative_path, transform)
-        except ConcurrentFileChange as exc:
-            # Includes the case §9.15 step 5 names: the target vanished before the
-            # replace. That is a lost race, so it is the **existing** 409 code and
-            # never `daily_note_missing`.
-            raise DailyNoteChanged(
-                f"daily_note_changed: {exc}",
-                relative_path=plan.relative_path,
-                log_date=plan.log_date,
-                current_revision=plan.note_revision,
-                retryable=True,
-            ) from exc
-        except PostWriteVerificationError as exc:
-            raise DailyNoteWriteUnverified(
-                f"daily_note_write_unverified: {exc}",
-                relative_path=plan.relative_path,
-                log_date=plan.log_date,
-            ) from exc
-        except PathSafetyError as exc:
-            raise DailyNoteUnreadable(
-                f"daily_note_unreadable: {exc}",
-                relative_path=plan.relative_path,
-                log_date=plan.log_date,
-            ) from exc
-        except ValueError as exc:  # note_too_large, from transform_existing
-            raise DailyNoteUnreadable(
-                f"daily_note_unreadable: {exc}",
-                relative_path=plan.relative_path,
-                log_date=plan.log_date,
-            ) from exc
+        committed = self._transform_note(
+            plan.relative_path, plan.log_date, plan.note_revision, transform
+        )
         return committed, appended
 
     async def _duplicate_result(self, plan: _Plan) -> CookLogResult:

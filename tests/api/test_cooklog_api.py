@@ -643,14 +643,18 @@ def test_the_optional_envelope_keys_are_the_documented_five() -> None:
     }
 
 
-def test_the_routes_are_exactly_the_two_the_contract_names() -> None:
-    """One route pair, no extras. §9.16's table is the whole surface."""
+def test_the_routes_are_exactly_the_three_the_contract_names() -> None:
+    """One route pair plus the retraction, no extras. §9.16's table is the whole surface."""
 
     routes = [
         (route.path, sorted(route.methods - {"HEAD"}))  # type: ignore[union-attr]
         for route in build_cook_log_router().routes
     ]
-    assert routes == [("/api/cook-logs", ["POST"]), ("/api/cook-logs", ["GET"])]
+    assert routes == [
+        ("/api/cook-logs", ["POST"]),
+        ("/api/cook-logs/{log_date}/{note_name}", ["DELETE"]),
+        ("/api/cook-logs", ["GET"]),
+    ]
 
 
 # --- the mounted path, on the real app --------------------------------------
@@ -776,3 +780,174 @@ def test_mounting_the_router_leaves_the_catch_all_and_the_shell_alone(
     # §9.15: the extension adds no path to any surface, and `/health` in
     # particular keeps leaking none.
     assert str(settings.vault_path) not in health.text
+
+
+# --- retraction: DELETE /api/cook-logs/{date}/{note_name} -------------------
+
+
+def _delete(
+    client: TestClient, date: str = DATE, note: str = COOK, **params: str
+) -> tuple[int, dict[str, object]]:
+    response = client.delete(
+        f"/api/cook-logs/{date}/{note}", params=params, headers=_headers(client)
+    )
+    return response.status_code, dict(response.json())
+
+
+def test_a_retraction_is_a_200_with_exactly_four_keys_and_restores_the_note(
+    api_client: TestClient, note_factory: Callable[..., bytes], vault: Path
+) -> None:
+    before = note_factory(daily_note_bytes())
+    _post(api_client, recipeNote=COOK, date=DATE)
+
+    status, body = _delete(api_client)
+
+    assert status == 200
+    assert set(body) == {"status", "relativePath", "noteRevision", "retractedAt"}
+    assert body["status"] == "retracted"
+    assert body["relativePath"] == DAILY_NOTE_PATH
+    assert (vault / DAILY_NOTE_PATH).read_bytes() == before
+
+
+def test_the_read_back_no_longer_lists_a_retracted_cook(
+    api_client: TestClient, note_factory: Callable[..., bytes]
+) -> None:
+    note_factory(daily_note_bytes())
+    _post(api_client, recipeNote=COOK, date=DATE)
+    _delete(api_client)
+
+    entries = api_client.get("/api/cook-logs", params={"date": DATE}).json()["entries"]
+
+    assert entries == []
+
+
+def test_a_second_retraction_is_a_200_already_retracted(
+    api_client: TestClient, note_factory: Callable[..., bytes]
+) -> None:
+    note_factory(daily_note_bytes())
+    _post(api_client, recipeNote=COOK, date=DATE)
+    _delete(api_client)
+
+    status, body = _delete(api_client)
+
+    assert status == 200
+    assert body["status"] == "already_retracted"
+
+
+def test_retracting_a_cook_the_app_never_wrote_is_404_and_touches_nothing(
+    api_client: TestClient, note_factory: Callable[..., bytes], vault: Path
+) -> None:
+    before = note_factory(daily_note_bytes())
+
+    status, body = _delete(api_client)
+
+    assert (status, body["code"]) == (404, "cook_record_not_found")
+    assert set(body) == {"requestId", "code"}  # the two-key envelope, not widened
+    assert (vault / DAILY_NOTE_PATH).read_bytes() == before
+
+
+def test_a_line_edited_in_obsidian_is_409_not_removable(
+    api_client: TestClient, note_factory: Callable[..., bytes], vault: Path
+) -> None:
+    note_factory(daily_note_bytes())
+    _post(api_client, recipeNote=COOK, date=DATE)
+    path = vault / DAILY_NOTE_PATH
+    path.write_bytes(path.read_bytes().replace("[[盐焗鸡]]".encode(), "[[盐焗鸡]] 好吃".encode()))
+    edited = path.read_bytes()
+
+    status, body = _delete(api_client)
+
+    assert (status, body["code"]) == (409, "cook_record_not_removable")
+    assert set(body) == {"requestId", "code"}
+    assert path.read_bytes() == edited
+
+
+def test_a_stale_revision_is_409_with_the_current_revision(
+    api_client: TestClient, note_factory: Callable[..., bytes]
+) -> None:
+    note_factory(daily_note_bytes())
+    _post(api_client, recipeNote=COOK, date=DATE)
+
+    status, body = _delete(api_client, baseRevision="sha256:stale")
+
+    assert (status, body["code"]) == (409, "daily_note_changed")
+    assert str(body["currentRevision"]).startswith("sha256:")
+
+
+def test_a_current_revision_commits_the_retraction(
+    api_client: TestClient, note_factory: Callable[..., bytes]
+) -> None:
+    note_factory(daily_note_bytes())
+    _, logged = _post(api_client, recipeNote=COOK, date=DATE)
+
+    status, body = _delete(api_client, baseRevision=str(logged["noteRevision"]))
+
+    assert (status, body["status"]) == (200, "retracted")
+
+
+def test_a_retraction_past_the_window_is_409_window_closed(
+    settings: Settings,
+    store: AtomicNoteStore,
+    note_factory: Callable[..., bytes],
+    vault: Path,
+) -> None:
+    from datetime import UTC, datetime, timedelta
+    from functools import partial
+
+    from app.db.database import connect_db
+    from app.vault.daily_paths import DailyNotePathPolicy
+
+    harness.initialise_db(settings)
+    note_factory(daily_note_bytes())
+    late = CookingLogWriter(
+        store,
+        DailyNotePathPolicy.from_settings(settings),
+        partial(connect_db, settings),
+        undo_window=timedelta(hours=settings.cook_log_undo_hours),
+        clock=lambda: datetime.now(UTC) + timedelta(hours=settings.cook_log_undo_hours + 1),
+    )
+    early = harness.writer_for(settings, store)
+    with harness.client_for(harness.build_app(settings, writer=early)) as first:
+        _post(first, recipeNote=COOK, date=DATE)
+    logged = (vault / DAILY_NOTE_PATH).read_bytes()
+
+    with harness.client_for(harness.build_app(settings, writer=late)) as second:
+        status, body = _delete(second)
+
+    assert (status, body["code"]) == (409, "retraction_window_closed")
+    assert (vault / DAILY_NOTE_PATH).read_bytes() == logged
+
+
+def test_an_unsafe_recipe_name_in_the_path_is_422(api_client: TestClient) -> None:
+    status, body = _delete(api_client, note="..%5C盐焗鸡")
+    assert status in {404, 422}, body  # never a 200 and never a traversal
+
+
+def test_a_retraction_without_a_csrf_token_is_403(
+    api_client: TestClient, note_factory: Callable[..., bytes]
+) -> None:
+    note_factory(daily_note_bytes())
+    response = api_client.delete(f"/api/cook-logs/{DATE}/{COOK}", headers={"Origin": ORIGIN})
+    assert (response.status_code, response.json()["code"]) == (403, "csrf_required")
+
+
+def test_read_only_refuses_the_retraction(settings: Settings) -> None:
+    read_only = Settings.from_mapping(
+        {
+            "OBSIDIAN_VAULT_PATH": str(settings.vault_path),
+            "APP_DATA_DIR": str(settings.app_data_dir),
+            "PANTRY_ITEMS_DB": str(settings.pantry_items_db),
+            "PUBLIC_ORIGIN": ORIGIN,
+            "TAILSCALE_OWNER_LOGIN": "owner@test.invalid",
+            "OBSIDIAN_READ_ONLY": "true",
+        }
+    )
+    with harness.client_for(harness.build_app(read_only, writer=None)) as client:
+        status, body = _delete(client)
+    assert (status, body["code"]) == (403, "read_only")
+
+
+def test_the_retraction_route_needs_a_published_writer(settings: Settings) -> None:
+    with harness.client_for(harness.build_app(settings, writer=None)) as client:
+        status, body = _delete(client)
+    assert (status, body["code"]) == (503, "cook_log_unavailable")

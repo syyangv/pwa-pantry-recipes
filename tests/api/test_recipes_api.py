@@ -1079,7 +1079,16 @@ def test_the_detail_recipe_carries_the_list_keys_plus_steps_and_history(
     recipe = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
 
     assert set(recipe) == (
-        LIST_RECIPE_KEYS | {"steps", "history", "source", "durationMinutes", "pendingCookDates"}
+        LIST_RECIPE_KEYS
+        | {
+            "steps",
+            "history",
+            "source",
+            "durationMinutes",
+            "pendingCookDates",
+            "retractableCooks",
+            "pendingRetractionDates",
+        }
     )
     assert set(recipe["history"]) == {
         "firstCooked",
@@ -1139,6 +1148,56 @@ def _seed_receipts(runtime_root: Path, rows: tuple[tuple[str, str], ...]) -> Non
         connection.commit()
     finally:
         connection.close()
+
+
+def _seed_retracted(runtime_root: Path, recipe: str, date: str) -> None:
+    connection = sqlite3.connect(runtime_root / "data" / "recipes.sqlite3")
+    try:
+        connection.execute(
+            "INSERT INTO cook_log_receipts (recipe_note, log_date, relative_path,"
+            " note_revision, retracted_at) VALUES (?, ?, 'x.md', 'sha256:x',"
+            " strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+            (recipe, date),
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+
+def test_a_fresh_receipt_is_listed_as_retractable_with_its_deadline(
+    client: TestClient, runtime_root: Path
+) -> None:
+    _seed_receipts(runtime_root, ((MAIN_RECIPE, "2026-09-27"),))
+
+    recipe = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
+
+    [cook] = recipe["retractableCooks"]
+    assert set(cook) == {"date", "writtenAt", "retractableUntil"}
+    assert cook["date"] == "2026-09-27"
+    assert cook["retractableUntil"] > cook["writtenAt"]
+    assert recipe["pendingRetractionDates"] == []
+
+
+def test_retracting_the_counted_date_is_pending_until_the_tracker_runs(
+    client: TestClient, runtime_root: Path
+) -> None:
+    """`MAIN_RECIPE` has `last_cooked: 2026-09-20` and `auto_updated: 2026-09-21`."""
+    _seed_retracted(runtime_root, MAIN_RECIPE, "2026-09-20")
+
+    recipe = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
+
+    assert recipe["pendingRetractionDates"] == ["2026-09-20"]
+    assert recipe["retractableCooks"] == []
+
+
+def test_retracting_a_date_the_count_never_included_is_not_pending(
+    client: TestClient, runtime_root: Path
+) -> None:
+    _seed_retracted(runtime_root, MAIN_RECIPE, "2026-09-27")
+
+    recipe = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
+
+    assert recipe["pendingRetractionDates"] == []
 
 
 def test_a_cook_logged_after_the_newest_counted_one_is_pending(

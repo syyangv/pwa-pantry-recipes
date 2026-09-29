@@ -54,6 +54,7 @@ class Settings:
     stock_cache_seconds: float
     recipe_cache_seconds: float
     max_recipe_bytes: int
+    cook_log_undo_hours: float
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -139,6 +140,14 @@ class Settings:
             values, "MAX_RECIPE_BYTES", "max_recipe_bytes", 2_000_000
         )
 
+        # How long after it was written a Cooking Record may be retracted from the
+        # PWA. Past it the record is history, edited in Obsidian. `_ttl_seconds`
+        # is a "strictly positive, at most `ceiling`" check; the unit is the
+        # caller's, and here it is hours (30 days at most).
+        cook_log_undo_hours = _ttl_seconds(
+            values, "COOK_LOG_UNDO_HOURS", "cook_log_undo_hours", 72.0, 720.0
+        )
+
         return cls(
             vault_path=vault,
             app_data_dir=data,
@@ -158,6 +167,7 @@ class Settings:
             stock_cache_seconds=stock_cache_seconds,
             recipe_cache_seconds=recipe_cache_seconds,
             max_recipe_bytes=max_recipe_bytes,
+            cook_log_undo_hours=cook_log_undo_hours,
         )
 
 

@@ -1,4 +1,4 @@
-"""`POST /api/cook-logs` and `GET /api/cook-logs?date=` — the Cooking Log routes.
+"""`POST /api/cook-logs`, `GET /api/cook-logs?date=` and `DELETE /api/cook-logs/{date}/{note}`.
 
 **The browser supplies a recipe and a date, never a path** (D2, Server-Owned
 Root). `{"recipeNote": "盐焗鸡", "date": "2026-09-27"}` is the whole request
@@ -25,6 +25,14 @@ the date and the expected path and is retryable once the user creates it in
 Obsidian, and a note that appeared between the app's two reads is a 409 — not a
 404, because reporting a lost race as "not found" sends the user to create a note
 that already exists.
+
+**The `DELETE` is the append's inverse and is deliberately narrow.** It removes
+only a line the app itself wrote (an active receipt must exist), only inside
+`COOK_LOG_UNDO_HOURS`, and only when the note still holds exactly that one bare
+line; every other case is a refusal that leaves the note alone. Its three new
+codes (`cook_record_not_found`, `cook_record_not_removable`,
+`retraction_window_closed`) are **not** in `PRESENCE_CODES`, so they emit the
+two-key envelope like every other refusal — the client owns the copy.
 
 **F5: this route is online-only and is not on the offline outbox.** The button
 is disabled offline and says why. There is no enqueue call here, and adding one
@@ -207,6 +215,30 @@ def build_cook_log_router() -> APIRouter:
         return JSONResponse(
             _logged_body(result),
             status_code=201 if result.status == "logged" else 200,
+        )
+
+    @router.delete("/api/cook-logs/{log_date}/{note_name}")
+    async def retract_cook(
+        request: Request,
+        log_date: str,
+        note_name: str,
+        base_revision: str | None = Query(default=None, alias="baseRevision"),
+    ) -> JSONResponse:
+        """Undo one Cooking Record the app wrote. Idempotent: a repeat is a 200."""
+        writer = _writer(request)
+        if writer is None:
+            return cook_log_error(request, 503, _MISSING_WRITER)
+        try:
+            result = await writer.retract(note_name, log_date, base_revision=base_revision)
+        except CookLogError as error:
+            return cook_log_failure(request, error)
+        return JSONResponse(
+            {
+                "status": result.status,
+                "relativePath": result.relative_path,
+                "noteRevision": result.note_revision,
+                "retractedAt": result.retracted_at,
+            }
         )
 
     @router.get("/api/cook-logs")
