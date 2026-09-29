@@ -1938,3 +1938,172 @@ test('el() and the helpers never touch innerHTML', () => {
   assert.equal(node.querySelectorAll('b').length, 0);
   dom.restore();
 });
+
+/* ==========================================================================
+   9. Retracting a Cooking Record
+   ========================================================================== */
+
+const RETRACTABLE = {
+  date: '2026-09-28',
+  writtenAt: '2026-09-28T17:41:47.082Z',
+  retractableUntil: '2026-10-01T17:41:47.082Z',
+};
+
+function respondRetract(detail, retract = () => json({ status: 'retracted', relativePath: '日记/2026/2026-09-28.md', noteRevision: 'sha256:r', retractedAt: '2026-09-29T01:00:00.000Z' })) {
+  setResponder((url, init) => {
+    if (url.includes('/api/session')) return json(sessionBody());
+    if (init.method === 'DELETE') return retract(url, init);
+    if (url.includes('/api/cook-logs')) {
+      return json({ date: '2026-09-28', relativePath: '日记/2026/2026-09-28.md', noteRevision: 'sha256:note', entries: [] });
+    }
+    return json(detailBody(detail));
+  });
+}
+
+async function mountRetractable(dom, detail = {}, retract) {
+  respondRetract({ retractableCooks: [RETRACTABLE], pendingCookDates: ['2026-09-28'], ...detail }, retract);
+  await api.initApi();
+  const unmount = mountRecipe(dom.root, { basename: '盐焗鸡' });
+  await settle();
+  return unmount;
+}
+
+const retractButton = (dom) => dom.byData('retract-button')[0];
+const deletes = () => fetches.filter((entry) => entry.init.method === 'DELETE');
+
+test('a retractable cook renders its date and a 撤销 control; none renders nothing', async () => {
+  const dom = install();
+  const unmount = await mountRetractable(dom);
+  assert.equal(dom.byData('retract-row').length, 1);
+  const row = textOf(dom.byData('retract-row')[0]);
+  assert.ok(row.includes('2026-09-28'), row);
+  assert.equal(retractButton(dom).textContent, '撤销');
+  unmount();
+  dom.restore();
+
+  const empty = install();
+  const unmountEmpty = await mountRetractable(empty, { retractableCooks: [] });
+  assert.equal(empty.byData('retract-row').length, 0, 'no retractable cook, no control');
+  unmountEmpty();
+  empty.restore();
+});
+
+test('the first tap only asks; the second tap sends the DELETE', async () => {
+  const dom = install();
+  const unmount = await mountRetractable(dom);
+  fetches.length = 0;
+
+  retractButton(dom).dispatchEvent({ type: 'click' });
+  await settle();
+  assert.equal(deletes().length, 0, 'the first tap wrote to the vault');
+  const confirmButton = dom.byData('retract-confirm')[0];
+  assert.ok(confirmButton, 'no confirmation step');
+
+  confirmButton.dispatchEvent({ type: 'click' });
+  await settle();
+  assert.equal(deletes().length, 1);
+  assert.ok(
+    deletes()[0].url.endsWith(`/api/cook-logs/2026-09-28/${encodeURIComponent('盐焗鸡')}`),
+    deletes()[0].url,
+  );
+  unmount();
+  dom.restore();
+});
+
+test('cancelling the confirmation sends nothing and restores the control', async () => {
+  const dom = install();
+  const unmount = await mountRetractable(dom);
+  fetches.length = 0;
+
+  retractButton(dom).dispatchEvent({ type: 'click' });
+  dom.byData('retract-cancel')[0].dispatchEvent({ type: 'click' });
+  await settle();
+
+  assert.equal(deletes().length, 0);
+  assert.ok(retractButton(dom), 'the 撤销 control did not come back');
+  unmount();
+  dom.restore();
+});
+
+test('a retraction removes the row, says so, and stops reporting that cook as pending', async () => {
+  const dom = install();
+  const unmount = await mountRetractable(dom);
+  assert.equal(dom.byData('history-stale').length, 1, 'precondition: the cook is pending');
+
+  retractButton(dom).dispatchEvent({ type: 'click' });
+  dom.byData('retract-confirm')[0].dispatchEvent({ type: 'click' });
+  await settle();
+
+  assert.equal(dom.byData('retract-row').length, 0);
+  assert.ok(textOf(dom.byData('retract-status')[0]).includes('已撤销'));
+  assert.equal(dom.byData('history-stale').length, 0, 'a retracted cook is not pending');
+  unmount();
+  dom.restore();
+});
+
+test('retracting the counted date shows the retraction as waiting on Obsidian', async () => {
+  const dom = install();
+  // `detailBody`'s history has lastCooked 2026-03-10: retract THAT date.
+  const unmount = await mountRetractable(dom, {
+    retractableCooks: [{ ...RETRACTABLE, date: '2026-03-10' }],
+    pendingCookDates: [],
+  });
+
+  retractButton(dom).dispatchEvent({ type: 'click' });
+  dom.byData('retract-confirm')[0].dispatchEvent({ type: 'click' });
+  await settle();
+
+  const stale = dom.byData('history-retracted');
+  assert.equal(stale.length, 1, 'the count still includes the retracted date, and nothing said so');
+  const text = textOf(stale[0]);
+  assert.ok(text.includes('2026-03-10'), text);
+  assert.ok(text.includes('Obsidian'), text);
+  assert.equal(dom.byData('tracker-badge').length, 1, 'the badge must show for a pending retraction');
+  unmount();
+  dom.restore();
+});
+
+test('the server-reported pending retraction renders the panel and the badge on load', async () => {
+  const dom = install();
+  const unmount = await mountRetractable(dom, {
+    retractableCooks: [],
+    pendingCookDates: [],
+    pendingRetractionDates: ['2026-03-10'],
+  });
+  assert.equal(dom.byData('history-retracted').length, 1);
+  assert.equal(dom.byData('tracker-badge').length, 1);
+  unmount();
+  dom.restore();
+});
+
+for (const [code, status, needle] of [
+  ['cook_record_not_removable', 409, '不会替你删'],
+  ['retraction_window_closed', 409, '超过'],
+  ['cook_record_not_found', 404, '没有记过'],
+]) {
+  test(`a ${code} refusal is explained in words and leaves the row in place`, async () => {
+    const dom = install();
+    const unmount = await mountRetractable(dom, {}, () => json({ requestId: 'r', code }, status));
+
+    retractButton(dom).dispatchEvent({ type: 'click' });
+    dom.byData('retract-confirm')[0].dispatchEvent({ type: 'click' });
+    await settle();
+
+    assert.ok(textOf(dom.byData('retract-status')[0]).includes(needle), code);
+    assert.equal(dom.byData('retract-row').length, 1, 'a refused retraction removed the row');
+    unmount();
+    dom.restore();
+  });
+}
+
+test('offline: the 撤销 control is disabled and sends nothing', async () => {
+  const dom = install({ online: false });
+  const unmount = await mountRetractable(dom);
+  assert.equal(retractButton(dom).disabled, true);
+  fetches.length = 0;
+  retractButton(dom).dispatchEvent({ type: 'click' });
+  await settle();
+  assert.equal(fetches.length, 0);
+  unmount();
+  dom.restore();
+});

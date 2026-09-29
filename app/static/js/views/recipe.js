@@ -235,14 +235,35 @@ export function ageLabel(days) {
  * field is the tracker's, and the difference between it and reality is what this
  * block is reporting, so deriving one from the other would be circular.
  */
+function trackerRemedy(autoUpdated, today) {
+  const lastRun = ageLabel(ageInDays(autoUpdated, today));
+  return lastRun
+    ? `Obsidian 的 recipeTracker 上次跑在 ${autoUpdated}（${lastRun}）。在 Obsidian 里打开这份菜谱，次数才会更新。`
+    : '在 Obsidian 里打开这份菜谱，次数才会更新。';
+}
+
+/**
+ * The mirror image of `stalenessPanel`: a cook retracted here whose date the
+ * tracker's frontmatter still counts. `pendingRetractionDates` is the server's
+ * verdict (the retracted date is `last_cooked` and the tracker has not run since);
+ * this only renders it. Same remedy, because the tracker is what fixes both.
+ */
+function retractionPanel(pendingRetractionDates, autoUpdated, today) {
+  if (!Array.isArray(pendingRetractionDates) || pendingRetractionDates.length === 0) return null;
+  return el('div', { class: 'history-stale', dataset: { role: 'history-retracted' } }, [
+    el('p', {
+      class: 'history-stale__head',
+      text: `⚠ 有 ${pendingRetractionDates.length} 次撤销还没从上面的次数里扣掉`,
+    }),
+    el('p', { class: 'history-stale__body', text: `在这里撤销的：${pendingRetractionDates.join('、')}` }),
+    el('p', { class: 'history-stale__body', text: trackerRemedy(autoUpdated, today) }),
+  ]);
+}
+
 function stalenessPanel(pendingCookDates, autoUpdated, today) {
   if (!Array.isArray(pendingCookDates) || pendingCookDates.length === 0) return null;
   const dates = pendingCookDates.join('、');
-  const days = ageInDays(autoUpdated, today);
-  const lastRun = ageLabel(days);
-  const remedy = lastRun
-    ? `Obsidian 的 recipeTracker 上次跑在 ${autoUpdated}（${lastRun}）。在 Obsidian 里打开这份菜谱，次数才会更新。`
-    : '在 Obsidian 里打开这份菜谱，次数才会更新。';
+  const remedy = trackerRemedy(autoUpdated, today);
   return el('div', { class: 'history-stale', dataset: { role: 'history-stale' } }, [
     el('p', {
       class: 'history-stale__head',
@@ -301,9 +322,10 @@ function metaPanel(source = [], durationMinutes = null) {
  * wrong (same-day counts as counted). The dates are rendered, never summed, so
  * what the user reads is the evidence and not a total.
  */
-function historyPanel(history = {}, pendingCookDates = [], today = '') {
+function historyPanel(history = {}, pendingCookDates = [], today = '', pendingRetractionDates = []) {
   const autoUpdated = history.autoUpdated;
   const stale = stalenessPanel(pendingCookDates, autoUpdated, today);
+  const retracted = retractionPanel(pendingRetractionDates, autoUpdated, today);
   const rows = [
     field('第一次做', history.firstCooked),
     field('最近一次', history.lastCooked),
@@ -322,7 +344,7 @@ function historyPanel(history = {}, pendingCookDates = [], today = '') {
       return label ? `${raw}（${label}）` : raw;
     }),
   ].filter(Boolean);
-  if (rows.length === 0 && !stale) {
+  if (rows.length === 0 && !stale && !retracted) {
     return emptyState({
       title: '还没有做过这道菜。',
       body: '记一次之后，Obsidian 的 recipeTracker 会在打开这份笔记时把次数写回 frontmatter。',
@@ -332,6 +354,7 @@ function historyPanel(history = {}, pendingCookDates = [], today = '') {
   return el('div', { class: 'history' }, [
     rows.length > 0 ? el('div', { class: 'fields', dataset: { role: 'history' } }, rows) : null,
     stale,
+    retracted,
   ]);
 }
 
@@ -373,6 +396,11 @@ export function mount(root, params = {}) {
    * the tracker badge — the two must never disagree about whether the tracker is
    * behind, so they read one value rather than each asking a different question. */
   let pendingCookDates = [];
+  /** The detail payload's `retractableCooks` (server clock) and
+   * `pendingRetractionDates`. Held in the mount like `pendingCookDates`, for the
+   * same reason: the history panel and the badge read one value. */
+  let retractableCooks = [];
+  let pendingRetractionDates = [];
   const debug = isDebugEnabled();
 
   function listen(target, type, handler) {
@@ -454,12 +482,17 @@ export function mount(root, params = {}) {
   ]);
   picker.setAttribute('hidden', '');
 
+  const cooksSlot = el('div', { dataset: { role: 'retract-slot' } });
+  const retractStatus = el('p', { class: 'muted', dataset: { role: 'retract-status' } });
+
   const logSlot = el('div', { dataset: { role: 'log-slot' } }, [
     el('div', { class: 'settings-actions' }, [logButton]),
     offlineReason,
     status,
     logError,
     picker,
+    cooksSlot,
+    retractStatus,
   ]);
 
   root.appendChild(
@@ -617,10 +650,7 @@ export function mount(root, params = {}) {
         // BOTH surfaces, from the same value. The badge and the history panel
         // report one fact; rendering one of them from a second source is the
         // "two implementations of one rule" shape that drifts.
-        historySlot.textContent = '';
-        historySlot.appendChild(
-          historyPanel(loadedRecipe.history || {}, pendingCookDates, todayIn(appTimezone())),
-        );
+        renderHistory();
         renderTrackerState();
       }
       refreshBadge(date);
@@ -684,6 +714,139 @@ export function mount(root, params = {}) {
     submit(date, revisionFor(date));
   });
 
+  /* --- retracting a Cooking Record: the inverse of the write above ------- */
+
+  /** Re-renders the Cooking History from the values this mount holds. */
+  function renderHistory() {
+    historySlot.textContent = '';
+    historySlot.appendChild(
+      historyPanel(
+        loadedRecipe.history || {},
+        pendingCookDates,
+        todayIn(appTimezone()),
+        pendingRetractionDates,
+      ),
+    );
+  }
+
+  /** "9月29日 13:41" in the configured timezone, from the server's UTC deadline. */
+  function deadlineLabel(iso) {
+    const at = new Date(iso);
+    if (Number.isNaN(at.getTime())) return '';
+    return new Intl.DateTimeFormat('zh-CN', {
+      timeZone: appTimezone(),
+      month: 'numeric',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(at);
+  }
+
+  /** Plain words for each refusal; the server publishes the code, this owns the copy. */
+  function retractFailureCopy(error) {
+    switch (error.code) {
+      case 'cook_record_not_removable':
+        return '这条记录在 Obsidian 里被改过了（或那天有多处链接），所以这里不会替你删。请直接在那天的日记里处理。';
+      case 'retraction_window_closed':
+        return '已经超过可撤销的时间，这条记录现在算历史，请在 Obsidian 里改。';
+      case 'cook_record_not_found':
+        return '这个 app 没有记过这一条，所以不会动你的日记。';
+      default:
+        return error.message || error.code || '这次没有撤销成功。';
+    }
+  }
+
+  function renderRetractable() {
+    cooksSlot.textContent = '';
+    const offline = navigator.onLine === false;
+    for (const cook of retractableCooks) {
+      const button = el('button', {
+        type: 'button',
+        class: 'button',
+        dataset: { role: 'retract-button' },
+        text: '撤销',
+      });
+      button.disabled = offline || inFlight;
+      const actions = el('div', { class: 'settings-actions' }, [button]);
+      // Two taps, because this one writes to the vault: the first only asks.
+      button.addEventListener('click', () => {
+        if (button.disabled) return;
+        const sure = el('button', {
+          type: 'button',
+          class: 'button',
+          dataset: { role: 'retract-confirm' },
+          text: '确认撤销',
+        });
+        const back = el('button', {
+          type: 'button',
+          class: 'button',
+          dataset: { role: 'retract-cancel' },
+          text: '取消',
+        });
+        sure.addEventListener('click', () => retract(cook.date));
+        back.addEventListener('click', renderRetractable);
+        actions.textContent = '';
+        actions.appendChild(sure);
+        actions.appendChild(back);
+      });
+      const until = deadlineLabel(cook.retractableUntil);
+      cooksSlot.appendChild(
+        el('div', { dataset: { role: 'retract-row', date: cook.date } }, [
+          el('p', {
+            class: 'muted',
+            text: until ? `${cook.date} 已记录 · 可撤销至 ${until}` : `${cook.date} 已记录`,
+          }),
+          actions,
+        ]),
+      );
+    }
+  }
+
+  async function retract(date) {
+    if (inFlight) return;
+    if (navigator.onLine === false) {
+      retractStatus.textContent = OFFLINE_REASON;
+      return;
+    }
+    inFlight = true;
+    logButton.disabled = true;
+    retractStatus.textContent = '';
+    try {
+      // No `baseRevision`: the server re-derives the removal from the bytes it
+      // re-reads under the lock and refuses anything but the exact line the app
+      // wrote, so a revision would add a second, weaker check on top of that one.
+      const result = await apiFetch(
+        `/api/cook-logs/${encodeURIComponent(date)}/${encodeURIComponent(name)}`,
+        { method: 'DELETE' },
+      );
+      retractableCooks = retractableCooks.filter((cook) => cook.date !== date);
+      // The receipt is no longer active, so the cook is neither pending nor
+      // retractable. The one thing the server would add on a reload is a
+      // retraction the tracker still counts: exactly the date it named as
+      // `last_cooked`, so that is all this mirrors.
+      pendingCookDates = pendingCookDates.filter((d) => d !== date);
+      if (
+        (loadedRecipe.history || {}).lastCooked === date &&
+        !pendingRetractionDates.includes(date)
+      ) {
+        pendingRetractionDates = [...pendingRetractionDates, date].sort();
+      }
+      retractStatus.textContent =
+        result.status === 'already_retracted'
+          ? `${date} 的记录之前已经撤销过了。`
+          : `已撤销 ${date} 的记录。`;
+      renderHistory();
+      renderTrackerState();
+    } catch (error) {
+      retractStatus.textContent = retractFailureCopy(error);
+    } finally {
+      inFlight = false;
+      logButton.disabled = offlineReason.dataset.disabled === 'true';
+      renderRetractable();
+    }
+  }
+
   function applyConnectivity() {
     const offline = navigator.onLine === false;
     offlineReason.dataset.disabled = offline ? 'true' : 'false';
@@ -697,6 +860,7 @@ export function mount(root, params = {}) {
     // type for this write; §9.18.1 records why it must never have one.
     logButton.disabled = offline || inFlight;
     if (offline) status.textContent = '';
+    renderRetractable();
   }
   listen(window, 'online', applyConnectivity);
   listen(window, 'offline', applyConnectivity);
@@ -787,7 +951,7 @@ export function mount(root, params = {}) {
   function renderTrackerState() {
     const host = badgeSlot;
     host.textContent = '';
-    if (pendingCookDates.length > 0) {
+    if (pendingCookDates.length > 0 || pendingRetractionDates.length > 0) {
       host.appendChild(
         el('p', { class: 'pill', dataset: { role: 'tracker-badge' }, text: TRACKER_BADGE }),
       );
@@ -917,7 +1081,14 @@ export function mount(root, params = {}) {
           historySlot.textContent = '';
           loadedRecipe = recipe;
           pendingCookDates = Array.isArray(recipe.pendingCookDates) ? recipe.pendingCookDates : [];
-          historySlot.appendChild(historyPanel(recipe.history || {}, pendingCookDates, today));
+          retractableCooks = Array.isArray(recipe.retractableCooks) ? recipe.retractableCooks : [];
+          pendingRetractionDates = Array.isArray(recipe.pendingRetractionDates)
+            ? recipe.pendingRetractionDates
+            : [];
+          historySlot.appendChild(
+            historyPanel(recipe.history || {}, pendingCookDates, today, pendingRetractionDates),
+          );
+          renderRetractable();
           if (typeof resumeTop === 'number' && resumeTop > 0 && window.scrollY !== resumeTop) {
             window.scrollTo(0, resumeTop);
           }
