@@ -117,6 +117,10 @@ def test_parse_recipe_carries_every_field(settings: Settings) -> None:
         IngredientEntry(4, "老抽"),
     )
     assert note.tools == ("电饭煲", "空气炸锅")
+    # `来源` is a BLOCK LIST in this fixture, which is the shape 13 of the 16
+    # real notes use and the one a string-only reader drops.
+    assert note.source == ("小红书",)
+    assert note.duration_minutes == 40
     assert note.steps == (
         "\n- 开水烫鸡皮\n"
         "- +姜片+葱+生抽+老抽+油抹匀，腌过夜\n"
@@ -466,6 +470,92 @@ def test_hand_authored_keys_never_leak_into_history(settings: Settings) -> None:
     assert edited.history == note.history
 
 
+def test_source_and_duration_read_every_shape_the_real_vault_uses() -> None:
+    """`来源` and `时长（分钟）` were parsed by nothing; these are their real shapes.
+
+    Each body below is lifted from a note that exists, not invented, because the
+    two fields disagree about how forgiving they are and that disagreement is the
+    thing worth pinning.
+    """
+    # `来源` as a BLOCK LIST — `凉拌黑木耳`, and 13 of the 16 notes.
+    block = parse_recipe(
+        "---\n材料: 茄\n来源:\n  - 小红书\n---\n".encode(),
+        note_name="x",
+        note_path="x.md",
+    )
+    assert block.source == ("小红书",)
+
+    # `来源` as a SCALAR — `番茄炒蛋`, one of only two. A reader that assumed a
+    # list would publish a Python list repr, or drop the value.
+    scalar = parse_recipe(
+        "---\n材料: 番茄\n来源: 做饭tutorial/小高姐\n---\n".encode(),
+        note_name="x",
+        note_path="x.md",
+    )
+    assert scalar.source == ("做饭tutorial/小高姐",)
+
+    # `来源` present-but-blank — `煮菜菜` — and absent entirely. Both are empty,
+    # and neither is an error: a blank value is a value (see the module docstring).
+    blank = parse_recipe(
+        "---\n材料: 番茄\n来源:\n时长（分钟）:\n---\n".encode(), note_name="x", note_path="x.md"
+    )
+    assert blank.source == ()
+    assert blank.duration_minutes is None
+    absent = parse_recipe("---\n材料: 番茄\n---\n".encode(), note_name="x", note_path="x.md")
+    assert absent.source == ()
+    assert absent.duration_minutes is None
+
+    # `时长（分钟）: 0` is a real, if useless, cook time and must not collapse
+    # into "absent" — which is why the field is `int | None` and not a sentinel.
+    zero = parse_recipe(
+        "---\n材料: 番茄\n时长（分钟）: 0\n---\n".encode(), note_name="x", note_path="x.md"
+    )
+    assert zero.duration_minutes == 0
+
+
+def test_a_malformed_duration_never_drops_the_recipe() -> None:
+    """The asymmetry with `_entries`, asserted rather than described.
+
+    A non-string inside a `材料` list is a malformation and the note is skipped,
+    because that value is an audit anchor. A cook time is cosmetic and displayed
+    only, so every unparseable shape reads as `None` and the recipe survives —
+    the rule `RecipeCookingHistory` already states for `auto_updated`.
+    """
+    # `时长（分钟）: -` is deliberately absent from this list: it is not a
+    # malformed duration, it is invalid YAML, so it fails in the frontmatter
+    # splitter and skips the note. That is the frontmatter's fail-closed rule and
+    # is not what this function is about.
+    for value in ("半小时", "[1, 2]", "{a: 1}", "true", "3.5"):
+        note = parse_recipe(
+            f"---\n材料: 番茄\n时长（分钟）: {value}\n---\n".encode(),
+            note_name="x",
+            note_path="x.md",
+        )
+        assert note.duration_minutes is None, value
+        assert note.ingredients == (IngredientEntry(0, "番茄"),), value
+    # A quoted integer is the one coercion worth making: unambiguous, and it
+    # cannot turn a non-numeric string into a number.
+    quoted = parse_recipe(
+        '---\n材料: 番茄\n时长（分钟）: "30"\n---\n'.encode(), note_name="x", note_path="x.md"
+    )
+    assert quoted.duration_minutes == 30
+
+
+def test_a_non_string_in_source_does_skip_the_note() -> None:
+    """The other half of the asymmetry: `来源` is NOT forgiving.
+
+    It goes through `_entries` like `材料` and `烹饪工具`, so a mapping where a
+    string belongs raises and the note is skipped-and-counted. That is the louder
+    behaviour, and it is the right one for a field whose list shape the rest of
+    the app branches on — but it means `来源` and `时长` must never be collapsed
+    into one "optional metadata" parser, which is why they are two functions.
+    """
+    with pytest.raises(RecipeNoteError):
+        parse_recipe(
+            "---\n材料: 番茄\n来源:\n  - a: b\n---\n".encode(), note_name="x", note_path="x.md"
+        )
+
+
 def test_a_quoted_cooking_date_is_still_a_date(settings: Settings) -> None:
     """PyYAML resolves `2025-07-24` to a `date` and leaves it a string when
     quoted; a hand-edited vault does both, and neither may drop the recipe."""
@@ -510,6 +600,12 @@ def test_absent_history_fields_are_none_not_errors() -> None:
         ingredients=(),
         seasonings=(IngredientEntry(0, "生抽"),),
         tools=(),
+        # Absent `来源` is an empty tuple and absent `时长（分钟）` is `None` —
+        # the same "absent is a state, not a defect" rule the history fields
+        # follow, and the reason `source` is a tuple rather than a list of
+        # possibly-`None` entries.
+        source=(),
+        duration_minutes=None,
         steps="\n- 拌\n",
         history=RecipeCookingHistory(),
     )

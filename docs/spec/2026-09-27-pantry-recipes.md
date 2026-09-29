@@ -3255,10 +3255,32 @@ reaches a path.** `daily_notes_year_policy` bounds the year; a date outside it i
    the same date a constraint violation, which is caught and returned as
    `status="duplicate"` — so even a concurrent double-submit cannot write the
    note twice.
-8. `recipe_tracker_synced` stays 0. It is flipped by a **read-path** comparison,
-   not by a write (§13): when a recipe is loaded and
-   `frontmatter.last_cooked >= max(receipt.log_date)`, the row is updated and the
-   history is shown fresh.
+8. `recipe_tracker_synced` **is not written by this path and no longer drives any
+   surface.** It was specified here to be "flipped by a **read-path** comparison"
+   — when a recipe is loaded and `frontmatter.last_cooked >=
+   max(receipt.log_date)`, update the row — and that flip was never implemented,
+   so the column sat at its `DEFAULT 0` forever and the `待 Obsidian 同步` badge
+   was permanently on for every recipe ever logged through the PWA.
+
+   The comparison is now made where it is actually needed and it is made
+   **without a write**: `GET /api/recipes/{note_name}` publishes
+   **`pendingCookDates`**, the logged dates strictly after `last_cooked`
+   (`app/api/recipes.py::_pending_cook_dates`). It is the exact complement of the
+   rule written above, so the two agree by construction, and it publishes the
+   **dates** rather than a boolean, so "how far behind" is answerable and not
+   only "is it behind". Two details are load-bearing: a `NULL` `last_cooked`
+   makes *every* logged date pending (the tracker has counted nothing, and an
+   empty list there would assert a sync that never happened), and the comparison
+   is `>` not `>=`, because a cook on the same day as `last_cooked` is already
+   counted and `>=` would report a permanently pending cook on the recipe most
+   likely to be current.
+
+   The column is **kept and left at 0** rather than dropped: it is a live table on
+   a deployed service and removing it is a SQLite table rebuild, which is a
+   separate, separately-authorised change. It is inert — no route reads it and no
+   code writes it — and the badge reads `pendingCookDates` instead. Nothing may
+   reintroduce a read of it, because the value it holds is not a fact about the
+   tracker; it is the absence of an implementation.
 
 **Surgical-patch discipline is a hard requirement, not a preference.** The
 `task-date-recorder` plugin runs `app.fileManager.processFrontMatter()` and

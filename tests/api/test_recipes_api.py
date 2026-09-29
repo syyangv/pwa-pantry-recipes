@@ -1020,7 +1020,9 @@ def test_the_detail_recipe_carries_the_list_keys_plus_steps_and_history(
 ) -> None:
     recipe = client.get(f"/api/recipes/{MAIN_RECIPE}").json()["recipe"]
 
-    assert set(recipe) == LIST_RECIPE_KEYS | {"steps", "history", "pendingCookDates"}
+    assert set(recipe) == (
+        LIST_RECIPE_KEYS | {"steps", "history", "source", "durationMinutes", "pendingCookDates"}
+    )
     assert set(recipe["history"]) == {
         "firstCooked",
         "lastCooked",

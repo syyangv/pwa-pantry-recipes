@@ -902,9 +902,7 @@ test('an empty pattern list renders no row, rather than a label with no value', 
     if (url.includes('/api/cook-logs')) {
       return json({ date: '2026-09-28', relativePath: '日记/2026/2026-09-28.md', noteRevision: 'sha256:note', entries: [] });
     }
-    return json(
-      detailBody({ history: { ...detailBody().recipe.history, cookingPatterns: [] } }),
-    );
+    return json(detailBody({ history: { ...detailBody().recipe.history, cookingPatterns: [] } }));
   });
   const unmount = mountRecipe(dom.root, { basename: '盐焗鸡' });
   await settle();
@@ -917,10 +915,100 @@ test('an empty pattern list renders no row, rather than a label with no value', 
   assert.ok(!labels.includes('做法模式'), `an empty list must render no row: ${labels}`);
   // The rows that DO have values are unaffected.
   assert.ok(labels.includes('第一次做'), labels.join('|'));
-  assert.ok(labels.includes('做法模式') === false);
 
   unmount();
   dom.restore();
+});
+
+/* --------------------------------------------------------------------------
+   7c. `来源` / `时长（分钟）` and the `频率` zero.
+   -------------------------------------------------------------------------- */
+
+test('配方信息 renders 来源 and 时长, and hides its heading when there is neither', async () => {
+  const dom = install();
+  const withMeta = async (overrides) => {
+    setResponder((url) => {
+      if (url.includes('/api/session')) return json(sessionBody());
+      if (url.includes('/api/cook-logs')) {
+        return json({ date: '2026-09-28', relativePath: '日记/2026/2026-09-28.md', noteRevision: 'sha256:note', entries: [] });
+      }
+      return json(detailBody(overrides));
+    });
+    const next = install();
+    const stop = mountRecipe(next.root, { basename: '盐焗鸡' });
+    await settle();
+    return next;
+  };
+
+  // The two real shapes meet here: `来源` is a LIST in 13 of 16 vault notes and a
+  // bare string in 2, and the server has already reconciled them.
+  let next = await withMeta({ source: ['小红书', '下厨房'], durationMinutes: 40 });
+  const meta = next.byData('recipe-meta');
+  assert.equal(meta.length, 1, 'the block did not render');
+  const text = textOf(meta[0]);
+  assert.ok(text.includes('来源'), text);
+  assert.ok(text.includes('小红书'), text);
+  assert.ok(text.includes('下厨房'), text);
+  assert.ok(text.includes('时长（分钟）'), text);
+  assert.ok(text.includes('40'), text);
+  next.restore();
+
+  // Both blank — `烤土豆` and `花蛤拌饭` in the real vault — and a heading above
+  // nothing is worse than no heading.
+  next = await withMeta({ source: [], durationMinutes: null });
+  assert.equal(next.byData('recipe-meta').length, 0, 'an empty block rendered');
+  next.restore();
+
+  // A duration of 0 is a real (if useless) value and must NOT read as absent.
+  next = await withMeta({ source: [], durationMinutes: 0 });
+  assert.equal(next.byData('recipe-meta').length, 1, 'a 0-minute duration was dropped as blank');
+  assert.ok(textOf(next.byData('recipe-meta')[0]).includes('0'));
+  next.restore();
+
+  dom.restore();
+});
+
+test('频率 0 is not rendered: the tracker means "not computed" there', async () => {
+  const dom = install();
+  setResponder((url) => {
+    if (url.includes('/api/session')) return json(sessionBody());
+    if (url.includes('/api/cook-logs')) {
+      return json({ date: '2026-09-28', relativePath: '日记/2026/2026-09-28.md', noteRevision: 'sha256:note', entries: [] });
+    }
+    // `recipeTracker` writes frequency 0 whenever cooking_count is 1, which is
+    // 7 of the 16 real notes. `茶碗蒸` is one of them.
+    return json(
+      detailBody({
+        history: { ...detailBody().recipe.history, cookingCount: 1, cookingFrequency: 0 },
+      }),
+    );
+  });
+  const unmount = mountRecipe(dom.root, { basename: '盐焗鸡' });
+  await settle();
+
+  const labels = [...dom.byData('history')[0].querySelectorAll('.field__label')].map(
+    (node) => node.textContent,
+  );
+  assert.ok(!labels.includes('频率'), `a computed-nothing 0 rendered as a number: ${labels}`);
+  // The count that produced the 0 is still shown, and it is the real fact.
+  assert.ok(labels.includes('做过次数'), labels.join('|'));
+
+  // And a real frequency is unaffected.
+  unmount();
+  dom.restore();
+
+  const dom2 = install();
+  respondRecipe();
+  const unmount2 = mountRecipe(dom2.root, { basename: '盐焗鸡' });
+  await settle();
+  assert.ok(
+    [...dom2.byData('history')[0].querySelectorAll('.field__label')]
+      .map((node) => node.textContent)
+      .includes('频率'),
+    'a real frequency stopped rendering',
+  );
+  unmount2();
+  dom2.restore();
 });
 
 test('a 404 renders the Back affordance and the server code, and does not invent steps', async () => {
@@ -960,6 +1048,31 @@ test('the day with no daily note is this recipe own error state, not a blank rec
 
 test('the 待 Obsidian 同步 badge shows when the tracker has not caught up', async () => {
   const dom = install();
+  setResponder((url) => {
+    if (url.includes('/api/session')) return json(sessionBody());
+    if (url.includes('/api/cook-logs')) {
+      return json({ date: '2026-09-28', relativePath: '日记/2026/2026-09-28.md', noteRevision: 'sha256:note', entries: [] });
+    }
+    return json(detailBody({ pendingCookDates: ['2026-09-25'] }));
+  });
+  const unmount = mountRecipe(dom.root, { basename: '盐焗鸡' });
+  await settle();
+  const badge = dom.byData('tracker-badge')[0];
+  assert.ok(badge, 'the badge did not render');
+  assert.equal(badge.textContent, TRACKER_BADGE);
+  assert.ok(textOf(dom.byData('tracker-note')[0]).includes('recipeTracker'));
+  unmount();
+  dom.restore();
+});
+
+test('the badge IGNORES trackerSynced: false, because that column is never flipped', async () => {
+  /* The regression this pins. `cook_log_receipts.recipe_tracker_synced` is
+   * inserted as 0 and nothing in the repo ever writes 1 — the read-path
+   * comparison spec §13 step 8 describes was never implemented. The badge used
+   * to read it, so it was on screen forever for every recipe ever logged here.
+   * A receipt for TODAY with `trackerSynced: false` and an empty
+   * `pendingCookDates` is exactly that state, and the answer must be no badge. */
+  const dom = install();
   respondRecipe(() =>
     json({
       date: '2026-09-28',
@@ -970,10 +1083,9 @@ test('the 待 Obsidian 同步 badge shows when the tracker has not caught up', a
   );
   const unmount = mountRecipe(dom.root, { basename: '盐焗鸡' });
   await settle();
-  const badge = dom.byData('tracker-badge')[0];
-  assert.ok(badge, 'the badge did not render');
-  assert.equal(badge.textContent, TRACKER_BADGE);
-  assert.ok(textOf(dom.byData('tracker-note')[0]).includes('recipeTracker'));
+
+  assert.equal(dom.byData('tracker-badge').length, 0, 'the dead flag showed the badge');
+  assert.equal(dom.byData('tracker-clear').length, 1, 'and the panel claims it is in sync');
   unmount();
   dom.restore();
 });

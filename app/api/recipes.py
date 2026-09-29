@@ -588,6 +588,16 @@ class _Context:
         if include_body:
             body["steps"] = note.steps
             body["history"] = _history(note)
+            # The two hand-authored descriptive fields, alongside the tracker's
+            # nine. They ride in the DETAIL and not the list for the same reason
+            # `steps` does: they are read once, when the user opens the recipe.
+            # `来源` is a list because 13 of the 16 real notes write it as one,
+            # and flattening it to a string here would lose the distinction
+            # between "one source" and "three sources" that the note itself
+            # makes. `durationMinutes` stays `null` for a blank value rather than
+            # becoming 0, because 0 is a real (if useless) cook time.
+            body["source"] = list(note.source)
+            body["durationMinutes"] = note.duration_minutes
             # The DATES, not a count. The count is `len()` of this list, and a
             # count the client has to take on faith is the thing this key exists
             # to replace; the dates are the evidence and they cost one array.

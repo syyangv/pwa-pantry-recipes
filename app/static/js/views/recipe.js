@@ -247,6 +247,45 @@ function stalenessPanel(pendingCookDates, autoUpdated, today) {
 }
 
 /**
+ * `频率` — the tracker's average gap in days, or nothing.
+ *
+ * **`recipeTracker` writes `0` whenever `cooking_count` is 1** (`Math.round(
+ * daysBetween / totalCount)` is guarded by `totalCount > 1`, and the guard's
+ * own else-branch is `0`). So a 0 does not mean "every zero days" — it means
+ * *there is no average to report*, and it is what 7 of the 16 real notes carry.
+ * Rendering it as a number puts a confident false figure in a field the user
+ * would otherwise trust, which is the whole class of thing this panel exists to
+ * stop doing.
+ *
+ * A `0` is omitted rather than shown as `—`: the honest statement is that the
+ * value does not exist, and a dash still occupies a labelled row implying one
+ * was expected. `cookingCount` beside it already says `1 次`, which is the fact.
+ */
+function frequencyField(frequency) {
+  return frequency === 0 || frequency === null || frequency === undefined
+    ? null
+    : field('频率', frequency);
+}
+
+/**
+ * The two hand-authored descriptive fields: where the recipe came from, and how
+ * long it takes.
+ *
+ * `来源` is a LIST in 13 of the 16 real notes and a bare string in 2, so it is
+ * rendered through the same `field()` the history uses and the server sends it
+ * as a list; the two shapes are already reconciled server-side and a client that
+ * re-branched on them would be a second copy of that rule.
+ *
+ * Returns `null` when neither has a value, so the caller can skip the heading
+ * rather than print `配方信息` above an empty box.
+ */
+function metaPanel(source = [], durationMinutes = null) {
+  const rows = [field('来源', source), field('时长（分钟）', durationMinutes)].filter(Boolean);
+  if (rows.length === 0) return null;
+  return el('div', { class: 'fields', dataset: { role: 'recipe-meta' } }, rows);
+}
+
+/**
  * Cooking History, plus the one thing the history itself cannot tell you.
  *
  * `pendingCookDates` is the server's comparison, not a client one: it knows which
@@ -262,7 +301,7 @@ function historyPanel(history = {}, pendingCookDates = [], today = '') {
     field('第一次做', history.firstCooked),
     field('最近一次', history.lastCooked),
     field('做过次数', history.cookingCount),
-    field('频率', history.cookingFrequency),
+    frequencyField(history.cookingFrequency),
     field('年份', history.cookingYears),
     field('近期活跃', history.recentActivity),
     field('喜欢的季节', history.favoriteSeason),
@@ -323,6 +362,10 @@ export function mount(root, params = {}) {
 
   const name = typeof params.basename === 'string' ? params.basename : '';
   const strict = parseStrict(window.location.search);
+  /** The detail payload's `pendingCookDates`, read by BOTH the history panel and
+   * the tracker badge — the two must never disagree about whether the tracker is
+   * behind, so they read one value rather than each asking a different question. */
+  let pendingCookDates = [];
   const debug = isDebugEnabled();
 
   function listen(target, type, handler) {
@@ -372,6 +415,8 @@ export function mount(root, params = {}) {
   const title = el('h2', { text: name || '菜谱' });
   const head = el('div', { dataset: { role: 'head' } });
   const chipsSlot = el('div', { dataset: { role: 'chips-slot' } });
+  const metaSlot = el('div', { dataset: { role: 'meta-slot' } });
+  const metaHead = el('h3', { class: 'settings-subhead', text: '配方信息' });
   const toolsSlot = el('div', { dataset: { role: 'tools-slot' } });
   const stepsSlot = el('div', { dataset: { role: 'steps-slot' } });
   const historySlot = el('div', { dataset: { role: 'history-slot' } });
@@ -415,6 +460,10 @@ export function mount(root, params = {}) {
       backRow,
       title,
       head,
+      // Both hidden until `onReady` decides there is something to say: a
+      // recipe with no 来源 and a blank 时长 gets no heading above no content.
+      metaHead,
+      metaSlot,
       el('h3', { class: 'settings-subhead', text: '食材' }),
       chipsSlot,
       el('h3', { class: 'settings-subhead', text: '烹饪工具' }),
@@ -543,6 +592,30 @@ export function mount(root, params = {}) {
        * other. A `duplicate` writes nothing and publishes no revision, and a
        * cached one is still correct for that date because nothing moved. */
       rememberRevision(date, result.noteRevision);
+      /* The detail payload was read BEFORE this write, so it cannot know about
+       * the cook just logged — and the badge's verdict is now that payload's
+       * `pendingCookDates`. Without this the badge would be silent for exactly
+       * the case it exists for.
+       *
+       * The inference is sound rather than optimistic: a `logged` AND a
+       * `duplicate` both mean a receipt now exists for this date, and
+       * `recipeTracker` can only have counted it by the note being opened in
+       * Obsidian — which cannot have happened in the milliseconds since. The one
+       * thing that would break it is a user opening the note in Obsidian while
+       * this response was in flight, and in that case the badge is briefly
+       * pessimistic until the next load. That is the right direction to be wrong
+       * in: it names a remedy, and it does not claim a count it cannot see. */
+      if (!pendingCookDates.includes(date)) {
+        pendingCookDates = [...pendingCookDates, date].sort();
+        // BOTH surfaces, from the same value. The badge and the history panel
+        // report one fact; rendering one of them from a second source is the
+        // "two implementations of one rule" shape that drifts.
+        historySlot.textContent = '';
+        historySlot.appendChild(
+          historyPanel(loadedRecipe.history || {}, pendingCookDates, todayIn(appTimezone())),
+        );
+        renderTrackerState();
+      }
       refreshBadge(date);
     } catch (error) {
       if (error.status === 409) {
@@ -692,8 +765,53 @@ export function mount(root, params = {}) {
     }
   }
 
+  /** The recipe body this mount last read successfully, kept so the staleness
+   * panel can be re-rendered after a write without a second round trip. */
+  let loadedRecipe = {};
+
+  /**
+   * Renders the badge host from `pendingCookDates`, and nothing else.
+   *
+   * Split out of `refreshBadge` so the post-write path can re-render the verdict
+   * without re-issuing the daily-note read — the request is still there for the
+   * **revision** the next write needs, and repeating it to update one boolean
+   * would be a second fetch for a fact this view already holds.
+   */
+  function renderTrackerState() {
+    const host = badgeSlot;
+    host.textContent = '';
+    if (pendingCookDates.length > 0) {
+      host.appendChild(
+        el('p', { class: 'pill', dataset: { role: 'tracker-badge' }, text: TRACKER_BADGE }),
+      );
+      host.appendChild(
+        el('p', {
+          class: 'muted',
+          dataset: { role: 'tracker-note' },
+          text: '上面这份 frontmatter 还没追上：在 Obsidian 里打开这份菜谱，recipeTracker 就会把次数写回去。',
+        }),
+      );
+      return;
+    }
+    host.appendChild(el('p', { class: 'muted', dataset: { role: 'tracker-clear' } }));
+  }
+
   /* --- the `待 Obsidian 同步` badge: a SECOND, independent request ------- */
 
+  /**
+   * `pending` is the detail payload's `pendingCookDates`, held in the mount.
+   *
+   * **The badge's verdict used to come from `entry.trackerSynced`, and that
+   * column is inserted as 0 and never flipped** — the read-path comparison the
+   * spec describes (§13 step 8) was never implemented, so the test was
+   * permanently `!== true` and the badge sat on the screen forever for every
+   * recipe ever logged here. The server's own `pendingCookDates` is that
+   * comparison, done correctly, and it is already in the response this view
+   * holds, so the verdict is free and the second request below is now needed
+   * only for the daily-note **revision** that the cook-log write's
+   * compare-and-swap uses. Removing the request instead would drop that revision
+   * and silently weaken conflict detection, which is why the call stayed.
+   */
   function refreshBadge(date) {
     const host = badgeSlot;
     host.textContent = '';
@@ -710,21 +828,7 @@ export function mount(root, params = {}) {
           // revision read for 03-10 says nothing about 03-12, and filing it
           // under "whatever was last read" is the bug.
           rememberRevision(date, result && result.noteRevision);
-          const entry = ((result && result.entries) || []).find((item) => item.recipeNote === name);
-          if (entry && entry.trackerSynced !== true) {
-            host.appendChild(
-              el('p', { class: 'pill', dataset: { role: 'tracker-badge' }, text: TRACKER_BADGE }),
-            );
-            host.appendChild(
-              el('p', {
-                class: 'muted',
-                dataset: { role: 'tracker-note' },
-                text: '上面这份 frontmatter 还没追上：在 Obsidian 里打开这份菜谱，recipeTracker 就会把次数写回去。',
-              }),
-            );
-            return;
-          }
-          host.appendChild(el('p', { class: 'muted', dataset: { role: 'tracker-clear' } }));
+          renderTrackerState();
         },
         onError: (error) => {
           // Its own panel precisely so that "today's daily note does not exist"
@@ -784,6 +888,10 @@ export function mount(root, params = {}) {
             }),
           );
           head.appendChild(el('p', { class: 'muted', dataset: { role: 'note-path' }, text: recipe.notePath || '' }));
+          const meta = metaPanel(recipe.source || [], recipe.durationMinutes ?? null);
+          metaSlot.textContent = '';
+          metaHead.hidden = meta === null;
+          if (meta) metaSlot.appendChild(meta);
           chipsSlot.textContent = '';
           chipsSlot.appendChild(chipRow({ ingredients: slots, strict, debug }));
           toolsSlot.textContent = '';
@@ -800,9 +908,9 @@ export function mount(root, params = {}) {
             }),
           );
           historySlot.textContent = '';
-          historySlot.appendChild(
-            historyPanel(recipe.history || {}, recipe.pendingCookDates || [], today),
-          );
+          loadedRecipe = recipe;
+          pendingCookDates = Array.isArray(recipe.pendingCookDates) ? recipe.pendingCookDates : [];
+          historySlot.appendChild(historyPanel(recipe.history || {}, pendingCookDates, today));
           if (typeof resumeTop === 'number' && resumeTop > 0 && window.scrollY !== resumeTop) {
             window.scrollTo(0, resumeTop);
           }
@@ -810,6 +918,10 @@ export function mount(root, params = {}) {
         },
         onError: (error) => {
           head.textContent = '';
+          // A failed load must not leave a `配方信息` heading above nothing. The
+          // error state replaces the panel body, and the heading belongs to it.
+          metaHead.hidden = true;
+          metaSlot.textContent = '';
           chipsSlot.textContent = '';
           toolsSlot.textContent = '';
           stepsSlot.textContent = '';

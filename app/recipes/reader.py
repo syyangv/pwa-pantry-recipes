@@ -61,6 +61,14 @@ MATERIALS_KEY: Final = "材料"
 SEASONINGS_KEY: Final = "调料"
 #: The `烹饪工具` frontmatter key — Cooking Tools, requirements and not stock.
 TOOLS_KEY: Final = "烹饪工具"
+#: The `来源` frontmatter key — where the recipe came from. Hand-authored, and
+#: **list-shaped in 13 of the 16 real notes** with only `烤小辣椒` and `番茄炒蛋`
+#: carrying a bare scalar, so anything that reads it as a string drops the source
+#: of most of the vault on the floor.
+SOURCE_KEY: Final = "来源"
+#: The `时长（分钟）` frontmatter key — cook time in minutes. An int in 14 of 16,
+#: present-but-blank in `烤土豆` and `花蛤拌饭`.
+DURATION_KEY: Final = "时长（分钟）"
 
 #: The nine frontmatter fields `Helper/utils/recipeTracker.md` maintains. Read
 #: only: the PWA never writes them and never recomputes them. They are named
@@ -164,6 +172,15 @@ class RecipeNote:
     ingredients: tuple[IngredientEntry, ...]
     seasonings: tuple[IngredientEntry, ...]
     tools: tuple[str, ...]
+    #: `来源`, as the same `(index, raw)`-free list of plain strings `tools` is.
+    #: A tuple because it is a list in 13 of 16 real notes and a scalar in 2, and
+    #: a consumer that had to branch on which would branch on the wrong thing.
+    source: tuple[str, ...]
+    #: `时长（分钟）`, or `None` for both "absent" and "present but blank". `None`
+    #: is `int | None` rather than a sentinel: it is the same distinction the
+    #: history fields make, and 0 is a real (if silly) cook time, so a sentinel
+    #: would have to be something nobody would ever type.
+    duration_minutes: int | None
     steps: str
     history: RecipeCookingHistory
 
@@ -399,6 +416,8 @@ def _project(
         ingredients=_entries(frontmatter.get(MATERIALS_KEY)),
         seasonings=_entries(frontmatter.get(SEASONINGS_KEY)),
         tools=tuple(entry.raw for entry in _entries(frontmatter.get(TOOLS_KEY))),
+        source=tuple(entry.raw for entry in _entries(frontmatter.get(SOURCE_KEY))),
+        duration_minutes=_duration(frontmatter.get(DURATION_KEY)),
         steps=_steps(body),
         history=_history(frontmatter),
     )
@@ -418,6 +437,37 @@ def _is_recipe_note(frontmatter: Mapping[str, Any], note_name: str, index_name: 
     if note_name == index_name:
         return False
     return MATERIALS_KEY in frontmatter or SEASONINGS_KEY in frontmatter
+
+
+def _duration(value: Any) -> int | None:
+    """`时长（分钟）` as an int, or `None`.
+
+    **This is deliberately more forgiving than `_entries`, and the asymmetry is
+    the point.** `材料`, `调料`, `烹饪工具` and `来源` are lists of strings that
+    feed the matcher or the audit anchor, so a non-string item there is a
+    malformation and `RecipeIndex` skips the note — loudly, via `skipped`. A cook
+    time is a **cosmetic** field: it is displayed and never scored, never joined,
+    and never an input to anything. `RecipeCookingHistory` already sets the rule
+    this follows, in the reason it keeps `auto_updated` as a string — "a cosmetic
+    field must never blank a recipe" — and a recipe that vanished from the list
+    because someone typed `时长: 半小时` would be the loudest possible way to
+    ignore a typo.
+
+    So: an absent key, a present-but-blank key, a list, a mapping, and a numeric
+    *string* all read as `None`; a real `int` reads as itself. A `bool` is refused
+    because `isinstance(True, int)` is true in Python and `时长: true` is a
+    YAML mistake, not a one-minute recipe.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    # A quoted `时长: "30"` is the one coercion worth making: it is unambiguous,
+    # it is what three of the real notes would parse to if anyone had quoted
+    # them, and it cannot turn a non-numeric string into a number.
+    if isinstance(value, str) and value.strip().isdigit():
+        return int(value.strip())
+    return None
 
 
 def _entries(value: Any) -> tuple[IngredientEntry, ...]:
