@@ -193,6 +193,15 @@ decrements a [Pantry Unit](#pantry-unit) and never records a consumed amount. A
 stock change in this household is attributable to a purchase restock through the
 [Pantry-Write Contract](#pantry-write-contract) — **not** to a Cooking Record.
 
+A Cooking Record the app wrote can be **retracted** — removed again — for
+`COOK_LOG_UNDO_HOURS` (default 72) after it was written. Retraction is the
+append's inverse and is deliberately narrow: it removes only the one bare
+`- [[Recipe]]` line the app itself wrote (an active receipt must exist, so a link
+typed by hand is never touched), and refuses, leaving the note alone, when the
+line was edited or the recipe is linked more than once. The receipt row is kept
+with `retracted_at` set — the audit trail still answers "did the app write this?"
+— and stops counting as a cook.
+
 The app keeps a **PWA-owned mirror** of each row in `cook_log_receipts`
 (`APP_DATA_DIR`, not the vault). That table is the **audit trail** — it is what
 makes "did the app write this?" answerable — and it is the **double-submit
@@ -294,6 +303,7 @@ overwritten cooking log loses a real meal.
 | Cookable | available, can-make, makeable, ready, possible | "Available" collides with [Pantry Stock](#pantry-stock) availability and with API availability. "Makeable" is not a word. Use the `n/total` score and the chip row, not a bare boolean — the boolean is never published. |
 | Cooking Log | log, entry, record, activity, meal log | "Entry"/"record" are used by other surfaces; the log is specifically the daily-note write. |
 | Cooking Record | log entry, row, meal | A row inside a daily note, not the write operation. |
+| Retraction | undo, delete the log, cancel, remove the record | "Delete" and "cancel" suggest the app may remove any log line; it may remove only the one it wrote, inside the window. "Undo" suggests a general history, which this is not. |
 | Stock Movement | delta, change, diff, transaction | "Transaction"/"delta" imply accounting; a movement is attributed to a cause and is not a ledger entry. |
 | Recipe | dish, meal, menu item, cookbook entry | "Meal" is the occasion, not the note; "dish" is a synonym with no separate definition and invites confusion with the daily note's meal sections. |
 | Recipe Cooking History | stats, counters, metadata | "Stats" is read as derived display; the frontmatter is the durable aggregate that must match the daily notes. |

@@ -4246,6 +4246,24 @@ mistake for an open question.
    The app surfaces this as a `待 Obsidian 同步` badge driven by
    `cook_log_receipts.recipe_tracker_synced`, rather than showing a number it
    knows is stale.
+
+   **Amended 2026-09-29 (retraction and the vault-side sync).** Two things
+   changed. (1) The vault now runs a Templater startup listener
+   (`Helper/utils/recipeTrackerSync.js`) that refreshes a recipe's `cooking_*`
+   frontmatter when a daily note that links it changes, so with Obsidian running
+   the lag is seconds rather than "until the note is opened". The `dataviewjs`
+   block stays authoritative and is unchanged; the listener holds a tested copy of
+   its arithmetic. With Obsidian closed the old behaviour holds, plus a launch
+   catch-up over the last seven days. (2) A Cooking Record can be **retracted**
+   inside `COOK_LOG_UNDO_HOURS` (default 72), which makes a *removed* link a
+   normal event: the listener remembers which recipes each daily note linked so
+   the recipe that lost the link is refreshed, and one with none left is cleared as
+   the tracker clears it. The badge also covers the reverse case: a retracted date
+   that is still the recipe's `last_cooked` and that the tracker has not yet run
+   past is published as `pendingRetractionDates`. It is deliberately narrow — a
+   retraction of an older counted date is not flagged, because the tracker only
+   rewrites frontmatter when its numbers change, so a broader rule would leave the
+   badge on forever for a cook the count never included.
 6. **`recipeTracker` counts pages, not links.** `cooking.length =
    dv.pages('"日记"').where(...)` returns one entry per daily-note page, so a
    duplicate append inside one daily note **cannot** inflate `cooking_count` —
@@ -4394,7 +4412,7 @@ mistake for an open question.
 | R9 | **F1's Stock Join silently drops a pantry line, so a held item renders `have-been-buying`** | **high — 2 of 46 lines are already known to miss** | medium | The join has no tier ladder (exact → basename → override) and no re-resolution pass, so it is strictly weaker than the recipe→ingredient join and the spec says so (§13.14). Mitigations: a dedicated `unjoined` bucket in the `调试` toggle, `stockUnjoinedCount` on `GET /api/recipes`, `stock.unjoinedLineCount` in `/health`, and `app/pantry/line_overrides.yaml` as a reviewed one-line repair per miss. The override is load-bearing: without it the only remaining fix is editing the user's vault. |
 | R10 | **The `💵` per-unit math drifts between the two vault-side implementations and this app** | medium | low — a money display, not a score | Parity is a test obligation (F1): `scripts/snapshot_pantry_catalog.py` computes the total both ways and refuses to emit `pantry_stock_math_parity.json` on disagreement, and `tests/pantry/test_stock_math.py` pins the three breaking shapes. Residual risk stated plainly: only one of the three implementations is in this repo, so a change to the other two is caught at fixture-regeneration time by a human, not automatically (§13.16). |
 | R11 | A user replays a shortlist intent for the wrong mutation | low | medium | `request_fingerprint` binding (§6d): a reused `X-Client-Id` with a different payload is a bounded 409, not a silent overwrite (§9.18.3). |
-| R12 | `recipeTracker` never fires, so the cooking frontmatter stays permanently stale | medium | low | The `待 Obsidian 同步` badge makes the lag *visible* rather than confusing, and `cook_log_receipts` records what was written independently of whether Obsidian has caught up. |
+| R12 | `recipeTracker` never fires, so the cooking frontmatter stays permanently stale | medium | low | The `待 Obsidian 同步` badge makes the lag *visible* rather than confusing, and `cook_log_receipts` records what was written independently of whether Obsidian has caught up. Mitigated further by the vault-side sync (see limitation 5's amendment): with Obsidian running the tracker's fields are refreshed without opening the note. |
 | R13 | Shortlist drift is discovered as data loss | low | medium | A renamed recipe renders as a dimmed `⚠ 已重命名` row, never silently dropped. Nothing is auto-pruned. |
 | R14 | Scope creep into quantities / nutrition / write-back | medium | medium | §15 states the deferrals with reasons, and `nutrition-intake`'s units and nutrients are named as the future home so a quantity ticket reuses them instead of forking a converter. |
 | R15 | A dependency is added that a sibling does not use | low | low | **Exactly two, both locked and both with a named sibling precedent: `aiosqlite` (pwa-wardrobe) in `[project].dependencies` (F9) and `playwright` in an optional `[browser]` extra, deliberately **NOT** in `[test]` (F10).** The *placement* is part of each decision and is itself asserted (§6.1): one `grep playwright pyproject.toml` must show exactly one occurrence, inside the `browser` extra, and `aiosqlite` must be a **runtime** dependency rather than a test one — a deployment that installs only the wheel would otherwise fail at first request, in production, on the vault write path. No ORM, no `regex` (F15), no bundler, no build step, no `node_modules` at runtime. **F1 and F4 add neither** — F1 reads a vault note through the already-ported `pantry.py`, and F4 *removes* a dependency-shaped surface (a subprocess and its nine config fields) rather than adding one. |

@@ -216,6 +216,7 @@ and 8002–8006 are allocated to sibling PWAs, as are Serve ingresses 8443 and
 | `TAILSCALE_OWNER_LOGIN` | `syyangv@github` |
 | `TRUST_TAILSCALE_HEADERS` | `true` (behind the loopback proxy) |
 | `OBSIDIAN_READ_ONLY` | `false` — **writable** (was flipped from `true` on 2026-09-29); the installer's own default is still `true` |
+| `COOK_LOG_UNDO_HOURS` | `72` — how long after it was written a Cooking Record can be retracted from the PWA (declared in the plist template) |
 | `APP_DATA_DIR` | `~/.local/share/pwa-pantry-recipes`, mode `0700` |
 | `SoftResourceLimits` | `NumberOfFiles 8192` — required, see below |
 | Logs | `~/Library/Logs/pwa-pantry-recipes/server.log` |
