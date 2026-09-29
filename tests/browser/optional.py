@@ -53,6 +53,22 @@ def _unavailable(reason: str) -> None:
     return; the annotation is `NoReturn` so `mypy` knows the module-scope call in
     a flow file terminates that line rather than leaving `sync_api` possibly
     unbound.
+
+    **`allow_module_level=True` is load-bearing, and its absence was a real CI
+    failure.** `import_sync_api()` is called at module scope by both flow files,
+    so this `pytest.skip` runs during **collection**. Since pytest 7, a
+    `pytest.skip` at collection time without that flag is not a skip at all — it
+    is a collection ERROR:
+
+        Using pytest.skip outside of a test will skip the entire module.
+        If that's your intention, pass `allow_module_level=True`.
+
+    which is the opposite of the intent, and worse than useless here: two
+    collection errors abort the whole `pytest` run, so the `verify` job reported
+    nothing about any other test and `main` was red on every commit while the
+    browser flows' opt-in gate quietly took the entire suite down with it. The
+    local suite never showed it, because there `playwright` *is* installed and
+    this function is never called.
     """
     if browser_required():
         pytest.fail(
@@ -60,7 +76,7 @@ def _unavailable(reason: str) -> None:
             f"flows. Install them with: pip install '.[browser]' && playwright install "
             f"chromium"
         )
-    pytest.skip(reason)
+    pytest.skip(reason, allow_module_level=True)
 
 
 def import_sync_api() -> object:
