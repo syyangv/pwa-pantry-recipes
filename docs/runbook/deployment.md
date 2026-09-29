@@ -1036,6 +1036,7 @@ name so **nothing was written to the vault**. A plist edit requires
 bootout+bootstrap, not kickstart (§5); the installer's single-shot
 bootout+bootstrap hit a transient launchd `Input/output error` on the first try
 (this left the service briefly down until a direct `launchctl bootstrap` retry
-succeeded — worth knowing the race exists), and the new pid was then confirmed on
+succeeded; the installer now waits for the unload and retries `bootstrap`, bounded at
+5 attempts), and the new pid was then confirmed on
 the socket via `port-manager`. The 食材 tab and all its modules still serve `200`
 at `v0.7.4`.

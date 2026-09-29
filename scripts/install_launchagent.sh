@@ -281,7 +281,24 @@ NEXT
         # the binary and ignores the plist, which is how a NumberOfFiles fix
         # silently stays uninstalled.
         launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-        launchctl bootstrap "gui/$(id -u)" "$INSTALLED"
+        # bootout returns before launchd has finished unloading the job, and a
+        # bootstrap fired into that window fails with "Input/output error" and
+        # leaves the service DOWN (seen 2026-09-29). Wait for the label to go,
+        # then retry a bounded number of times rather than trusting the wait.
+        for _ in 1 2 3 4 5 6 7 8 9 10; do
+            launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || break
+            sleep 1
+        done
+        attempt=1
+        until launchctl bootstrap "gui/$(id -u)" "$INSTALLED"; do
+            if [ "$attempt" -ge 5 ]; then
+                echo "    bootstrap failed $attempt times; the service is DOWN." >&2
+                exit 1
+            fi
+            echo "    bootstrap attempt $attempt failed (launchd unload race); retrying" >&2
+            attempt=$((attempt + 1))
+            sleep 2
+        done
         sleep 2
         # `state = running` proves a process is alive. The socket is the claim.
         if [ -f "$PORT_MANAGER" ]; then

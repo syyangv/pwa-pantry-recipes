@@ -63,9 +63,16 @@ SUBSTITUTION_ARTIFACTS = ("command not found", "command substitution")
 #: neutralize would either start a service or never reach the block it claims.
 LAUNCHD_LINES = (
     'launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true',
-    'launchctl bootstrap "gui/$(id -u)" "$INSTALLED"',
+    'launchctl print "gui/$(id -u)/$LABEL" >/dev/null 2>&1 || break',
     "sleep 2",
     'launchctl print "gui/$(id -u)/$LABEL" | grep -A2 "resource limits" || true',
+)
+
+#: The bootstrap call is the condition of an `until`, so it cannot be replaced by
+#: a trailing-comment no-op like the lines above (`; do` would be commented out).
+LAUNCHD_UNTIL = (
+    'until launchctl bootstrap "gui/$(id -u)" "$INSTALLED"; do',
+    "until :; do",
 )
 
 #: Rendering calls `plutil` and `/usr/libexec/PlistBuddy`, which are macOS-only,
@@ -294,6 +301,8 @@ def test_the_bootstrap_message_block_is_also_inert(tmp_path: Path) -> None:
     for line in LAUNCHD_LINES:
         assert line in script, f"harness is stale, not found: {line}"
         script = script.replace(line, ": # neutralized by test_installer_render.py")
+    assert LAUNCHD_UNTIL[0] in script, f"harness is stale, not found: {LAUNCHD_UNTIL[0]}"
+    script = script.replace(*LAUNCHD_UNTIL)
     assert "launchctl bootstrap" not in script, "the harness would have started a service"
     script = _plant(
         script, "  Only after it exits 0 may the Home Screen PWA be reinstalled.", canary
@@ -318,3 +327,86 @@ def test_the_bootstrap_message_block_is_also_inert(tmp_path: Path) -> None:
     _assert_not_executed([canary, tmp_path / "canary_bootstrap_subst"])
     for artifact in SUBSTITUTION_ARTIFACTS:
         assert artifact not in completed.stderr
+
+
+# ---------------------------------------------------------------------------
+# the bootstrap race, against a stub launchctl
+# ---------------------------------------------------------------------------
+
+
+def _stub_launchctl(root: Path, *, fail_first: int) -> Path:
+    """A `launchctl` that fails `bootstrap` `fail_first` times, then succeeds.
+
+    `print` reports the job as already gone, so the unload wait ends at once.
+    Returns the file the stub appends one line per `bootstrap` call to.
+    """
+    calls = root / "bootstrap_calls"
+    stub_dir = root / "stub_bin"
+    stub_dir.mkdir()
+    stub = stub_dir / "launchctl"
+    stub.write_text(
+        "#!/bin/sh\n"
+        'case "$1" in\n'
+        "  bootstrap)\n"
+        f'    echo x >> "{calls}"\n'
+        f'    [ "$(wc -l < "{calls}")" -le {fail_first} ] && '
+        '{ echo "Bootstrap failed: 5: Input/output error" >&2; exit 5; }\n'
+        "    exit 0 ;;\n"
+        "  print) exit 113 ;;\n"
+        "  *) exit 0 ;;\n"
+        "esac\n",
+        encoding="utf-8",
+    )
+    stub.chmod(0o755)
+    return calls
+
+
+def _run_with_stub(root: Path, *, fail_first: int) -> tuple[subprocess.CompletedProcess[str], Path]:
+    _stage(root, INSTALLER.read_text(encoding="utf-8"))
+    calls = _stub_launchctl(root, fail_first=fail_first)
+    env = _env(root)
+    env["PATH"] = f"{root / 'stub_bin'}:{env['PATH']}"
+    completed = subprocess.run(
+        ("bash", str(root / "scripts" / "install_launchagent.sh"), "--apply", "--bootstrap"),
+        capture_output=True,
+        text=True,
+        env=env,
+        cwd=root,
+    )
+    return completed, calls
+
+
+def test_the_bootstrap_waits_for_the_unload_and_retries() -> None:
+    """Static: the wait and the retry exist, and the retry is bounded."""
+    script = INSTALLER.read_text(encoding="utf-8")
+    branch = script[script.index("    bootstrap)") :]
+    assert (
+        branch.index("bootout")
+        < branch.index("launchctl print")
+        < branch.index("until launchctl bootstrap")
+    )
+    assert "exit 1" in branch[branch.index("until launchctl bootstrap") :].split(";;")[0]
+
+
+@requires_macos_tooling
+def test_a_transient_bootstrap_failure_is_retried_not_left_down(tmp_path: Path) -> None:
+    """The 2026-09-29 incident: the first bootstrap raced the bootout and failed
+    with `Input/output error`, and the installer exited with the service down."""
+    completed, calls = _run_with_stub(tmp_path / "tree", fail_first=1)
+
+    assert completed.returncode == 0, completed.stderr
+    assert len(calls.read_text().splitlines()) == 2, "expected one failure, then one success"
+    assert "retrying" in completed.stderr
+    assert "The service is up on loopback 8007" in completed.stdout
+
+
+@requires_macos_tooling
+def test_a_persistent_bootstrap_failure_exits_nonzero_and_says_the_service_is_down(
+    tmp_path: Path,
+) -> None:
+    completed, calls = _run_with_stub(tmp_path / "tree", fail_first=99)
+
+    assert completed.returncode == 1
+    assert len(calls.read_text().splitlines()) == 5, "the retry must be bounded"
+    assert "the service is DOWN" in completed.stderr
+    assert "The service is up" not in completed.stdout
