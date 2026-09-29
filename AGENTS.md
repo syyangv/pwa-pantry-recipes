@@ -3,12 +3,21 @@
 A local-only PWA that answers **"what can I cook from what I already have?"**
 and records the cook in the Obsidian daily note.
 
-**State (2026-09-29): deployed and serving `v0.7.4`, on a tailnet-only origin,
+**State (2026-09-29): deployed and serving `v0.7.5`, on a tailnet-only origin,
 with three honest caveats that are not "it works".** The user authorized the deploy
 in-session, so `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` is
 installed, `com.syang.pwa-pantry-recipes` is loaded and `state = running`, and a
 Tailscale Serve route proxies **8452 → 127.0.0.1:8007**. The deployed origin is
 `https://home-macbook-air.tailcd6e49.ts.net:8452` (tailnet only).
+
+**`v0.7.5` adds retracting a Cooking Record** (`e30ae68`): a 撤销 control per cook
+logged in the last `COOK_LOG_UNDO_HOURS` (72), backed by `DELETE
+/api/cook-logs/{date}/{note}` and migration 003 (`retracted_at`, applied at boot).
+It removes only the one line the app wrote and refuses anything else. Observed
+from this host: `release_check` floor exit 0 at `v0.7.5`, `converge_gate` exit 3
+with zero `FAIL`, the migration in the live ledger, and the new keys on the
+detail route. **Not yet observed: the phone showing `0.7.5`, and a real
+retraction end to end** — both are the user's to attest. §9h has the record.
 
 **`v0.7.4` is the release that made the Cooking History panel tell the truth about
 itself** — the tracker badge could previously never turn off, `频率` published a

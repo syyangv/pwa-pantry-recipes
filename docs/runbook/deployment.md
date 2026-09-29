@@ -1040,3 +1040,44 @@ succeeded; the installer now waits for the unload and retries `bootstrap`, bound
 5 attempts), and the new pid was then confirmed on
 the socket via `port-manager`. The 食材 tab and all its modules still serve `200`
 at `v0.7.4`.
+
+
+## 9h. v0.7.5: retracting a Cooking Record — 2026-09-29
+
+**What shipped** (`e30ae68`, CI green on `verify` and `browser`): `DELETE
+/api/cook-logs/{date}/{note}`, migration 003, the 撤销 control, and
+`COOK_LOG_UNDO_HOURS=72` (declared in the plist template; the installed plist has
+no such key and so runs on the code default of 72 — see below). `CACHE_VERSION`
+rotated to `v0.7.5` because static files changed.
+
+**How it was deployed.** The live database was copied to
+`~/.local/share/pwa-pantry-recipes/recipes.sqlite3.pre-v0.7.5` first, because
+migration 003 alters `cook_log_receipts` and replaces its unique index. Then `git
+push` and `launchctl kickstart -k` (a code change, not a plist change, so no
+bootout/bootstrap). Delete the `.pre-v0.7.5` copy once the release is trusted.
+
+**Observed on this host:** `release_check` floor exit 0 (`v0.7.5` on source and
+local, one backend fingerprint); `converge_gate` exit 3, zero `FAIL`, the same
+`VANTAGE-LIMITED` verdict as §9f; `schema_migrations` lists `003_receipt_retraction`;
+the live index reads `… WHERE retracted_at IS NULL`; the one existing receipt
+(`烤鸡翅`, 2026-09-29) survived as active; `GET /api/recipes/烤鸡翅` carries
+`retractableCooks` (one entry, deadline 2026-10-02) and `pendingRetractionDates: []`.
+
+**Not observed, and stated as such:** the phone showing `0.7.5` (a user
+attestation, like every rotation before it), and a real retraction against the live
+vault. The second was deliberately not exercised from here: it would delete a line
+from the user's daily note.
+
+**The installed plist does not declare `COOK_LOG_UNDO_HOURS`.** The template does,
+and `tests/deploy` requires it there, but the plist on disk was rendered before the
+key existed, so the service runs on `app/config.py`'s default (72). That is the
+intended value; re-render and `--apply --bootstrap` the next time the plist changes
+for another reason, rather than bouncing the service for this alone.
+
+**Vault-side (outside this repo):** `Helper/utils/recipeTrackerSync.js` and
+`recipeStats.js`, registered from `Helper/Templates/startup-updateModified.md`,
+keep a recipe's `cooking_*` frontmatter current without opening the note, and now
+handle a removed link. They take effect when Obsidian is reloaded. `/Helper/` is
+git-ignored in the vault, so those files have no history; the pre-edit template is
+not preserved anywhere durable.
+
