@@ -40,10 +40,13 @@ with four copies of `[[盐焗鸡]]` is a note the user has to clean by hand.
 
 **`cook_log_receipts` is a mirror, not the correctness mechanism** (F13). The
 daily-note wikilink is what `recipeTracker` reads; the receipts table is the
-audit trail and the double-submit dedupe ledger. `recipe_tracker_synced` is
-written as 0 by this module and flipped by a read-path comparison elsewhere
-(§13.5) — the PWA's view of `cooking_count` is expected to lag Obsidian, and
-this module does not compensate for that.
+audit trail and the double-submit dedupe ledger. This module writes
+`recipe_tracker_synced` as 0 and **does not update it** — the read-path
+comparison spec §13.5 once described here has no implementation, so the column
+was inert, and §13 step 8 has been amended accordingly. The PWA's view of
+`cooking_count` is expected to lag Obsidian and this module does not compensate
+for that; `CookLogReceipts.log_dates` and the recipe detail route report the lag
+without writing anything.
 
 **A missing daily note is an error, never a creation** (F4). `None` from
 `read_existing_if_exists` is re-checked exactly once and then raises
@@ -251,16 +254,24 @@ class CookLogResult:
     relative_path: str
     note_revision: str
     written_at: str | None = None
-    tracker_synced: bool = False
 
 
 @dataclass(frozen=True)
 class CookLogEntry:
-    """One row of the read-back: what the receipts ledger says it wrote."""
+    """One row of the read-back: what the receipts ledger says it wrote.
+
+    **There is no `tracker_synced` field, and that is the fix rather than an
+    omission.** It used to carry `cook_log_receipts.recipe_tracker_synced`, a
+    column inserted as 0 that nothing ever writes, so the field could only ever
+    be `False` and the API published that to the badge — which is how
+    `待 Obsidian 同步` came to sit on the screen permanently. The comparison that
+    answers the real question is `CookLogReceipts.log_dates` joined against
+    `RecipeCookingHistory.last_cooked` on the recipe detail route, and it is a
+    read of two facts that already exist. The column stays in the schema, inert.
+    """
 
     recipe_note: str
     written_at: str
-    tracker_synced: bool
 
 
 @dataclass(frozen=True)
@@ -401,7 +412,11 @@ class CookLogReceipts:
         " VALUES (?, ?, ?, ?, 0)"
     )
     _SELECT = (
-        "SELECT recipe_note, written_at, recipe_tracker_synced"
+        # `recipe_tracker_synced` is deliberately NOT selected. It is inserted as
+        # 0 and nothing here ever writes 1, so selecting it would put a value on
+        # the wire that is the absence of an implementation rather than a fact
+        # about Obsidian. See `CookLogEntry`.
+        "SELECT recipe_note, written_at"
         " FROM cook_log_receipts WHERE log_date = ? ORDER BY id"
     )
 
@@ -438,7 +453,6 @@ class CookLogReceipts:
             CookLogEntry(
                 recipe_note=str(row["recipe_note"]),
                 written_at=str(row["written_at"]),
-                tracker_synced=bool(row["recipe_tracker_synced"]),
             )
             for row in rows
         )

@@ -214,12 +214,14 @@ def test_the_read_back_lists_the_date_with_its_entries(
     assert body["noteRevision"].startswith("sha256:")
     assert [entry["recipeNote"] for entry in body["entries"]] == [COOK]
     entry = body["entries"][0]
-    assert set(entry) == {"recipeNote", "writtenAt", "trackerSynced"}
+    # **No `trackerSynced`.** It published `cook_log_receipts.recipe_tracker_synced`,
+    # a column inserted as 0 that nothing ever writes, so it could only ever read
+    # `false` — and the badge keyed on it, which is how `待 Obsidian 同步` came to
+    # be permanently on. Asserted as an exact set so re-adding it fails here.
+    # Spec §13 step 8 is amended: the comparison lives on the recipe detail route
+    # as `pendingCookDates`, which publishes dates rather than a boolean.
+    assert set(entry) == {"recipeNote", "writtenAt"}
     assert entry["writtenAt"].endswith("Z")
-    # The write path never sets it; only a read-path comparison flips it (§13.5).
-    # The PWA's view of `cooking_count` is expected to lag Obsidian, and the
-    # `待 Obsidian 同步` badge is what makes that lag visible instead of wrong.
-    assert entry["trackerSynced"] is False
 
 
 def test_the_read_back_for_a_date_with_no_cooks_is_an_empty_list_not_an_error(

@@ -213,6 +213,25 @@ def build_cook_log_router() -> APIRouter:
     async def read_cook_log(
         request: Request, log_date: str = Query(default="", alias="date")
     ) -> JSONResponse:
+        """The date's Cooking Records, for the cook-log write's compare-and-swap.
+
+        **`entries[]` no longer carries `trackerSynced`.** It published
+        `cook_log_receipts.recipe_tracker_synced`, a column inserted as 0 that
+        nothing in this repository ever writes, so the field could only ever read
+        `false` and any client keying on it was reading the absence of an
+        implementation as if it were a fact about Obsidian. Spec §13 step 8 has
+        been amended: the comparison that answers the real question lives on
+        `GET /api/recipes/{note_name}` as `pendingCookDates`, which publishes the
+        dates rather than a boolean.
+
+        Removing it from the wire is the point. Leaving a field published is an
+        invitation to read it, and the one reader it had was wrong.
+
+        The response still does not widen to carry `recipeNote` or `writtenAt` on
+        the POST path: the client already holds the note name, and it re-reads
+        this date's entries for the timestamps. The audit row stays readable
+        here.
+        """
         writer = _writer(request)
         if writer is None:
             return cook_log_error(request, 503, _MISSING_WRITER)
@@ -229,7 +248,6 @@ def build_cook_log_router() -> APIRouter:
                     {
                         "recipeNote": entry.recipe_note,
                         "writtenAt": entry.written_at,
-                        "trackerSynced": entry.tracker_synced,
                     }
                     for entry in entries
                 ],

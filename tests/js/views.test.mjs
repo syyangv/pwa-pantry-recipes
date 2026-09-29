@@ -1066,12 +1066,15 @@ test('the 待 Obsidian 同步 badge shows when the tracker has not caught up', a
 });
 
 test('the badge IGNORES trackerSynced: false, because that column is never flipped', async () => {
-  /* The regression this pins. `cook_log_receipts.recipe_tracker_synced` is
-   * inserted as 0 and nothing in the repo ever writes 1 — the read-path
-   * comparison spec §13 step 8 describes was never implemented. The badge used
-   * to read it, so it was on screen forever for every recipe ever logged here.
-   * A receipt for TODAY with `trackerSynced: false` and an empty
-   * `pendingCookDates` is exactly that state, and the answer must be no badge. */
+  /* The regression this pins, and it is why the field is off the wire entirely.
+   * `cook_log_receipts.recipe_tracker_synced` is inserted as 0 and nothing in
+   * the repo ever writes 1 — the read-path comparison spec §13 step 8 described
+   * was never implemented. The badge used to read it, so it was on screen
+   * forever for every recipe ever logged here. A receipt for TODAY with
+   * `trackerSynced: false` and an empty `pendingCookDates` is exactly that state,
+   * and the answer must be no badge. The key is still in this payload on purpose:
+   * the API no longer publishes it, so this also pins that a stale client
+   * response cannot resurrect the old behaviour. */
   const dom = install();
   respondRecipe(() =>
     json({
@@ -1090,7 +1093,13 @@ test('the badge IGNORES trackerSynced: false, because that column is never flipp
   dom.restore();
 });
 
-test('the badge stays hidden when the tracker has synced', async () => {
+test('the badge stays hidden when nothing is pending, whatever a receipt claims', async () => {
+  /* Renamed from "when the tracker has synced". That framing was the old model:
+   * the assertion used to be about `trackerSynced: true`, a field the badge no
+   * longer reads and the API no longer publishes. The claim it made — that the
+   * badge is not on — is unchanged; what it is no longer *about* is a boolean
+   * that could only ever be false. `trackerSynced: true` is kept in the payload
+   * on purpose: an unrecognised key must be inert, not merely absent. */
   const dom = install();
   respondRecipe(() =>
     json({

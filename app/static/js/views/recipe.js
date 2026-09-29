@@ -101,7 +101,14 @@ export const MEALS = Object.freeze([
 /** F5's stated offline reason. One string, so there is one wording to keep. */
 export const OFFLINE_REASON = '离线：需要连接后记录';
 
-/** §13.5's badge text, driven by `cook_log_receipts.recipe_tracker_synced`. */
+/** §13.5's badge text.
+ *
+ * **No longer driven by `cook_log_receipts.recipe_tracker_synced`.** That column
+ * is inserted as 0 and nothing ever writes 1, so a badge keyed on it was on
+ * screen permanently. The verdict is now the detail payload's `pendingCookDates`
+ * — the server's own comparison, made without a write — and the field has been
+ * removed from `GET /api/cook-logs` so it cannot be read here again by accident.
+ */
 export const TRACKER_BADGE = '待 Obsidian 同步';
 
 const UNSTICK_DELAY_MS = 15000;
