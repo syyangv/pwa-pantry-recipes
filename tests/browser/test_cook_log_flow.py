@@ -72,15 +72,18 @@ from tests.browser.conftest import (
     WireLog,
     new_page,
 )
+from tests.browser.optional import import_sync_api
 from tests.cooklog.notes import daily_note_bytes
 
 #: §10.5's opt-in gate. A default run never reaches the browser, and the message
 #: names the two commands that would make this file run rather than merely
 #: mentioning a package.
-sync_api = pytest.importorskip(
-    "playwright.sync_api",
-    reason="the browser flows are opt-in: pip install '.[browser]' && playwright install chromium",
-)
+#: Resolved through `optional`, not `pytest.importorskip`, because this is
+#: MODULE scope: a skip here is indistinguishable in a log from "collected
+#: nothing", which is how this suite stayed green in CI for its whole life. With
+#: `PANTRY_BROWSER_REQUIRED=1` the same call FAILS, so the CI job that installs
+#: the extra cannot pass without running these flows.
+sync_api = import_sync_api()
 Page = sync_api.Page
 
 # --- The frozen world. Deterministic, committed, and under `tmp_path`. --------

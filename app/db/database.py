@@ -15,6 +15,7 @@ DB_FILENAME = "recipes.sqlite3"
 # in `init_db`. There is no sort and no dependency graph: a later version that
 # depends on an earlier one must be appended after it.
 MIGRATION_001 = "001_shortlist_intents"
+MIGRATION_002 = "002_drop_recipe_tracker_synced"
 
 
 def db_path(settings: Settings) -> Path:
@@ -61,6 +62,7 @@ async def init_db(settings: Settings | None = None) -> None:
         await conn.executescript(schema)
         await conn.commit()
         await _migrate_001_shortlist_intents(conn)
+        await _migrate_002_drop_recipe_tracker_synced(conn)
 
 
 async def _migrate_001_shortlist_intents(conn: aiosqlite.Connection) -> None:
@@ -90,5 +92,47 @@ async def _migrate_001_shortlist_intents(conn: aiosqlite.Connection) -> None:
     )
     await conn.execute(
         "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)", (MIGRATION_001,)
+    )
+    await conn.commit()
+
+
+async def _migrate_002_drop_recipe_tracker_synced(conn: aiosqlite.Connection) -> None:
+    """Drop `cook_log_receipts.recipe_tracker_synced`, and record the version.
+
+    **The column was a lie in the schema, not only in the code.** It was inserted
+    as 0 and nothing ever wrote 1 — the read-path flip spec §13 step 8 required
+    was never implemented — so the `待 Obsidian 同步` badge keyed on it sat on the
+    screen permanently. The comparison that answers the real question is
+    `GET /api/recipes/{note_name}`'s `pendingCookDates`, which reads receipts and
+    frontmatter and writes nothing. The column is removed rather than left inert
+    because an inert column is one read away from being load-bearing again, and
+    nothing in the app selects it any more.
+
+    **`PRAGMA table_info` first, so this is a no-op on a fresh install.**
+    `schema.sql` no longer declares the column, so a new database is created
+    without it and an unconditional `DROP COLUMN` would raise on every fresh
+    start. Asking the table what it actually has is what makes one code path
+    correct for both a fresh install and a populated one.
+
+    **`ALTER TABLE … DROP COLUMN`, not the create-copy-rename rebuild.** SQLite
+    has supported it since 3.35 and the runtime here is far past that. The
+    rebuild is the portable form and it is the right choice when a column is
+    indexed or referenced; this one is neither, and the rebuild would rewrite the
+    table's `sqlite_sequence` and rowids for no benefit. `cook_log_receipts` has
+    a UNIQUE index on `(recipe_note, log_date)` and neither column is the one
+    being dropped, so the index is untouched.
+
+    **Rows are preserved.** The column was `DEFAULT 0` on every row ever written,
+    so there is no information in it to lose — which is the only reason dropping a
+    column on a live table is safe here rather than in general.
+    """
+    columns = {
+        str(row["name"])
+        for row in await (await conn.execute("PRAGMA table_info(cook_log_receipts)")).fetchall()
+    }
+    if "recipe_tracker_synced" in columns:
+        await conn.execute("ALTER TABLE cook_log_receipts DROP COLUMN recipe_tracker_synced")
+    await conn.execute(
+        "INSERT OR IGNORE INTO schema_migrations (version) VALUES (?)", (MIGRATION_002,)
     )
     await conn.commit()

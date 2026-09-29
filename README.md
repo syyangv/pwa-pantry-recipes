@@ -401,11 +401,35 @@ can check against the tree, not as a claim about intent.
   enforced fleet-wide by `pwa-template/scripts/release_check.py`, which this repo
   runs as the floor under `converge_gate.py`.
 
-- **`scripts/converge-smoke.json` is a one-release artifact.** It is populated for
-  v0.6.0 and nothing rewrites it. A release that forgets to edit it asserts that
-  *last* release's fields still exist, which is weaker than it looks; the gate
-  cannot detect the omission, because "the spec was not updated" is not a fact
-  visible from the running server. The runbook makes it a release step.
+- **`scripts/converge-smoke.json` cannot detect a release that adds a key and
+  forgets to record it. That residue is irreducibly human; the rest is now
+  checked on every `pytest`.** The gate fetches live URLs, so it can only see a
+  *deployed* server, at *release* time, from whichever host it runs on — which on
+  the serving node is the `VANTAGE-LIMITED` world above, where it never executes
+  conditions 2–8 at all. A stale spec was therefore caught late, from one vantage,
+  if at all. But the key sets are not only a fact about a running server: they are
+  also constants in this repository, and two sources of one fact that are never
+  compared are one source plus one source of drift.
+  `tests/scaffold/test_smoke_spec.py` is that comparison, offline, on every run:
+  the spec's `array_item_keys.recipes` against `LIST_RECIPE_KEYS`, its nested
+  ingredient list against `SLOT_KEYS`, `top_level_keys` sorted so an addition is
+  a line rather than a rewrite, and an assertion that no retired key
+  (`trackerSynced`) survives anywhere in the file. **What it cannot catch is
+  one-directional ADDITION**: a new key in a live response with nothing added to
+  the spec leaves a perfectly consistent pair — the spec is a strict subset of the
+  truth — so neither the gate nor this module fails. That is what the runbook's
+  release step is for.
+
+  The detail route `/api/recipes/{note_name}` is deliberately **not** in the
+  spec, though it is where the 2026-09-28 release added three keys. The gate
+  builds `f"{origin}{path}"` literally, so a parameterised path cannot resolve,
+  and naming one concretely means hardcoding a vault recipe basename — which then
+  fails for a reason unrelated to the release the moment that note is renamed.
+  That is §9.12's `⚠ 已重命名` problem reintroduced into the release gate, trading
+  a real regression for a spurious one. The detail shape is pinned exactly by
+  `tests/api/test_recipes_api.py` instead. `/api/cook-logs` is likewise absent:
+  it needs a `date` whose daily note may not exist, so a missing note would fail
+  the gate for a reason that is not a regression.
 - **The `CACHE_VERSION`-behind incident: found by the gate, fixed by the release.
   Kept here as the worked example of what condition 5 is for.** `cf39101` changed
   two mutable frontend files — `app/static/js/router.js` and
@@ -447,11 +471,33 @@ can check against the tree, not as a claim about intent.
   missing bump at review time — only the gate, at release time, against a real
   HEAD. The rotation is not retroactive, so a frontend change made now and
   released without the bump is invisible to every test in this repo.
-- **The browser suite is opt-in and CI never runs it.** `playwright` lives in the
-  separate `browser` extra (F10), so `pip install ".[test,dev]"` never installs
-  it, a default `pytest` *collects and skips* both flows, and neither the visual
-  nor the interaction surface is verified on CI. Run it deliberately:
-  `.venv/bin/python -m pip install ".[browser]" && .venv/bin/python -m pytest tests/browser -q`.
+- **The browser suite now runs in CI, and a green tick there means it ran.**
+  This was the worst gap on this list, because a green job that ran no browser is
+  indistinguishable from one that passed: `playwright` lived in the separate
+  `browser` extra, `pip install ".[test,dev]"` never installed it, a default
+  `pytest` *collected and skipped* both flows, and CI reported success for the
+  whole life of the suite. `.github/workflows/ci.yml` now has a second `browser`
+  job that installs `.[browser]`, runs `playwright install --with-deps chromium`,
+  and runs `pytest tests/browser` with **`PANTRY_BROWSER_REQUIRED=1`**.
+
+  That env var is the load-bearing part, and it exists because a skip is not a
+  failure. `tests/browser/optional.py` replaces both module-scope
+  `pytest.importorskip` calls and the missing-Chromium skip with a helper that
+  **fails** when the flows are required, so the job cannot pass by not running
+  what it exists to run. Verified by hiding the browser binary: exit `1` with
+  `PANTRY_BROWSER_REQUIRED=1`, and the flows still skip by default so a local
+  `pytest` without the extra stays usable. The two failure modes are kept
+  separate on purpose — a resolvable `playwright` with a missing binary is
+  normal, because `pip install playwright` does not download Chromium, and
+  telling someone to `pip install ".[browser]"` three times is how that advice
+  stops working.
+
+  It is a separate job rather than extra steps in `verify` because
+  `playwright install --with-deps` downloads a browser and its system libraries;
+  in `verify` that would push a 10-minute job past its budget on a cold runner
+  and couple a module-parse check to a browser download. Locally it is still
+  opt-in:
+  `.venv/bin/python -m pip install ".[browser]" && .venv/bin/python -m playwright install chromium && .venv/bin/python -m pytest tests/browser -q`.
 - **`sw.js` `SHELL_ASSETS` and `package-data` must be extended together, every
   time.** The precache list covers every file currently in the tree, and
   `tests/js/shell_assets.test.mjs` fails a commit that adds a module or
@@ -464,14 +510,27 @@ can check against the tree, not as a claim about intent.
   needs its own `static/js/<name>/*` entry, because glob `*` does not cross a `/`.
   All three of `SHELL_ASSETS`, `package-data`, and CI's wheel `required` list
   have to move together or the app works online and 404s offline.
-- **`npm test`'s glob is load-bearing and fragile.** `package.json` runs
-  `node --test 'tests/js/**/*.test.mjs'` with the pattern **quoted**, because
-  `npm` invokes the script through `/bin/sh`, which has no `globstar`: an
-  unquoted `**` narrows to one level, the runner is handed a list with whole test
-  files missing, and the suite reports 0 failures having never started them. No
-  reporter on Node 22 names the files it ran, so
-  `tests/js/collection-probe.mjs` re-runs the real script through the same shell
-  and asserts the collected set. Do not unquote that pattern.
+- **`npm test` no longer depends on a shell at all.** It was
+  `node --test 'tests/js/**/*.test.mjs'`, and the quoting was load-bearing in a
+  way nothing checked: `npm` runs scripts through `/bin/sh`, which has no
+  `globstar`, so an unquoted `**` narrows to one level, whole test files go
+  missing, and the suite reports **0 failures having started none of them**. No
+  reporter on Node 22 names the files it ran, so the only guard was
+  `tests/js/collection-probe.mjs` re-running the command through the same shell.
+  There was a second, undiscovered failure of the same kind: `node --test $FILES`
+  under zsh does not word-split, so Node receives ONE argument and reports
+  `Could not find 'a b c'` — also zero tests, also no failure.
+
+  `npm test` is now `node scripts/run-js-tests.mjs`, which walks `tests/js`
+  itself, sorts the result, and spawns `node --test` with an **argv array** that
+  no shell word-splits. There is no `*` in the command for a shell to mangle, and
+  `tests/js/logic/sort.test.mjs` now asserts that absence rather than the old
+  exact string. Two properties are pinned because both were the original defect:
+  the runner's `collectTestFiles()` is compared against `EXPECTED_TESTS` so a new
+  file cannot be added without being listed, and an **empty** tree exits `2` with
+  a message instead of `0`. That last one is the point — `node --test` on an empty
+  file list exits `0`, so any discovery bug that collects nothing is a green suite
+  that ran nothing. Do not reintroduce a glob into `package.json`'s `test`.
 - **No `.env` loading library.** The app reads `os.environ`, full stop. Use
   `env`, a launchd `EnvironmentVariables` dict (which is what the LaunchAgent
   template uses, and the only mechanism that configures the service), or a
@@ -491,13 +550,20 @@ can check against the tree, not as a claim about intent.
   justifies, not in a README that will drift from it. Do not assume `tests/` is
   type-clean; it is not checked. `scripts/converge_gate.py` in particular is
   untyped-checked and is gated by its own tests instead.
-- **`scripts/` is linted, with one quarantined file.** The gate is `ruff check
-  app tests scripts`, so the deploy scripts are held to the same rules as the
-  app. `scripts/converge_gate.py` is the exception: it carries a 37-error
-  backlog (33 `E501`, 3 `UP017`, 1 `F541`) listed by rule in
-  `pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]`, because a concurrent
-  hand-edit of it was not available when the gate widened. A *new* class of
-  error in that file still fails the gate. Clear it and delete the entry.
+- **`scripts/` is linted, and the one quarantine that used to be here is gone.**
+  This bullet is kept because it records a resolved gap, and because a stale
+  claim in this section is worse than a missing one — `AGENTS.md` tells readers
+  to trust this list, so an entry that is no longer true is a small lie with
+  authority. The gate is `ruff check app tests scripts`, so the deploy scripts
+  are held to the same rules as the app. `scripts/converge_gate.py` used to be
+  the exception: a 37-error backlog (33 `E501`, 3 `UP017`, 1 `F541`) listed by
+  rule in `pyproject.toml`'s `[tool.ruff.lint.per-file-ignores]`. **That backlog
+  has been cleared and the `per-file-ignores` entry no longer exists** —
+  `scripts/converge_gate.py` is now clean under the same `ruff check` as
+  everything else, and `scripts/run-js-tests.mjs` was added under the same gate.
+  Re-verify with `ruff check app tests scripts` and
+  `grep -c per-file-ignores pyproject.toml` (expect `All checks passed!` and
+  `0`) rather than trusting this paragraph.
 
 ## Related projects
 

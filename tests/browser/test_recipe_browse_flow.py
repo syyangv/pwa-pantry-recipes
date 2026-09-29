@@ -145,6 +145,7 @@ from tests.browser.conftest import (
     WireLog,
     new_page,
 )
+from tests.browser.optional import import_sync_api
 
 #: §10.5's opt-in gate. A default run never reaches the browser, and the message
 #: names the two commands that would make this file run rather than merely
@@ -154,10 +155,12 @@ if TYPE_CHECKING:  # a type-only import: never executed, so a default run withou
     # real types under `mypy` instead of collapsing to `Any`.
     from playwright.sync_api import Page
 
-sync_api = pytest.importorskip(
-    "playwright.sync_api",
-    reason="the browser flows are opt-in: pip install '.[browser]' && playwright install chromium",
-)
+#: Resolved through `optional`, not `pytest.importorskip`, because this is
+#: MODULE scope: a skip here is indistinguishable in a log from "collected
+#: nothing", which is how this suite stayed green in CI for its whole life. With
+#: `PANTRY_BROWSER_REQUIRED=1` the same call FAILS, so the CI job that installs
+#: the extra cannot pass without running these flows.
+sync_api = import_sync_api()
 
 # --- The frozen strings. §9.13.1, and the reason step 1 exists. --------------
 

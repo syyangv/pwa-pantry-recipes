@@ -178,12 +178,38 @@ def test_regenerate_restores_the_committed_bytes_exactly(out: Path) -> None:
     Reproducibility is what makes the freeze reviewable — a reviewer can rerun
     the command and expect the same bytes — and it is also what proves the
     committed file came from this code and not from a text editor.
+
+    **`generatedAt` is compared, and it is the one field that legitimately
+    differs.** The script preserves that stamp when a run changes nothing and
+    re-stamps to today when a run changes something — that is the documented
+    behaviour, and `test_generated_at_is_stable_on_a_no_op_and_moves_on_a_real_
+    change` is its gate. This test *tampers* the file first, so the run does
+    change something and the new date is correct output.
+
+    This test previously asserted whole-file byte equality, which passed only on
+    the calendar day the snapshot was frozen: `date.today()` returned the frozen
+    date by coincidence, and it has failed on every later day. A test whose result
+    depends on when it is run is not a reproducibility check, it is a lottery —
+    and the failure it produced was a real one, in that it hid the fact that the
+    assertion below it was never the one anybody thought they were making.
     """
     target = _tampered(out)
     result = _run("--regenerate", out=target)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert target.read_text(encoding="utf-8") == COMMITTED.read_text(encoding="utf-8")
     assert "wrote" in result.stdout
+
+    regenerated = target.read_text(encoding="utf-8")
+    # Everything except the stamp is byte-identical, which is checked by encoding
+    # BOTH payloads through a fixed sentinel date rather than by string
+    # subtraction: `golden.encode` owns the file's exact layout, so round-tripping
+    # through it preserves byte order and spacing, and comparing the two encodings
+    # says "same bytes modulo the stamp" without a hand-rolled normaliser.
+    sentinel = "1970-01-01"
+    assert golden.encode(json.loads(regenerated), sentinel) == golden.encode(
+        json.loads(COMMITTED.read_text(encoding="utf-8")), sentinel
+    )
+    # And the stamp moved to today, because this run was not a no-op.
+    assert json.loads(regenerated)["generatedAt"] == date.today().isoformat()
 
 
 def test_generated_at_is_stable_on_a_no_op_and_moves_on_a_real_change(

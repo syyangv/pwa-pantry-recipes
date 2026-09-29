@@ -12,10 +12,17 @@
 
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { copyFileSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { dirname, join, relative, sep } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import test from 'node:test';
 
 import { EXPECTED_TESTS, collectedTestFiles, isProbeRun, testScript } from '../collection-probe.mjs';
+import { collectTestFiles } from '../../../scripts/run-js-tests.mjs';
 import { sortRecipes } from '../../../app/static/js/logic/sort.js';
+
+const REPO_ROOT_FOR_TESTS = join(dirname(fileURLToPath(import.meta.url)), '..', '..', '..');
 
 const recipe = (noteName, found, total, lastCooked = null) => ({ noteName, found, total, lastCooked });
 
@@ -120,13 +127,73 @@ test('a single row and an empty list are both fine', () => {
  * for the narrowing that drops this directory instead.
  */
 
-test('the test script reaches Node as one quoted pattern, not a shell expansion', () => {
-  // Single quotes are what keep the literal `**` intact for Node's own glob
-  // engine. A second working spelling would be worse than one wrong one:
-  // nothing compares the two, and only one of them survives a third directory.
-  assert.equal(testScript(), "node --test 'tests/js/**/*.test.mjs'");
-  const expansion = spawnSync('/bin/sh', ['-c', `echo ${testScript()}`], { encoding: 'utf8' });
-  assert.deepEqual(expansion.stdout.trim().split(' '), ['node', '--test', 'tests/js/**/*.test.mjs']);
+test('the test script hands Node a file list, so no shell can narrow it', () => {
+  /* This replaced a test that asserted the exact old command string, a
+   * `node --test` invocation carrying a recursive `**` glob, and verified the
+   * single quotes survived /bin/sh. That property is GONE and the guard is now
+   * stronger: there is no glob in the command at all, so there is nothing for a
+   * shell to expand, mis-expand, or word-split differently under zsh than under
+   * sh.
+   *
+   * The old form failed in two ways, both silent:
+   *   - unquoted under /bin/sh (what npm uses): `**` narrows to one level, whole
+   *     test files are missing, and the suite reports 0 failures;
+   *   - `node --test $FILES` under zsh: no word splitting, so Node is handed ONE
+   *     argument and reports `Could not find 'a b c'`.
+   * A command with no `*` in it cannot be subject to either.
+   */
+  assert.equal(testScript(), 'node scripts/run-js-tests.mjs');
+  assert.ok(
+    !testScript().includes('*'),
+    `the test script must carry no glob for a shell to mangle: ${testScript()}`,
+  );
+  // One spelling only. A second working spelling would be worse than one wrong
+  // one: nothing compares the two, and only one of them survives a third
+  // directory.
+  const echoed = spawnSync('/bin/sh', ['-c', `echo ${testScript()}`], { encoding: 'utf8' });
+  assert.deepEqual(echoed.stdout.trim().split(' '), ['node', 'scripts/run-js-tests.mjs']);
+});
+
+test('the runner discovers exactly the files the probe expects', () => {
+  /* Ties the guard to the runner directly, so the two cannot drift: the probe
+   * re-runs the real command and records what Node actually started, while this
+   * asks the runner's own discovery what it intends to start. If a new test file
+   * is added and not listed in EXPECTED_TESTS, both halves move together and the
+   * comparison below fails — the §7.1 failure mode in reverse, where a gate
+   * exists and is not running. */
+  const discovered = collectTestFiles().map((file) =>
+    relative(REPO_ROOT_FOR_TESTS, file).split(sep).join('/'),
+  );
+  assert.deepEqual(discovered, EXPECTED_TESTS, `discovered: ${discovered.join(', ')}`);
+  // And a nested one is included, which is the whole reason the old `**` existed.
+  assert.ok(
+    discovered.includes('tests/js/logic/sort.test.mjs'),
+    'the nested logic gate is not discovered',
+  );
+});
+
+test('an empty test tree exits non-zero instead of reporting a vacuous pass', () => {
+  /* The reason this runner exists at all. `node --test` handed an empty file
+   * list exits 0, so a discovery bug that collects nothing produces a GREEN
+   * suite that ran no tests — and both historical failures of the globbed
+   * command were exactly that, with no exit code to catch them. */
+  const workdir = mkdtempSync(join(tmpdir(), 'empty-js-tests-'));
+  try {
+    mkdirSync(join(workdir, 'scripts'), { recursive: true });
+    mkdirSync(join(workdir, 'tests', 'js'), { recursive: true });
+    copyFileSync(
+      join(REPO_ROOT_FOR_TESTS, 'scripts', 'run-js-tests.mjs'),
+      join(workdir, 'scripts', 'run-js-tests.mjs'),
+    );
+    const run = spawnSync(process.execPath, ['scripts/run-js-tests.mjs'], {
+      cwd: workdir,
+      encoding: 'utf8',
+    });
+    assert.equal(run.status, 2, `expected a non-zero exit, got ${run.status}`);
+    assert.match(run.stderr, /refusing to report a pass/);
+  } finally {
+    rmSync(workdir, { recursive: true, force: true });
+  }
 });
 
 test(

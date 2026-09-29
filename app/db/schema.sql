@@ -93,8 +93,13 @@ CREATE TABLE IF NOT EXISTS cook_log_receipts (
     recipe_note              TEXT    NOT NULL,
     log_date                 TEXT    NOT NULL,   -- 'YYYY-MM-DD'
     relative_path            TEXT    NOT NULL,   -- '日记/2026/2026-09-27.md'
+    -- `recipe_tracker_synced` USED to live here and was removed by
+    -- `_migrate_002_drop_recipe_tracker_synced`. It was inserted as 0 and never
+    -- written, so the `待 Obsidian 同步` badge keyed on it was permanently on. The
+    -- question it was meant to answer is answered by `pendingCookDates` on the
+    -- recipe detail route, as a read. Do NOT re-add it: a column that means
+    -- "nobody implemented this" is one read away from being load-bearing again.
     note_revision            TEXT    NOT NULL,   -- 'sha256:…' of the committed note
-    recipe_tracker_synced    INTEGER NOT NULL DEFAULT 0,
     written_at               TEXT    NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 );
 

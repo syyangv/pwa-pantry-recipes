@@ -31,7 +31,14 @@ import aiosqlite
 import pytest
 
 from app.config import Settings
-from app.db.database import MIGRATION_001, apply_pragmas, connect_db, db_path, init_db
+from app.db.database import (
+    MIGRATION_001,
+    MIGRATION_002,
+    apply_pragmas,
+    connect_db,
+    db_path,
+    init_db,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 PYPROJECT_PATH = REPO_ROOT / "pyproject.toml"
@@ -224,6 +231,107 @@ def test_meal_lists_slot_check_is_closed_to_exactly_three_values(
             asyncio.run(insert_slot(slot))
 
 
+def test_the_migration_drops_the_dead_column_from_a_populated_legacy_database(
+    settings: Settings,
+) -> None:
+    """The upgrade path, which is the only one that matters for a deployed table.
+
+    A fresh install never had the column: `schema.sql` stopped declaring it, so
+    `init_db` on a new database has nothing to drop and the migration must be a
+    no-op. The case that can actually break is the one this builds by hand — a
+    database shaped like the *old* schema, holding rows, with the UNIQUE index
+    already on it — because that is the only shape `ALTER TABLE … DROP COLUMN`
+    could be refused by.
+
+    Rows must survive: the column was `DEFAULT 0` on every row ever written, so
+    there is nothing in it to lose, and that is the whole reason dropping a
+    column on a live table is safe here rather than in general.
+    """
+    path = db_path(settings)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    legacy = sqlite3.connect(path)
+    try:
+        legacy.executescript(
+            "CREATE TABLE cook_log_receipts ("
+            " id INTEGER PRIMARY KEY AUTOINCREMENT,"
+            " recipe_note TEXT NOT NULL,"
+            " log_date TEXT NOT NULL,"
+            " relative_path TEXT NOT NULL,"
+            " note_revision TEXT NOT NULL,"
+            " recipe_tracker_synced INTEGER NOT NULL DEFAULT 0,"
+            " written_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))"
+            ");"
+            "CREATE UNIQUE INDEX ux_cook_log_receipts_recipe_date"
+            " ON cook_log_receipts(recipe_note, log_date);"
+            "INSERT INTO cook_log_receipts"
+            " (recipe_note, log_date, relative_path, note_revision, recipe_tracker_synced)"
+            " VALUES ('盐焗鸡', '2026-09-27', '日记/x.md', 'sha256:x', 0);"
+        )
+        legacy.commit()
+    finally:
+        legacy.close()
+
+    asyncio.run(init_db(settings))
+
+    async def state() -> tuple[list[str], list[tuple[str, str]]]:
+        async with connect_db(settings) as conn:
+            columns = [
+                str(row["name"])
+                for row in await (
+                    await conn.execute("PRAGMA table_info(cook_log_receipts)")
+                ).fetchall()
+            ]
+            rows = await (
+                await conn.execute(
+                    "SELECT recipe_note, log_date FROM cook_log_receipts ORDER BY log_date"
+                )
+            ).fetchall()
+            return columns, [(str(r["recipe_note"]), str(r["log_date"])) for r in rows]
+
+    columns, rows = asyncio.run(state())
+    assert "recipe_tracker_synced" not in columns
+    # The audit columns are all still there, and the row survived the rebuild.
+    assert {"recipe_note", "log_date", "relative_path", "note_revision", "written_at"} <= set(
+        columns
+    )
+    assert rows == [("盐焗鸡", "2026-09-27")]
+
+    # And the dedupe index still works, because the migration dropped a column
+    # the index does not mention.
+    async def duplicate() -> None:
+        async with connect_db(settings) as conn:
+            await conn.execute(
+                "INSERT INTO cook_log_receipts"
+                " (recipe_note, log_date, relative_path, note_revision)"
+                " VALUES ('盐焗鸡', '2026-09-27', '日记/x.md', 'sha256:y')"
+            )
+            await conn.commit()
+
+    with pytest.raises(sqlite3.IntegrityError):
+        asyncio.run(duplicate())
+
+
+def test_the_migration_is_a_no_op_on_a_fresh_install(settings: Settings) -> None:
+    """A new database has no such column, so `DROP COLUMN` must not be attempted.
+
+    Without the `PRAGMA table_info` guard this raises on every fresh start, which
+    is the failure mode that would make a correct migration look like a broken
+    one.
+    """
+    asyncio.run(init_db(settings))
+    # Twice: the second run is the "already migrated" path.
+    asyncio.run(init_db(settings))
+
+    async def versions() -> list[str]:
+        async with connect_db(settings) as conn:
+            rows = await (
+                await conn.execute("SELECT version FROM schema_migrations ORDER BY version")
+            ).fetchall()
+            return [str(row[0]) for row in rows]
+
+    assert asyncio.run(versions()) == [MIGRATION_001, MIGRATION_002]
+
+
 def test_cook_log_receipts_dedupes_the_same_recipe_and_date(settings: Settings) -> None:
     # F13: the unique index is the double-submit ledger. The daily-note wikilink,
     # not this table, is what keeps cooking_count correct.
@@ -369,7 +477,10 @@ def test_schema_migrations_records_every_version(settings: Settings) -> None:
             ).fetchall()
             return [str(row[0]) for row in rows]
 
-    assert asyncio.run(versions()) == [MIGRATION_001]
+    # BOTH versions, in order. The list is the migration ledger's whole
+    # contract, so a new migration that is not added here fails rather than
+    # being applied silently forever.
+    assert asyncio.run(versions()) == [MIGRATION_001, MIGRATION_002]
 
 
 def test_a_rerun_is_a_no_op_and_does_not_disturb_ledger_rows(settings: Settings) -> None:
@@ -412,7 +523,7 @@ def test_a_rerun_is_a_no_op_and_does_not_disturb_ledger_rows(settings: Settings)
     applied_after, ledger_count, intent_count = asyncio.run(after_rerun())
 
     assert applied_after == first_applied
-    assert ledger_count == 1
+    assert ledger_count == 2
     # The guard short-circuits, so a re-run cannot destroy a replayed intent.
     assert intent_count == 1
 

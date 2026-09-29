@@ -45,6 +45,8 @@ from urllib.request import urlopen
 
 import pytest
 
+from .optional import chromium_executable, import_sync_api
+
 #: A phone-shaped viewport. Small on purpose: §10.5's scroll-restore step needs
 #: the document to be at least 640px taller than the window for a 640 offset to
 #: be reachable at all, and a short window is what makes that true with a
@@ -423,7 +425,7 @@ def _restore_the_asyncio_running_loop() -> Iterator[None]:
 @pytest.fixture
 def chromium() -> Iterator[Any]:
     """A headless Chromium, function-scoped, and never started on a run that
-    skipped the extra: the `importorskip` is in the fixture BODY, so the default
+    skipped the extra: the resolution is in the fixture BODY, so the default
     suite never reaches it.
 
     **Function scope is the cost of correctness, and the price is ~0.3s a test.**
@@ -435,14 +437,19 @@ def chromium() -> Iterator[Any]:
     wants, since `localStorage` (`pantry-recipes:debug`), `history` entries and
     the bfcache are exactly the state these flows mutate. Measured: 8 flows in
     ~6s, and `.venv/bin/python -m pytest` back to 1576 + 8 with no errors.
+
+    **Skip or fail is `optional.browser_required()`'s decision, not this
+    fixture's.** Under the default it skips, which is why a `pytest` without the
+    extra stays usable; with `PANTRY_BROWSER_REQUIRED=1` — which is what the CI
+    job that installs `.[browser]` sets — a missing package or binary FAILS, so
+    that job cannot pass by not running the tests it exists to run.
     """
-    sync_api = pytest.importorskip(
-        "playwright.sync_api", reason="the browser flows are opt-in: pip install '.[browser]'"
-    )
-    with sync_api.sync_playwright() as runtime:
-        executable = Path(runtime.chromium.executable_path)
-        if not executable.exists():
-            pytest.skip("Playwright's Chromium is not installed: `playwright install chromium`")
+    sync_api = import_sync_api()
+    # Raises or skips if the binary is absent; the path itself is not used
+    # because `launch()` resolves it again, and re-resolving would be the
+    # version that could disagree with the one just checked.
+    chromium_executable(sync_api)
+    with sync_api.sync_playwright() as runtime:  # type: ignore[attr-defined]
         browser = runtime.chromium.launch(headless=True)
         try:
             yield browser

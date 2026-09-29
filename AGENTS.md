@@ -160,8 +160,9 @@ scripts/             the LaunchAgent TEMPLATE (pwa-pantry-recipes.example.plist,
                      Also render_headlines.mjs, check-modules.mjs (what
                      `npm run check` runs), snapshot_pantry_catalog.py and
                      snapshot_golden_match_results.py. `scripts/` IS linted by
-                     `ruff check app tests scripts`; converge_gate.py is the
-                     one quarantined file, by rule, in pyproject.toml.
+                     `ruff check app tests scripts`, with NO quarantined file:
+                     converge_gate.py's old 37-error backlog and its
+                     per-file-ignores entry are both gone.
 docs/runbook/        deployment.md — the Serve plan, the install stages, the
                      restart rules, the participant-identity validation
 tests/conftest.py    tmp vault + tmp data dir + seeded pantry catalog

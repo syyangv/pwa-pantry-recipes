@@ -408,8 +408,8 @@ class CookLogReceipts:
 
     _INSERT = (
         "INSERT INTO cook_log_receipts"
-        " (recipe_note, log_date, relative_path, note_revision, recipe_tracker_synced)"
-        " VALUES (?, ?, ?, ?, 0)"
+        " (recipe_note, log_date, relative_path, note_revision)"
+        " VALUES (?, ?, ?, ?)"
     )
     _SELECT = (
         # `recipe_tracker_synced` is deliberately NOT selected. It is inserted as
