@@ -330,7 +330,17 @@ already runs with in the identical posture (`TRUST_TAILSCALE_HEADERS=true`
 behind a tailnet-only Serve route), and the tailnet's own peers are logged in as
 `syyangv@`. `PUBLIC_ORIGIN` is the deployed origin byte for byte — scheme, host,
 port, no path, no trailing slash — because the Origin guard compares it exactly.
-`OBSIDIAN_READ_ONLY=true` as installed, so every mutation is `403 read_only`.
+
+**The deployed instance is WRITABLE as of 2026-09-29.** `OBSIDIAN_READ_ONLY` was
+flipped `true → false` on the installed LaunchAgent, so a mutation is no longer
+`403 read_only`: it now clears read-only and is stopped, if at all, by the
+`Origin`/CSRF guards (which *follow* read-only in the guard order). The
+`TAILSCALE_OWNER_LOGIN`, `DEV_IDENTITY`, `PUBLIC_ORIGIN` and vault paths are
+unchanged; only the read-only flag moved. This is a real posture change — the
+tailnet app can now write to `日记/` — made deliberately so a cook can be logged
+from the phone. The installer still **defaults** `OBSIDIAN_READ_ONLY=true`, so a
+fresh install is read-only unless the flag is overridden; only this deployed
+instance is writable.
 
 **Run the gate from a host that is not the serving node, or expect exit 3.**
 From the serving host the deployed-origin conditions are `VANTAGE-LIMITED`,

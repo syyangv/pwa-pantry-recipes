@@ -215,7 +215,7 @@ and 8002–8006 are allocated to sibling PWAs, as are Serve ingresses 8443 and
 | App bind | `127.0.0.1:8007` — loopback, never `0.0.0.0` |
 | `TAILSCALE_OWNER_LOGIN` | `syyangv@github` |
 | `TRUST_TAILSCALE_HEADERS` | `true` (behind the loopback proxy) |
-| `OBSIDIAN_READ_ONLY` | `true` — every mutation is `403 read_only` |
+| `OBSIDIAN_READ_ONLY` | `false` — **writable** (was flipped from `true` on 2026-09-29); the installer's own default is still `true` |
 | `APP_DATA_DIR` | `~/.local/share/pwa-pantry-recipes`, mode `0700` |
 | `SoftResourceLimits` | `NumberOfFiles 8192` — required, see below |
 | Logs | `~/Library/Logs/pwa-pantry-recipes/server.log` |
@@ -294,10 +294,13 @@ header is — the app never sees the forged value. Second, **identity precedes
 reaches the `Origin` or CSRF checks; that is why every row above is `401` and not
 `403`.
 
-With `OBSIDIAN_READ_ONLY=true`, `read_only` also precedes `Origin`/CSRF, so on
-the deployed instance every authenticated mutation is `403 read_only` and the
-Origin and CSRF codes are unreachable. They were verified on a **throwaway
-instance against a copied vault** (never the real one):
+On a read-only install, `read_only` also precedes `Origin`/CSRF, so every
+authenticated mutation is `403 read_only` and the Origin and CSRF codes are
+unreachable behind it. **The deployed instance is no longer read-only** (the flag
+was flipped to `false` on 2026-09-29, so a cook can be logged from the phone), so
+on the live origin the `Origin`/CSRF guards — not `read_only` — are now what
+refuse a bad mutation. They were verified on a **throwaway instance against a
+copied vault** (never the real one):
 
 | Request | Response |
 |---|---|

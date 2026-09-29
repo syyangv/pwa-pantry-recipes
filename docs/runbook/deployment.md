@@ -642,11 +642,21 @@ runbook was written in, against a loopback server on the production vault:
 
 In trusted-header mode (`TRUST_TAILSCALE_HEADERS=true`, the production posture) the
 app additionally refuses a *missing* login with `401 identity_missing` and a
-mismatched one with `401 identity_denied`. With
-`OBSIDIAN_READ_ONLY=true` every `/api/*` mutation is refused with
+mismatched one with `401 identity_denied`. On a **read-only** install
+(`OBSIDIAN_READ_ONLY=true`) every `/api/*` mutation is refused with
 `403 read_only` after identity and before every other mutation check, and there
 is deliberately **no write allowlist** (F18): with F4 removing the note-creation
 service, that flag is the only gate between a mutation and the vault.
+
+**The deployed instance is writable, so that flag is no longer its only gate.**
+`OBSIDIAN_READ_ONLY` was flipped `true → false` on 2026-09-29 (see §9g), and a
+mutation now clears the read-only check and is stopped, if at all, by the
+`Origin`/CSRF guards, which run *after* it in the order above. The vault is
+therefore no longer protected by read-only on the live origin — it is protected
+by identity, `Origin` and CSRF. That is a deliberate posture change to allow
+logging a cook from the phone, and it is the reason §9c's `origin_not_allowed` /
+`csrf_required` codes are now reachable in production rather than only on a
+throwaway instance.
 
 **The gate has two origins, and the deployed one is not observable from here.**
 Conditions 2–8 are `VANTAGE-LIMITED` and the run exits 3: they were evaluated,
@@ -794,10 +804,12 @@ Two consequences worth stating because they change what a test can observe:
   serving host is stopped at identity, so it returns `401` and never reaches the
   Origin or CSRF checks. An unauthenticated mutation *is* refused; the code that
   refuses it is `identity_missing`, not `origin_not_allowed`.
-* **Read-only precedes Origin and CSRF.** With `OBSIDIAN_READ_ONLY=true` — how
-  it is installed — every authenticated mutation is `403 read_only`, so
-  `origin_not_allowed`, `csrf_required` and `csrf_invalid` are unreachable on
-  the deployed instance. Those codes were verified on a throwaway instance
+* **Read-only precedes Origin and CSRF.** On a read-only install
+  (`OBSIDIAN_READ_ONLY=true`) every authenticated mutation is `403 read_only`, so
+  `origin_not_allowed`, `csrf_required` and `csrf_invalid` are unreachable behind
+  it. **The deployed instance is now writable (§9g), so on the live origin these
+  two guards are reachable** and are what refuse a bad mutation. Those codes were
+  verified on a throwaway instance
   pointed at a **copy** of the vault; the copy is disposable and the real vault
   was not written to.
 
@@ -989,3 +1001,41 @@ this section raises it.
 never run against real data (§9d). That is closed by **using the app** — log one
 cook — not by any command on this host. Everything else in this runbook is either
 done or is the settled limit recorded above.
+
+## 9g. The deploy was made writable — 2026-09-29
+
+The user runs the PWA on one iPhone and found the cook-log button disabled with
+`只读模式：这一台不会写入日记。`. That is `views/recipe.js`'s read-only branch, and
+it was correct: the installed LaunchAgent had `OBSIDIAN_READ_ONLY=true`, so every
+mutation was `403 read_only` at the auth layer. The user chose to make the
+instance **writable** so a cook can actually be logged from the phone.
+
+**What changed, and what deliberately did not.** `OBSIDIAN_READ_ONLY` was flipped
+`true → false` on the installed agent via the staged installer (§4), passing the
+exact current values for every other key so the render differed by **one line** —
+verified by diffing the freshly-rendered `EnvironmentVariables` against the
+installed ones before applying. `TAILSCALE_OWNER_LOGIN`, `DEV_IDENTITY`,
+`PUBLIC_ORIGIN`, `TRUST_TAILSCALE_HEADERS` and every vault path are byte-identical.
+The **installer's default stays `true`**, so a fresh install is still read-only;
+only this deployed instance is writable, and that asymmetry is the point.
+
+**The security consequence, stated plainly.** Read-only was the only thing between
+a mutation and the vault (F18, §9c), and it is now off. A mutation clears the
+read-only check and is stopped, if at all, by `Origin`/CSRF, which run after it.
+So the live vault is now protected by identity + `Origin` + CSRF rather than by
+read-only, and `origin_not_allowed` / `csrf_required` / `csrf_invalid` are
+reachable in production for the first time. The tailnet app can now write to
+`日记/`. This is the intended trade for logging a cook from the phone, not an
+oversight, and it is why the flip is recorded here rather than made quietly.
+
+**Verification, on the running service.** `/api/session` reports `readOnly:
+false`; a `POST /api/cook-logs` that used to be `403 read_only` now clears the
+guard and is rejected at *route validation* with `422 invalid_request` — proof it
+passed read-only → origin → body, issued deliberately with a non-existent recipe
+name so **nothing was written to the vault**. A plist edit requires
+bootout+bootstrap, not kickstart (§5); the installer's single-shot
+bootout+bootstrap hit a transient launchd `Input/output error` on the first try
+(this left the service briefly down until a direct `launchctl bootstrap` retry
+succeeded — worth knowing the race exists), and the new pid was then confirmed on
+the socket via `port-manager`. The 食材 tab and all its modules still serve `200`
+at `v0.7.4`.
