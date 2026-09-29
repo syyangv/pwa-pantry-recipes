@@ -3,14 +3,25 @@
 A local-only PWA that answers **"what can I cook from what I already have?"**
 and records the cook in the Obsidian daily note.
 
-**State (2026-09-28): deployed, on a tailnet-only origin, with two honest
-caveats that are not "it works".** The user authorized the deploy in-session, so
-`~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` is installed,
-`com.syang.pwa-pantry-recipes` is loaded and `state = running`, and a Tailscale
-Serve route proxies **8452 → 127.0.0.1:8007**. The deployed origin is
+**State (2026-09-28): deployed and serving `v0.7.3`, on a tailnet-only origin,
+with two honest caveats that are not "it works".** The user authorized the deploy
+in-session, so `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` is
+installed, `com.syang.pwa-pantry-recipes` is loaded and `state = running`, and a
+Tailscale Serve route proxies **8452 → 127.0.0.1:8007**. The deployed origin is
 `https://home-macbook-air.tailcd6e49.ts.net:8452` (tailnet only).
 
-Two caveats, both load-bearing, both in `README.md` § *What does not work yet*:
+**Three releases went out on 2026-09-28, and the third exists because the second
+was not enough.** `a82cf66` scored a bought-before Pantry Item as missing (the
+headline counted *resolutions*, not stock — caveat 2 below, and the stock-score
+amendment in the spec's §9.13.2). `66c43cd`, pushed by
+another agent, added the `食材` tab with **no `CACHE_VERSION` rotation**, so the
+phone kept executing the pre-`食材` shell. `1bf51d8` rotated to `v0.7.3`, and the
+**user reporting the tab appearing** is what confirmed the rotation reached a
+client. That is a user attestation, not a machine result: no gate, test or tool
+here observed it, and it is recorded as such because it is the only vantage that
+can.
+
+Three caveats, all load-bearing, all in `README.md` § *What does not work yet*:
 
 1. **The converge gate exits 3 when it is run from the serving host**, not 0.
    Conditions 0, 0b, 1 and 9 pass; conditions 2–8 report **`VANTAGE-LIMITED`**, the
@@ -25,7 +36,20 @@ Two caveats, both load-bearing, both in `README.md` § *What does not work yet*:
    and it was diagnosed, not worked around: no `--baseline`, no relaxed check,
    no claim of a pass that was not observed. `VANTAGE-LIMITED` is **not** a pass
    and its exit code is **3**, not 0.
-2. **The participant-identity validation has been performed — as a user
+2. **The headline counts Pantry Stock, not Pantry Items — and the two
+   implementations of that rule had to move together.** `app/static/js/logic/
+   chip-class.js` renders the string; `app/api/recipes.py::_is_missing`
+   publishes `found` / `total`, which is the sort key and the `data-found` the
+   list carries. A resolved Pantry Item with no open line in `Pantry.md` is
+   **missing** in both, except a `manual` or `staples` slot, which answer before
+   the stock tiers. Before this, any catalog match was `missing: false`, so
+   `煮菜菜` published `2/2 ingredients found` above a purple `茼蒿` chip. The
+   browser flow is what caught the drift: it compares the painted `data-found`
+   against the missing names in the headline, and an un-moved
+   `app/api/recipes.py` painted `3/4` above `missing: 蒸鱼豉油, 面条`.
+   `outOfStock` is the reason beside the verdict, so "bought it, it is gone" is
+   distinguishable from "never resolved".
+3. **The participant-identity validation has been performed — as a user
    attestation for its positive half and as machine-observed probes for its two
    negative halves.** `docs/runbook/deployment.md` §8 is the full record.
    **Positive half:** on 2026-09-28 the user opened

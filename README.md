@@ -191,8 +191,8 @@ annotated list; the four that matter most are:
 
 ## Deployment
 
-**Deployed 2026-09-28, on a tailnet-only origin.** The user authorized it
-in-session, so `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` is
+**Deployed 2026-09-28, serving `v0.7.3`, on a tailnet-only origin.** The user
+authorized it in-session, so `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` is
 installed, `com.syang.pwa-pantry-recipes` is loaded with `state = running`, and
 `tailscale serve status` lists the ingress. What is *not* true is that the
 release gate has passed: it has never exited 0, and run from the serving host it
@@ -386,6 +386,21 @@ can check against the tree, not as a claim about intent.
   full `/health` payload (vault readable, `pantry_items.db` 178 rows, 16 recipes),
   so the app is healthy; it is the *converged exposed* surface that remains
   unobserved by machine.
+- **A static change reached `main` unrotated, on 2026-09-28, and only the phone
+  could prove the fix.** `66c43cd` shipped ~1,400 lines of new static code (the
+  `食材` tab, its view, its logic module, three new `SHELL_ASSETS` entries) with
+  `CACHE_VERSION` still at the `v0.7.2` set earlier the same day. On a
+  cache-first shell that means an installed PWA kept executing the pre-`食材`
+  code while `/api/version` reported a version it had no assets for — the same
+  failure as the `cf39101` incident below, and the same one `pwa-wardrobe` PR
+  `0fe6c1a` produced. The rotation (`1bf51d8`, `v0.7.3`) is what fixed it, and
+  **what confirmed the fix is the user reporting the tab appearing on the phone**:
+  that is a client observation no gate run from the serving host can make, and
+  it is recorded here as a user attestation rather than as a machine result.
+  The rule it violated is now written into `AGENTS.md`'s release sequence *and*
+  enforced fleet-wide by `pwa-template/scripts/release_check.py`, which this repo
+  runs as the floor under `converge_gate.py`.
+
 - **`scripts/converge-smoke.json` is a one-release artifact.** It is populated for
   v0.6.0 and nothing rewrites it. A release that forgets to edit it asserts that
   *last* release's fields still exist, which is weaker than it looks; the gate
