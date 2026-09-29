@@ -808,7 +808,58 @@ login is `401 identity_denied`, and a header the proxy has stripped is
 `identity_missing`. Expecting `identity_spoof` from a deployed origin is
 expecting the wrong posture.
 
-## 9d. The stopping point, as of 2026-09-28
+## 9d. The v0.7.4 rotation, observed on the phone — 2026-09-29
+
+A third release went out on 2026-09-29, and the record of it is here because the
+**machine-observable half and the user-observed half are different claims** and
+conflating them is the error §7a exists to prevent.
+
+| | |
+|---|---|
+| Commits | `06f9d50`, `4fea1fd`, `f0f66d9`, rotation `ac2099d` |
+| Rotation | `CACHE_VERSION` `v0.7.3` → **`v0.7.4`** |
+| What changed in `app/static/**` | `js/views/recipe.js` only. **No file was added**, so `SHELL_ASSETS` needed no new entry (`tests/js/shell_assets.test.mjs` gates both directions) |
+| `converge-smoke.json` | **no edit needed, as a checked claim** — see below |
+| Floor — `release_check.py` | **exit 0.** `PASS source v0.7.4`, `PASS local version=v0.7.4`, one `X-PWA-Backend-Started-At` |
+| Ceiling — `converge_gate.py` | **exit 3, `VANTAGE-LIMITED`, and zero `FAIL` conditions** |
+| Migration 002 on the live DB | applied at boot: `cook_log_receipts` is `id, recipe_note, log_date, relative_path, note_revision, written_at`, ledger reads `001_shortlist_intents, 002_drop_recipe_tracker_synced` |
+| **Phone shows `0.7.4`** | **user attestation**, below |
+
+**What "the phone shows 0.7.4" establishes, and what it does not.** The version
+string in the shell is injected from `CACHE_VERSION` at request time, so a client
+rendering `0.7.4` received the rotated shell — which is the observation no gate
+run from the serving host can make, for exactly the reason conditions 2–8 are
+`VANTAGE-LIMITED` (no remote peer for Serve to attribute an identity to). It
+closes the *cache-rotation* question for this release: the rotation reached a
+client, the same way `1bf51d8`'s `v0.7.3` was closed by the 食材 tab appearing.
+
+It establishes **reachability and asset freshness on a client**. It does **not**
+establish convergence: no deployed *response body* was observed, and conditions
+2–8 remain unevaluated, so the gate's verdict is still exit 3 and still correct.
+A version number is not a response. As with every attestation in this runbook,
+this is a **user report, not a machine result** — recorded as such on purpose.
+
+**`converge-smoke.json` needed no edit, and that is a conclusion rather than an
+omission.** The three keys this release added (`source`, `durationMinutes`,
+`pendingCookDates`) are **detail-only**, on `/api/recipes/{note_name}`, which the
+spec deliberately omits: the gate builds `f"{origin}{path}"` literally, so a
+parameterised path cannot resolve, and naming one concretely means hardcoding a
+vault recipe basename that fails for a reason unrelated to the release the moment
+that note is renamed. `trackerSynced` was *removed*, from `/api/cook-logs`, which
+the spec never covered. The list row shape is unchanged. And "no edit needed" is
+now **checked** rather than assumed: `tests/scaffold/test_smoke_spec.py` compares
+the spec against `LIST_RECIPE_KEYS` and `SLOT_KEYS` offline on every `pytest` and
+asserts no retired key survives in the file.
+
+**Still unexercised, and only the user can close it.** Live `cook_log_receipts`
+held **0 rows** at deploy time, so the new amber staleness panel
+(`⚠ 有 N 次记录还没算进上面的次数`) has never rendered against real data, and the
+`待 Obsidian 同步` badge has never been observed turning *off* — which is the
+whole point of the change, since it previously could not. **Log one cook in the
+app**: that exercises the panel, and then opening the note in Obsidian and
+returning is what exercises the badge clearing.
+
+## 9e. The stopping point, as of 2026-09-28
 
 `app/auth.py` is real and it wraps every response. The identity, Origin, CSRF,
 Host, content-type and body-size guards are shipped, tested, installed and

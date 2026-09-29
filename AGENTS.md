@@ -3,23 +3,35 @@
 A local-only PWA that answers **"what can I cook from what I already have?"**
 and records the cook in the Obsidian daily note.
 
-**State (2026-09-28): deployed and serving `v0.7.3`, on a tailnet-only origin,
-with two honest caveats that are not "it works".** The user authorized the deploy
+**State (2026-09-29): deployed and serving `v0.7.4`, on a tailnet-only origin,
+with three honest caveats that are not "it works".** The user authorized the deploy
 in-session, so `~/Library/LaunchAgents/com.syang.pwa-pantry-recipes.plist` is
 installed, `com.syang.pwa-pantry-recipes` is loaded and `state = running`, and a
 Tailscale Serve route proxies **8452 → 127.0.0.1:8007**. The deployed origin is
 `https://home-macbook-air.tailcd6e49.ts.net:8452` (tailnet only).
 
-**Three releases went out on 2026-09-28, and the third exists because the second
-was not enough.** `a82cf66` scored a bought-before Pantry Item as missing (the
-headline counted *resolutions*, not stock — caveat 2 below, and the stock-score
-amendment in the spec's §9.13.2). `66c43cd`, pushed by
+**`v0.7.4` is the release that made the Cooking History panel tell the truth about
+itself** — the tracker badge could previously never turn off, `频率` published a
+`0` that means "not computed", and `来源` / `时长（分钟）` were parsed by nothing
+despite being in every real note. The rotation was confirmed **on the user's
+phone** (`0.7.4` rendered), which is the one vantage the gate cannot reach; that
+is a **user attestation, not a machine result**, and it establishes asset
+freshness on a client — **not** convergence. The gate still exits **3** with
+**zero `FAIL`** conditions, which is the same permanent vantage limitation as
+before, not a new defect. `docs/runbook/deployment.md` §9d is the full record.
+
+**Four releases went out across 2026-09-28 and 2026-09-29, and the third exists
+because the second was not enough.** `a82cf66` scored a bought-before Pantry Item
+as missing (the headline counted *resolutions*, not stock — caveat 2 below, and
+the stock-score amendment in the spec's §9.13.2). `66c43cd`, pushed by
 another agent, added the `食材` tab with **no `CACHE_VERSION` rotation**, so the
 phone kept executing the pre-`食材` shell. `1bf51d8` rotated to `v0.7.3`, and the
 **user reporting the tab appearing** is what confirmed the rotation reached a
 client. That is a user attestation, not a machine result: no gate, test or tool
 here observed it, and it is recorded as such because it is the only vantage that
-can.
+can. `ac2099d` then rotated to `v0.7.4` for the release described above, and
+**every rotation in this paragraph has been confirmed the same way — by the user
+seeing it, never by a gate on this host.**
 
 Three caveats, all load-bearing, all in `README.md` § *What does not work yet*:
 
