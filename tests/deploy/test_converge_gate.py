@@ -1522,3 +1522,43 @@ def test_configured_kitchen_tips_are_backend_freshness_inputs(world: World) -> N
     result = by_id(options.results, "3 backend-freshness")
     assert result.status == gate.FAIL
     assert "kitchen_tips_root:" in result.detail
+
+
+def test_smoke_checks_all_ingredients_after_an_ingredientless_tip(world: World) -> None:
+    body = json.loads(world._spec_payload("/api/recipes").body)
+    tip = {**body["recipes"][0], "ingredients": []}
+    body["recipes"].insert(0, tip)
+    world.responses[f"{LOCAL}/api/recipes"] = world._json(body)
+    results, _ = run(world)
+    assert by_id(results, "4 release-smoke").status == gate.PASS
+    del body["recipes"][1]["ingredients"][0]["stockJoinState"]
+    world.responses[f"{LOCAL}/api/recipes"] = world._json(body)
+    results, _ = run(world)
+    result = by_id(results, "4 release-smoke")
+    assert result.status == gate.FAIL
+    assert "recipes[1].ingredients[0] has no key 'stockJoinState'" in result.detail
+
+
+def test_smoke_refuses_to_check_zero_ingredients(world: World) -> None:
+    body = json.loads(world._spec_payload("/api/recipes").body)
+    body["recipes"][0]["ingredients"] = []
+    world.responses[f"{LOCAL}/api/recipes"] = world._json(body)
+    results, _ = run(world)
+    result = by_id(results, "4 release-smoke")
+    assert result.status == gate.FAIL
+    assert "no items to check" in result.detail
+
+
+def test_smoke_checks_later_ingredient_and_recipe_shapes(world: World) -> None:
+    body = json.loads(world._spec_payload("/api/recipes").body)
+    body["recipes"][0]["ingredients"].append({})
+    world.responses[f"{LOCAL}/api/recipes"] = world._json(body)
+    results, _ = run(world)
+    assert by_id(results, "4 release-smoke").status == gate.FAIL
+    body["recipes"].append({"ingredients": None})
+    world.responses[f"{LOCAL}/api/recipes"] = world._json(body)
+    results, _ = run(world)
+    result = by_id(results, "4 release-smoke")
+    assert result.status == gate.FAIL
+    assert "recipes[1] has no key 'noteName'" in result.detail
+    assert "recipes[1].ingredients is not an array" in result.detail

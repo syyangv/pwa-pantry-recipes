@@ -1384,25 +1384,31 @@ def _missing_keys(label: str, path: str, payload: Any, endpoint: Mapping[str, An
         if not isinstance(items, list) or not items:
             missing.append(f"{label} {path} key {array_key!r} is not a non-empty array")
             continue
-        for key in item_keys:
-            if not isinstance(items[0], dict) or key not in items[0]:
-                missing.append(f"{label} {path} {array_key}[0] has no key {key!r}")
+        for index, item in enumerate(items):
+            for key in item_keys:
+                if not isinstance(item, dict) or key not in item:
+                    missing.append(f"{label} {path} {array_key}[{index}] has no key {key!r}")
     for array_key, nested in (endpoint.get("array_item_nested_keys") or {}).items():
         items = payload.get(array_key)
         if not isinstance(items, list) or not items:
             continue
         for child_key, child_item_keys in nested.items():
-            children = items[0].get(child_key) if isinstance(items[0], dict) else None
-            if not isinstance(children, list) or not children:
-                missing.append(
-                    f"{label} {path} {array_key}[0].{child_key} is not a non-empty array"
-                )
-                continue
-            for key in child_item_keys:
-                if not isinstance(children[0], dict) or key not in children[0]:
-                    missing.append(
-                        f"{label} {path} {array_key}[0].{child_key}[0] has no key {key!r}"
-                    )
+            checked = 0
+            for index, item in enumerate(items):
+                children = item.get(child_key) if isinstance(item, dict) else None
+                location = f"{array_key}[{index}].{child_key}"
+                if not isinstance(children, list):
+                    missing.append(f"{label} {path} {location} is not an array")
+                    continue
+                for child_index, child in enumerate(children):
+                    checked += 1
+                    for key in child_item_keys:
+                        if not isinstance(child, dict) or key not in child:
+                            missing.append(
+                                f"{label} {path} {location}[{child_index}] has no key {key!r}"
+                            )
+            if not checked:
+                missing.append(f"{label} {path} {array_key}.{child_key} has no items to check")
     return missing
 
 
