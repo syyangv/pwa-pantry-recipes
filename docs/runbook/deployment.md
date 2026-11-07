@@ -1185,7 +1185,8 @@ Local processes and administrator-owned socket directories remain trusted,
 matching the existing owner-header loopback boundary.
 
 Before deployment: 1,928 tests passed / 1 skipped (retired Mac ingress); coverage
-of auth/config/WhoIs modules is 95% (auth 98%, config 91%, WhoIs 93%). Frontend
+of auth/config/WhoIs modules in the final focused measurement is 94%
+(auth 98%, config 91%, WhoIs 93%). Frontend
 checks, Ruff and mypy pass. A security-specialist review found no authorization
 bypass, conditional on the deployment prerequisites above. Live observations are
 recorded separately; these test results alone do not establish Mac or phone access.
@@ -1194,3 +1195,39 @@ Rollback: rename only the Mac-authorization drop-in to a suffix other than
 `.conf`, daemon-reload and restart this same Linux service. Existing owner access
 and the kitchen-tips source remain configured. Neither remove the Mac's tag nor
 re-enable the retired Mac service as a workaround.
+
+
+### v0.7.7 live observations — 2026-11-07
+
+- Release `c3cac23` was committed, pushed and fast-forwarded on Linuxbox. Added
+  only `~/.config/systemd/user/pwa-pantry-recipes.service.d/40-mac-authorization.conf`
+  (mode 0600) with the exact stable node ID `naGyVQSN6n11CNTRL`, IPv4
+  `100.87.56.102`, IPv6 `fd7a:115c:a1e0::4b34:3866`, required tag `tag:face-up`,
+  and the existing LocalAPI socket. ExecStart preserves all prior arguments
+  and adds `--no-proxy-headers`. The kitchen-tips drop-in is untouched.
+- After daemon-reload and restart, port-manager observed uvicorn PID 1580086
+  bound to 127.0.0.1:8007. The actual `/proc/<pid>/cmdline` contains
+  `--no-proxy-headers`. Backend fingerprint: `2026-11-07T08:07:00.058682Z`.
+- From the **non-serving Mac**, headerless HTTPS `/api/session` returned
+  **200**, `version=v0.7.7`, and `identity=tailscale-device:naGyVQSN6n11CNTRL`.
+  Supplying a forged forwarding address or non-owner login still returned that
+  same verified device principal, showing Serve replaced the client claims.
+  `/`, `/sw.js`, `/manifest.webmanifest`, `/js/main.js` and the croissant detail
+  all returned 200. The detail still matches Pantry Item 57.
+- Live device mutation probes against a **nonexistent route**, without any vault
+  write, returned 403 `csrf_required` when the token was missing and 403
+  `origin_not_allowed` for a foreign Origin. With both guards satisfied the
+  nonexistent route returned 404. No real Cooking Record was created or removed.
+- Both required release checks on Linuxbox returned **exit 0**, comparing
+  loopback and the deployed origin; the ceiling also checked the kitchen-tips
+  source. This updates Linux's current release, not the old Mac-origin record.
+- The Mac's tag remains `tag:face-up`; no ACL, Serve route, owner-login setting,
+  read-only flag, credential file, vault note, or catalog database was changed.
+  Phone launch was not retested. This is verified HTTP access from the Mac,
+  not a claim of observing a desktop browser or Home Screen PWA launch.
+
+Final source-focused auth/config/WhoIs checks: 326 tests passed, 94% combined
+coverage; the full suite had 1,928 passed / 1 skipped. A key expiry is enforced,
+not ignored: WhoIs reported this Mac's current expiry as 2026-11-24T15:23:31Z.
+If that key expires or the node/tag/address changes, access intentionally fails
+closed until the appropriate Tailscale state or explicit grant is reviewed.
