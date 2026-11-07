@@ -91,6 +91,7 @@
         <!-- The factory reads the environment at boot, not at import. -->
         <string>app.main:create_app</string>
         <string>--factory</string>
+        <string>--no-proxy-headers</string>
         <!-- Loopback only. Never 0.0.0.0. -->
         <string>--host</string>
         <string>127.0.0.1</string>
@@ -180,6 +181,16 @@
              allowlist (F18): with F4 removing the note-creation service this flag
              is the only gate between a mutation and the vault. Start read-only
              (docs/runbook/deployment.md § 6). -->
+        <!-- Optional device grant. Empty ID/IP/tag keeps it disabled. -->
+        <key>TAILSCALE_DEVICE_ID</key>
+        <string>__TAILSCALE_DEVICE_ID__</string>
+        <key>TAILSCALE_DEVICE_IPS</key>
+        <string>__TAILSCALE_DEVICE_IPS__</string>
+        <key>TAILSCALE_DEVICE_TAG</key>
+        <string>__TAILSCALE_DEVICE_TAG__</string>
+        <key>TAILSCALE_SOCKET_PATH</key>
+        <string>__TAILSCALE_SOCKET_PATH__</string>
+
         <key>OBSIDIAN_READ_ONLY</key>
         <string>__OBSIDIAN_READ_ONLY__</string>
         <!-- F11. STOCK_CACHE_SECONDS is the maximum staleness a chip colour can

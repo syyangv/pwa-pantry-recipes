@@ -392,3 +392,7 @@ def test_the_installer_does_not_bootstrap_by_accident() -> None:
     assert "bootout" in body.split("    bootstrap)")[1], (
         "bootstrap must bootout first, not just load"
     )
+
+
+def test_uvicorn_preserves_raw_peer_for_device_auth(plist: dict[str, Any]) -> None:
+    assert "--no-proxy-headers" in plist["ProgramArguments"]

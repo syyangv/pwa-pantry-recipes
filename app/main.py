@@ -335,11 +335,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         """The boot contract: who the caller is, the CSRF token every mutation
         must echo, and the capability flags the UI renders. `version` is the
         same derive_version() value as /api/version and the sw.js CACHE_VERSION."""
-        identity = (
-            runtime.tailscale_owner_login
-            if runtime.trust_tailscale_headers
-            else runtime.dev_identity
-        )
+        identity = request.state.identity
         return JSONResponse(
             {
                 "identity": identity,

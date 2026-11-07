@@ -1,5 +1,6 @@
 {
   "$comment": [
+    "v0.7.7 adds default-disabled verified device authorization; session identity names the actual principal.",
     "v0.7.6 includes the configured kitchen-tips source; no response keys changed.",
     "The release-specific half of the converge gate (spec §12.4, template §3e 4).",
     "EDIT THIS FILE IN EVERY RELEASE THAT CHANGES THE API CONTRACT. A version",

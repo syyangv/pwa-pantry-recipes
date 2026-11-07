@@ -56,6 +56,10 @@ class Settings:
     max_recipe_bytes: int
     cook_log_undo_hours: float
     kitchen_tips_root: str | None = None
+    tailscale_device_id: str | None = None
+    tailscale_device_ips: tuple[str, ...] = ()
+    tailscale_device_tag: str | None = None
+    tailscale_socket_path: Path = Path("/var/run/tailscale/tailscaled.sock")
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -129,6 +133,38 @@ class Settings:
         if year_policy and not _YEAR_RANGE.fullmatch(year_policy):
             raise ConfigurationError("invalid_daily_notes_year_policy")
 
+        device_id = values.get("TAILSCALE_DEVICE_ID", "")
+        device_ips_raw = values.get("TAILSCALE_DEVICE_IPS", "")
+        device_tag = values.get("TAILSCALE_DEVICE_TAG", "")
+        device_ips: tuple[str, ...] = ()
+        socket_path = Path(
+            values.get("TAILSCALE_SOCKET_PATH", "/var/run/tailscale/tailscaled.sock")
+        )
+        if any((device_id, device_ips_raw, device_tag)):
+            if not trust_headers:
+                raise ConfigurationError("device_identity_requires_trusted_headers")
+            if not re.fullmatch(r"n[A-Za-z0-9_-]{1,63}", device_id):
+                raise ConfigurationError("invalid_tailscale_device_id")
+            if not re.fullmatch(r"tag:[a-z0-9-]+", device_tag):
+                raise ConfigurationError("invalid_tailscale_device_tag")
+            try:
+                ips = tuple(ipaddress.ip_address(ip) for ip in device_ips_raw.split(","))
+                ranges = (ipaddress.ip_network("100.64.0.0/10"),
+                          ipaddress.ip_network("fd7a:115c:a1e0::/48"))
+                if not ips or any("%" in str(ip) or not any(ip in net for net in ranges)
+                                  for ip in ips):
+                    raise ValueError
+                device_ips = tuple(str(ip) for ip in ips)
+            except ValueError as exc:
+                raise ConfigurationError("invalid_tailscale_device_ips") from exc
+            if not socket_path.is_absolute() or ".." in socket_path.parts:
+                raise ConfigurationError("invalid_tailscale_socket_path")
+            try:
+                if not stat.S_ISSOCK(socket_path.stat().st_mode):
+                    raise OSError
+            except OSError as exc:
+                raise ConfigurationError("unsafe_or_missing_tailscale_socket") from exc
+
         # --- Server-owned policy and bounds -----------------------------
         # Stock's TTL is the maximum staleness a chip colour can have, because
         # the user toggles Pantry.md lines from Obsidian while the PWA is
@@ -168,6 +204,10 @@ class Settings:
             pantry_note_relative=pantry_note,
             recipes_root=recipes_root,
             kitchen_tips_root=kitchen_tips_root or None,
+            tailscale_device_id=device_id or None,
+            tailscale_device_ips=device_ips,
+            tailscale_device_tag=device_tag or None,
+            tailscale_socket_path=socket_path,
             daily_notes_root=daily_notes_root,
             daily_notes_year_policy=year_policy or None,
             read_only=read_only,

@@ -604,3 +604,42 @@ the plist requires `bootout` + `bootstrap`, not a code-only kickstart.
 Pass `--kitchen-tips-root Hobbies/做饭/厨房技巧` to the converge gate so its
 backend-freshness check covers this source too.
 Implementation and tests do not prove that the phone has received the change.
+
+
+### Optional authorization of one tagged Tailscale device
+
+Tagged devices do not receive Serve user-login identity headers. The owner-login
+policy remains the default; an optional, **default-disabled** second policy can
+permit one specific tagged device. Configure all three non-secret identifiers:
+
+```text
+TAILSCALE_DEVICE_ID=<stable node ID from tailscale whois --json>
+TAILSCALE_DEVICE_IPS=<exact IPv4>,<exact IPv6>
+TAILSCALE_DEVICE_TAG=tag:face-up
+TAILSCALE_SOCKET_PATH=/var/run/tailscale/tailscaled.sock
+```
+
+The app checks the raw socket peer is loopback and accepts only a single IP
+literal in `X-Forwarded-For`. Tailscale Serve overwrites that header with its
+WireGuard peer address. The app queries read-only WhoIs over the server-owned
+LocalAPI Unix socket (bounded timeout/body size, no shell or credentials), and
+requires the configured stable ID, tag, address and unexpired key. An IP or tag
+alone never grants access. There is no authorization cache: lookup failure,
+expiry, a removed tag, or a replaced node immediately denies the request.
+
+**Deployment prerequisite:** pass `--no-proxy-headers` to Uvicorn. Otherwise
+Uvicorn rewrites the raw peer address and this device path rejects access.
+The trusted Serve route must point straight at this loopback backend and must
+overwrite forwarding headers. Do not put another unreviewed proxy in between.
+The LocalAPI socket and its parent directories must be controlled by the host
+administrator; no broad Tailscale operator privileges are needed for WhoIs.
+Local processes are trusted, just as they already are when supplying the owner
+header on loopback; this is not protection against a compromised server account.
+
+A denied or malformed user-login header never falls back to device access.
+`/api/session.identity` identifies the device as `tailscale-device:<stable ID>`,
+not as the owner's login. Device access has the same app capabilities as the
+owner, including writes when the instance is writable; Origin, CSRF, read-only,
+Host and content-type guards remain unchanged. This grant applies only to this
+app, not sibling PWAs or tailnet ACLs. Removing the grant requires a service
+configuration update/restart; do not disable user authentication as a workaround.

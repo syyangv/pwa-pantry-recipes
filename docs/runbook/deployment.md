@@ -1155,3 +1155,42 @@ Rollback: preserve the new drop-in by renaming its suffix away from `.conf`,
 restore the prior checkout `006277f` using a clean detached checkout, then
 `systemctl --user daemon-reload` and restart this same service. Do not restore
 or bootstrap the Mac plist and do not remove unrelated Serve handlers.
+
+## 11. v0.7.7 — narrowly scoped tagged-Mac authorization
+
+The Mac's `401 identity_missing` was traced to its `tag:face-up` identity, not
+asset freshness. Linuxbox's WhoIs identifies that peer as tagged; Tailscale Serve
+v1.102.4 intentionally omits user-login headers for tagged nodes and strips
+client-supplied replacements (`ipn/ipnlocal/serve.go`, lines 1078–1105). The phone
+and Linuxbox are untagged owner-associated devices. The user explicitly chose to
+keep the Mac's tag and add a narrow app-level device policy.
+
+The default-disabled policy pins one stable node ID, exact IPv4/IPv6 addresses,
+and required tag. It requires a raw loopback socket peer and one Serve-overwritten
+forwarding IP. Read-only LocalAPI WhoIs must confirm all pins and key validity on
+every request, with a bounded timeout and response size. A present but invalid or
+denied login header never falls back. Device sessions report
+`tailscale-device:<stable ID>` instead of impersonating the owner's login. The
+existing read-only, Origin, CSRF, body/content-type and Host guards still apply.
+The configured Mac receives the same app capabilities as the owner; no other
+`tag:face-up` device is granted access merely for sharing the tag.
+
+**Production prerequisite:** a systemd drop-in must preserve the existing
+ExecStart arguments and add `--no-proxy-headers`; otherwise Uvicorn rewrites the
+raw socket peer and the new policy correctly refuses access. The same flag is
+now in the LaunchAgent template for future installations. Never grant broad
+Tailscale operator privileges for this lookup: the existing service account's
+read-only LocalAPI request was verified to work on the current socket.
+Local processes and administrator-owned socket directories remain trusted,
+matching the existing owner-header loopback boundary.
+
+Before deployment: 1,928 tests passed / 1 skipped (retired Mac ingress); coverage
+of auth/config/WhoIs modules is 95% (auth 98%, config 91%, WhoIs 93%). Frontend
+checks, Ruff and mypy pass. A security-specialist review found no authorization
+bypass, conditional on the deployment prerequisites above. Live observations are
+recorded separately; these test results alone do not establish Mac or phone access.
+
+Rollback: rename only the Mac-authorization drop-in to a suffix other than
+`.conf`, daemon-reload and restart this same Linux service. Existing owner access
+and the kitchen-tips source remain configured. Neither remove the Mac's tag nor
+re-enable the retired Mac service as a workaround.

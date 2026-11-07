@@ -9,6 +9,12 @@ URL from the Host header), and every rejection still carries the standard
 ``Cache-Control: no-store``.
 
 Identity rules
+    * Optional tagged-device authorization is default-disabled. Only a missing
+      user-login header can use it: the raw socket peer must be loopback and
+      Serve's single X-Forwarded-For must match configured addresses. LocalAPI
+      WhoIs must verify the configured stable node ID, tag, address and key
+      validity on every request. Deploy uvicorn with --no-proxy-headers.
+      Local processes remain trusted, as with the existing owner-header mode.
     * Trusted-header mode (``TRUST_TAILSCALE_HEADERS=true``): the request
       identity is the exact normalized ``Tailscale-User-Login`` header value,
       compared byte-for-byte (after OWS trimming) with
@@ -69,7 +75,9 @@ ported: this app embeds nothing, so ``frame-ancestors 'none'`` stands.
 
 from __future__ import annotations
 
+import asyncio
 import hmac
+import http.client
 import ipaddress
 import secrets
 import time
@@ -80,8 +88,10 @@ from fastapi import FastAPI, Request, Response
 from fastapi.responses import JSONResponse
 from starlette.middleware.base import RequestResponseEndpoint
 
+from . import tailscale
 from .config import Settings
 
+DEVICE_LOOKUP_TIMEOUT = 1.0
 MAX_IDENTITY_CHARS = 254
 MAX_CSRF_TOKEN_CHARS = 128
 MAX_REQUEST_BYTES = 1_048_576  # 1 MiB
@@ -138,6 +148,7 @@ class IdentityPolicy:
     """Enforce the owner allowlist for the configured trust mode."""
 
     def __init__(self, settings: Settings) -> None:
+        self._settings = settings
         self._trusted = settings.trust_tailscale_headers
         if self._trusted:
             self._owner = settings.tailscale_owner_login
@@ -165,10 +176,48 @@ class IdentityPolicy:
             # plain mismatch and a 401 `identity_denied`.
             if not hmac.compare_digest(identity.encode(), self._owner.encode()):
                 return False, 401, "identity_denied"
+            request.state.identity = self._owner
             return True, 0, ""
         for name in IDENTITY_HEADERS:
             if request.headers.getlist(name):
                 return False, 401, "identity_spoof"
+        request.state.identity = self._owner
+        return True, 0, ""
+
+    async def check_request(self, request: Request) -> tuple[bool, int, str]:
+        result = self.check(request)
+        settings = self._settings
+        if result[2] != "identity_missing" or not settings.tailscale_device_id:
+            return result
+        # This must be the RAW socket peer: deploy uvicorn with --no-proxy-headers.
+        peer = request.client
+        forwarded = request.headers.getlist("x-forwarded-for")
+        if (peer is None or len(forwarded) != 1
+                or request.headers.getlist("tailscale-funnel-request")):
+            return result
+        try:
+            if not ipaddress.ip_address(peer.host).is_loopback:
+                return result
+            raw = forwarded[0].strip(" \t")
+            if len(raw) > 64 or "%" in raw:
+                return result
+            ip = str(ipaddress.ip_address(raw))
+        except ValueError:
+            return result
+        if ip not in settings.tailscale_device_ips or not settings.tailscale_device_tag:
+            return result
+        try:
+            data = await asyncio.wait_for(
+                asyncio.to_thread(tailscale.lookup_node, settings.tailscale_socket_path, ip),
+                timeout=DEVICE_LOOKUP_TIMEOUT,
+            )
+        except (OSError, TimeoutError, ValueError, http.client.HTTPException):
+            return result
+        if not tailscale.matches_node(
+            data, settings.tailscale_device_id, settings.tailscale_device_tag, ip
+        ):
+            return False, 401, "identity_denied"
+        request.state.identity = f"tailscale-device:{settings.tailscale_device_id}"
         return True, 0, ""
 
 
@@ -359,7 +408,7 @@ def install_security_middleware(application: FastAPI, settings: Settings) -> Non
     async def security(request: Request, call_next: RequestResponseEndpoint) -> Response:
         if getattr(request.state, "request_id", None) is None:
             request.state.request_id = str(uuid.uuid4())
-        response = _guard(request, settings, policy, csrf)
+        response = await _guard(request, settings, policy, csrf)
         rejected = response is not None
         if response is None:
             response = await call_next(request)
@@ -377,7 +426,7 @@ def install_security_middleware(application: FastAPI, settings: Settings) -> Non
         return response
 
 
-def _guard(
+async def _guard(
     request: Request,
     settings: Settings,
     policy: IdentityPolicy,
@@ -385,7 +434,7 @@ def _guard(
 ) -> Response | None:
     if not check_host(request, settings):
         return _reject(request, 400, "invalid_host")
-    allowed, status, code = policy.check(request)
+    allowed, status, code = await policy.check_request(request)
     if not allowed:
         return _reject(request, status, code)
     # Use the raw scope path: parsing request.url with a hostile Host header
