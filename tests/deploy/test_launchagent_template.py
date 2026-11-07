@@ -344,6 +344,7 @@ def test_the_server_owned_roots_are_in_the_plist(plist: dict[str, Any]) -> None:
         "PANTRY_ITEMS_DB",
         "PANTRY_NOTE_RELATIVE",
         "RECIPES_ROOT",
+        "KITCHEN_TIPS_ROOT",
         "DAILY_NOTES_ROOT",
     ):
         assert key in environment, (

@@ -108,8 +108,8 @@ class RecipeNoteError(ValueError):
     """
 
 
-class RecipeIndexError(ValueError):
-    """The folder could not be enumerated — a bound was exceeded.
+class RecipeIndexError(ConfigurationError):
+    """The configured folders cannot form an unambiguous, bounded index.
 
     Distinct from `RecipeNoteError` because it says nothing about any one
     note's content: the scan itself did not complete, so returning a partial
@@ -223,7 +223,7 @@ def parse_recipe(
 
 
 class RecipeIndex:
-    """A TTL snapshot provider over `<RECIPES_ROOT>/*.md` (spec §9.5).
+    """A TTL snapshot over Recipes and the optional server-owned kitchen-tips root.
 
     Construction reads nothing; the first `snapshot()` builds the tuple, and
     later calls are served from it until `recipe_cache_seconds` has elapsed on
@@ -235,9 +235,11 @@ class RecipeIndex:
     """
 
     def __init__(self, settings: Settings, *, clock: Callable[[], float] = time.monotonic) -> None:
-        self._root_relative: str = settings.recipes_root
-        self._root: Path = settings.vault_path / settings.recipes_root
-        self._index_name: str = PurePosixPath(settings.recipes_root).name
+        self._vault: Path = settings.vault_path
+        self._roots: tuple[str, ...] = (settings.recipes_root,) + (
+            (settings.kitchen_tips_root,) if settings.kitchen_tips_root else ()
+        )
+        self._kitchen_tips_root = settings.kitchen_tips_root
         self._ttl: float = settings.recipe_cache_seconds
         self._max_bytes: int = settings.max_recipe_bytes
         self._clock: Callable[[], float] = clock
@@ -287,38 +289,49 @@ class RecipeIndex:
     def _scan(self) -> RecipeSnapshot:
         notes: list[RecipeNote] = []
         skipped = 0
-        for name in self._list_markdown():
-            note_name = name[: -len(_MARKDOWN_SUFFIX)]
-            try:
-                source = (self._root / name).read_bytes()
-                frontmatter, body = _split_frontmatter(source, max_bytes=self._max_bytes)
-            except (OSError, RecipeNoteError):
-                skipped += 1
-                continue
-            if not _is_recipe_note(frontmatter, note_name, self._index_name):
-                continue
-            try:
-                notes.append(
-                    _project(
-                        frontmatter,
-                        body,
-                        note_name=note_name,
-                        note_path=f"{self._root_relative}/{name}",
+        seen_names: set[str] = set()
+        file_count = 0
+        for root_relative in self._roots:
+            kitchen_tip = root_relative == self._kitchen_tips_root
+            index_name = PurePosixPath(root_relative).name
+            for name in self._list_markdown(self._vault / root_relative):
+                file_count += 1
+                if file_count > MAX_RECIPE_FILES:
+                    raise RecipeIndexError("recipe_directory_limit")
+                note_name = name[: -len(_MARKDOWN_SUFFIX)]
+                try:
+                    source = (self._vault / root_relative / name).read_bytes()
+                    frontmatter, body = _split_frontmatter(source, max_bytes=self._max_bytes)
+                except (OSError, RecipeNoteError):
+                    skipped += 1
+                    continue
+                if note_name == index_name:
+                    continue
+                if not kitchen_tip and not _is_recipe_note(frontmatter, note_name, index_name):
+                    continue
+                try:
+                    note = _project(
+                        frontmatter, body, note_name=note_name,
+                        note_path=f"{root_relative}/{name}", kitchen_tip=kitchen_tip,
                     )
-                )
-            except RecipeNoteError:
-                skipped += 1
+                except RecipeNoteError:
+                    skipped += 1
+                    continue
+                if note_name in seen_names:
+                    raise RecipeIndexError("duplicate_recipe_note_name")
+                seen_names.add(note_name)
+                notes.append(note)
         return RecipeSnapshot(notes=tuple(notes), skipped=skipped)
 
-    def _list_markdown(self) -> tuple[str, ...]:
-        """Direct `.md` children of `RECIPES_ROOT`, in enumeration order.
+    def _list_markdown(self, root: Path) -> tuple[str, ...]:
+        """Direct `.md` children of one configured root, in enumeration order.
 
         Only a `.md` suffix is admitted, so a `.base` view can never reach the
         index however it is named. Dot-prefixed, symlinked, and non-regular
         entries are skipped, matching the ported store's scan.
         """
         try:
-            with os.scandir(self._root) as entries:
+            with os.scandir(root) as entries:
                 candidates = tuple(entries)
         except (FileNotFoundError, NotADirectoryError) as exc:
             raise ConfigurationError("missing_recipes_root") from exc
@@ -408,17 +421,23 @@ def _project(
     *,
     note_name: str,
     note_path: str,
+    kitchen_tip: bool = False,
 ) -> RecipeNote:
     """Build a `RecipeNote` from an already-split note."""
+    tools = frontmatter.get(TOOLS_KEY)
+    if kitchen_tip and TOOLS_KEY not in frontmatter:
+        tools = frontmatter.get("厨具")
+        if isinstance(tools, str):
+            tools = [tool.strip() for tool in tools.replace("，", ",").split(",") if tool.strip()]
     return RecipeNote(
         note_name=note_name,
         note_path=note_path,
         ingredients=_entries(frontmatter.get(MATERIALS_KEY)),
         seasonings=_entries(frontmatter.get(SEASONINGS_KEY)),
-        tools=tuple(entry.raw for entry in _entries(frontmatter.get(TOOLS_KEY))),
+        tools=tuple(entry.raw for entry in _entries(tools)),
         source=tuple(entry.raw for entry in _entries(frontmatter.get(SOURCE_KEY))),
         duration_minutes=_duration(frontmatter.get(DURATION_KEY)),
-        steps=_steps(body),
+        steps=body if kitchen_tip and not _STEPS_HEADING_RE.search(body) else _steps(body),
         history=_history(frontmatter),
     )
 

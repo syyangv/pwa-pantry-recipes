@@ -193,6 +193,7 @@ def _base(root: Path) -> dict[str, str]:
 
 def test_valid_settings_capture_the_server_owned_roots(settings: Settings) -> None:
     assert settings.recipes_root == "Hobbies/做饭/Recipes"
+    assert settings.kitchen_tips_root is None
     assert settings.daily_notes_root == "日记"
     assert settings.bind_host == "127.0.0.1"
     assert settings.trust_tailscale_headers is False
@@ -213,6 +214,10 @@ def test_valid_settings_capture_the_server_owned_roots(settings: Settings) -> No
         ("PUBLIC_ORIGIN", "http://recipes.example.com", "invalid_public_origin"),
         ("TAILSCALE_OWNER_LOGIN", "  ", "missing_tailscale_owner_login"),
         ("BIND_HOST", "0.0.0.0", "bind_host_must_be_loopback"),
+        ("KITCHEN_TIPS_ROOT", "../escape", "invalid_kitchen_tips_root"),
+        ("KITCHEN_TIPS_ROOT", "/absolute", "invalid_kitchen_tips_root"),
+        ("KITCHEN_TIPS_ROOT", ".hidden", "invalid_kitchen_tips_root"),
+        ("KITCHEN_TIPS_ROOT", "Hobbies/做饭/Recipes", "invalid_kitchen_tips_root"),
         ("RECIPES_ROOT", "../escape", "invalid_recipes_root"),
         ("RECIPES_ROOT", "/absolute", "invalid_recipes_root"),
         ("RECIPES_ROOT", ".hidden", "invalid_recipes_root"),
@@ -280,6 +285,7 @@ def test_settings_exposes_exactly_the_locked_field_set() -> None:
         "pantry_items_db",
         "pantry_note_relative",
         "recipes_root",
+        "kitchen_tips_root",
         "daily_notes_root",
         "daily_notes_year_policy",
         "read_only",
@@ -535,3 +541,10 @@ def test_dotted_package_data_keys_are_quoted() -> None:
         key = stripped.split("=", 1)[0].strip()
         if "." in key:
             assert key.startswith('"') and key.endswith('"'), line
+
+
+def test_kitchen_tips_root_is_environment_owned(runtime_root: Path) -> None:
+    settings = Settings.from_mapping(
+        {**_base(runtime_root), "KITCHEN_TIPS_ROOT": "Hobbies/做饭/厨房技巧"}
+    )
+    assert settings.kitchen_tips_root == "Hobbies/做饭/厨房技巧"

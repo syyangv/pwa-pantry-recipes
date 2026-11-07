@@ -45,6 +45,7 @@
 #   PANTRY_ITEMS_DB         default $HOME/projects/wholefoods-to-pantry/assets/pantry_items.db
 #   PANTRY_NOTE_RELATIVE    default Logistics/库存/Pantry.md
 #   RECIPES_ROOT            default Hobbies/做饭/Recipes
+#   KITCHEN_TIPS_ROOT       default Hobbies/做饭/厨房技巧
 #   DAILY_NOTES_ROOT        default 日记
 #   DAILY_NOTES_YEAR_POLICY default <empty>
 #   PUBLIC_ORIGIN           default https://home-macbook-air.tailcd6e49.ts.net:8452
@@ -78,6 +79,7 @@ OBSIDIAN_VAULT_PATH="${OBSIDIAN_VAULT_PATH:-$HOME/obsidian/syang}"
 PANTRY_ITEMS_DB="${PANTRY_ITEMS_DB:-$HOME/projects/wholefoods-to-pantry/assets/pantry_items.db}"
 PANTRY_NOTE_RELATIVE="${PANTRY_NOTE_RELATIVE:-Logistics/库存/Pantry.md}"
 RECIPES_ROOT="${RECIPES_ROOT:-Hobbies/做饭/Recipes}"
+KITCHEN_TIPS_ROOT="${KITCHEN_TIPS_ROOT-Hobbies/做饭/厨房技巧}"
 DAILY_NOTES_ROOT="${DAILY_NOTES_ROOT:-日记}"
 DAILY_NOTES_YEAR_POLICY="${DAILY_NOTES_YEAR_POLICY:-}"
 PUBLIC_ORIGIN="${PUBLIC_ORIGIN:-https://home-macbook-air.tailcd6e49.ts.net:$SERVE_PORT}"
@@ -161,6 +163,7 @@ sed \
     -e "s|__PANTRY_ITEMS_DB__|$PANTRY_ITEMS_DB|g" \
     -e "s|__PANTRY_NOTE_RELATIVE__|$PANTRY_NOTE_RELATIVE|g" \
     -e "s|__RECIPES_ROOT__|$RECIPES_ROOT|g" \
+    -e "s|__KITCHEN_TIPS_ROOT__|$KITCHEN_TIPS_ROOT|g" \
     -e "s|__DAILY_NOTES_ROOT__|$DAILY_NOTES_ROOT|g" \
     -e "s|__DAILY_NOTES_YEAR_POLICY__|$DAILY_NOTES_YEAR_POLICY|g" \
     -e "s|__OBSIDIAN_READ_ONLY__|$OBSIDIAN_READ_ONLY|g" \

@@ -1081,3 +1081,36 @@ handle a removed link. They take effect when Obsidian is reloaded. `/Helper/` is
 git-ignored in the vault, so those files have no history; the pre-edit template is
 not preserved anywhere durable.
 
+
+
+## 10. v0.7.6 kitchen tips — Linux production target, 2026-11-06
+
+**The earlier Mac deployment records are historical.** The vault's operational
+inventory (`个人整理/流程说明/定时任务.md`, §2) records migration of production PWAs
+to Linuxbox. Preflight on 2026-11-06 confirmed:
+
+- `linuxbox` / `mie-ThinkCentre-M75q-Gen-2` runs the active systemd user service
+  `pwa-pantry-recipes.service`, working directory
+  `/home/mie/Projects/pwa-pantry-recipes`, initially serving `v0.7.5`.
+- Tailscale Serve already proxies HTTPS `:8452` to loopback `8007` on that node.
+  Current origin: `https://mie-thinkcentre-m75q-gen-2.tailcd6e49.ts.net:8452`.
+- The Mac has no listener on 8007, no pantry Serve route, and its saved plist
+  ends in `.disabled`. **Do not restore that obsolete deployment.**
+- Production vault: `/home/mie/obsidian/syyangv`; `OBSIDIAN_READ_ONLY=false`.
+  The existing 预制croissant note's Trader Joe's Ingredient reference has synced.
+
+This release adds optional server-owned `KITCHEN_TIPS_ROOT`, enabled in production
+with a user-service drop-in pointing at `Hobbies/做饭/厨房技巧`. No source note moves
+or instruction rewrites are needed. The rest of the production environment,
+including the writable posture, is preserved. No Tailscale route change is needed.
+After adding the drop-in, use `systemctl --user daemon-reload` followed by
+`systemctl --user restart pwa-pantry-recipes.service`; prove the loopback listener,
+then run the floor and ceiling release checks. Include
+`--kitchen-tips-root Hobbies/做饭/厨房技巧` in the ceiling invocation so kitchen
+notes are included in its backend-freshness check.
+
+Pre-deploy verification: full Python suite 1,875 passed / 1 skipped (the skipped
+probe expected the retired Mac ingress); subsequent gate/API changes have 70
+passing targeted tests. Frontend tests/module checks, Ruff, mypy and vendor drift
+checks pass. Release observations are recorded separately after deployment; none
+of these test results establishes production or phone convergence.

@@ -55,6 +55,7 @@ class Settings:
     recipe_cache_seconds: float
     max_recipe_bytes: int
     cook_log_undo_hours: float
+    kitchen_tips_root: str | None = None
 
     @classmethod
     def from_environment(cls) -> Settings:
@@ -111,6 +112,12 @@ class Settings:
         if not _safe_relative_root(recipes_root):
             raise ConfigurationError("invalid_recipes_root")
 
+        kitchen_tips_root = values.get("KITCHEN_TIPS_ROOT", "")
+        if kitchen_tips_root and (
+            not _safe_relative_root(kitchen_tips_root) or kitchen_tips_root == recipes_root
+        ):
+            raise ConfigurationError("invalid_kitchen_tips_root")
+
         daily_notes_root = values.get("DAILY_NOTES_ROOT", "日记")
         if not _safe_relative_root(daily_notes_root):
             raise ConfigurationError("invalid_daily_notes_root")
@@ -160,6 +167,7 @@ class Settings:
             pantry_items_db=pantry_db,
             pantry_note_relative=pantry_note,
             recipes_root=recipes_root,
+            kitchen_tips_root=kitchen_tips_root or None,
             daily_notes_root=daily_notes_root,
             daily_notes_year_policy=year_policy or None,
             read_only=read_only,

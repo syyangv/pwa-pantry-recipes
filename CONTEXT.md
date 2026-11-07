@@ -65,8 +65,10 @@ item's value. Three implementations of this math must stay in parity: the
 and the PWA's own logic.
 
 ## Recipe
-One Markdown note under `RECIPES_ROOT` (`Hobbies/做饭/Recipes`) describing a
-dish. A Recipe is a **read** projection: the PWA renders it but never rewrites
+One Markdown note under `RECIPES_ROOT` (`Hobbies/做饭/Recipes`) or the optional
+server-owned `KITCHEN_TIPS_ROOT` (`Hobbies/做饭/厨房技巧`) describing a dish or
+kitchen preparation. Kitchen tips need not declare Ingredients; when they do,
+the same Pantry Item matching applies. A Recipe is a **read** projection: the PWA renders it but never rewrites
 its steps, and its cooking-history frontmatter is advanced only by the
 [Cooking Log](#cooking-log) write path below.
 
@@ -86,7 +88,8 @@ deciding what can be cooked. A recipe's 调料 list must not be flattened into i
 材料 list — doing so silently inflates the "you can cook this" answer.
 
 ## Cooking Tool (烹饪工具)
-Equipment a Recipe requires, from the recipe note's `烹饪工具` frontmatter. Not
+Equipment a Recipe requires, from the recipe note's `烹饪工具` frontmatter
+(or legacy `厨具` for kitchen tips when `烹饪工具` is absent). Not
 stocked and not matched against the catalog. See
 [Cookable](#cookable) for how tools affect eligibility.
 

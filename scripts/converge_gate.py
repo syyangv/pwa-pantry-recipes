@@ -715,6 +715,7 @@ class Options:
     deployed_origin: str | None = None
     vault: Path | None = None
     recipes_root: str | None = None
+    kitchen_tips_root: str | None = None
     pantry_note: str | None = None
     daily_notes_root: str | None = None
     port: int = 8007
@@ -1232,11 +1233,14 @@ def _startup_loaded_mtimes(
             "no --vault, so the recipe/pantry index inputs named in §12.3 were NOT compared"
         )
     else:
-        for label, relative in (
+        roots = [
             ("recipes_root", options.recipes_root),
             ("pantry_note", options.pantry_note),
             ("daily_notes_root", options.daily_notes_root),
-        ):
+        ]
+        if options.kitchen_tips_root:
+            roots.append(("kitchen_tips_root", options.kitchen_tips_root))
+        for label, relative in roots:
             if not relative:
                 unproven.append(
                     f"no --{label.replace('_', '-')}, so that index input was NOT compared"
@@ -2206,6 +2210,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--vault", default=None, help="vault path, for the §12.3 index inputs")
     parser.add_argument("--recipes-root", default=None)
+    parser.add_argument("--kitchen-tips-root", default=None)
     parser.add_argument("--pantry-note", default=None)
     parser.add_argument("--daily-notes-root", default=None)
     parser.add_argument("--port-manager", default=None)
@@ -2237,6 +2242,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         deployed_origin=args.deployed_origin.rstrip("/") if args.deployed_origin else None,
         vault=vault,
         recipes_root=args.recipes_root or "Hobbies/做饭/Recipes",
+        kitchen_tips_root=args.kitchen_tips_root or os.environ.get("KITCHEN_TIPS_ROOT"),
         pantry_note=args.pantry_note or "Logistics/库存/Pantry.md",
         daily_notes_root=args.daily_notes_root or "日记",
         port=args.port,

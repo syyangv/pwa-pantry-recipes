@@ -159,6 +159,9 @@
         <key>PANTRY_NOTE_RELATIVE</key>
         <string>__PANTRY_NOTE_RELATIVE__</string>
         <!-- Vault-relative folder of recipe notes. Read-only to this app. -->
+        <key>KITCHEN_TIPS_ROOT</key>
+        <string>__KITCHEN_TIPS_ROOT__</string>
+
         <key>RECIPES_ROOT</key>
         <string>__RECIPES_ROOT__</string>
         <!-- Vault-relative root of year-subfoldered daily notes; a cooking log

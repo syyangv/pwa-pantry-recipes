@@ -1504,3 +1504,21 @@ def test_every_key_the_shipped_smoke_spec_requires_is_in_the_live_contract() -> 
         f"converge-smoke.json requires keys app/ never publishes: {missing}. Either the release "
         "removed the field (drop it from the spec) or the spec is wrong."
     )
+
+
+def test_configured_kitchen_tips_are_backend_freshness_inputs(world: World) -> None:
+    relative = "Hobbies/做饭/厨房技巧"
+    root = world.vault / relative
+    root.mkdir(parents=True)
+    note = root / "预制croissant.md"
+    note.write_text("---\n材料: []\n---\n")
+    os.utime(note, (OLD, OLD))
+    options = world.options(kitchen_tips_root=relative)
+    gate.check_backend_freshness(options)
+    assert by_id(options.results, "3 backend-freshness").status == gate.PASS
+    os.utime(note, (YOUNG, YOUNG))
+    options.results = []
+    gate.check_backend_freshness(options)
+    result = by_id(options.results, "3 backend-freshness")
+    assert result.status == gate.FAIL
+    assert "kitchen_tips_root:" in result.detail

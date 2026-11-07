@@ -578,3 +578,29 @@ can check against the tree, not as a claim about intent.
 - Catalog producer: [`wholefoods-to-pantry`](https://github.com/syyangv/wholefoods-to-pantry)
   — sole writer of `pantry_items.db`; this app only reads it.
 - Domain vocabulary: [`CONTEXT.md`](CONTEXT.md).
+
+
+### Kitchen tips in the recipe list
+
+Set the server-owned environment variable
+`KITCHEN_TIPS_ROOT=Hobbies/做饭/厨房技巧` to include that folder alongside
+`RECIPES_ROOT`. The LaunchAgent installer and `.env.example` include this setting;
+blank/unset disables it for other vault layouts. A configured missing folder fails
+closed. No note is moved or rewritten.
+
+Direct Markdown children with valid frontmatter appear, except the folder's own
+index note. Unlike the Recipes folder, kitchen tips need not have `材料` or `调料`.
+A tip without a `步骤` heading displays its original body as instructions. Legacy
+`厨具` is read when `烹饪工具` is absent (comma-separated tools are supported).
+Add the exact Pantry Item name under `材料` to participate in pantry matching.
+Duplicate note names across the two folders fail closed because detail routes
+and Cooking Log links identify notes by basename.
+
+Production now runs on Linuxbox under `pwa-pantry-recipes.service` (see the
+2026-11-06 record in `docs/runbook/deployment.md`); do not re-enable the retired
+Mac LaunchAgent. Set `KITCHEN_TIPS_ROOT` through a systemd user-service drop-in,
+then daemon-reload and restart that service. For a Mac installation, changing
+the plist requires `bootout` + `bootstrap`, not a code-only kickstart.
+Pass `--kitchen-tips-root Hobbies/做饭/厨房技巧` to the converge gate so its
+backend-freshness check covers this source too.
+Implementation and tests do not prove that the phone has received the change.
