@@ -1114,3 +1114,44 @@ probe expected the retired Mac ingress); subsequent gate/API changes have 70
 passing targeted tests. Frontend tests/module checks, Ruff, mypy and vendor drift
 checks pass. Release observations are recorded separately after deployment; none
 of these test results establishes production or phone convergence.
+
+### v0.7.6 release observations
+
+Observed at 2026-11-07 04:55–05:00 UTC (2026-11-06 local):
+
+- App release `bd0960c` and follow-up release-smoke fix `5501914` were committed,
+  pushed, and fast-forwarded onto the clean Linux production checkout.
+- Before restart, the app-owned database was backed up to
+  `/home/mie/.local/share/pwa-pantry-recipes/recipes.sqlite3.pre-v0.7.6-20261107T045542Z`.
+  Migration 003 was already present; no new migration was introduced.
+- Added only `~/.config/systemd/user/pwa-pantry-recipes.service.d/20-kitchen-tips.conf`
+  with `[Service]` / `Environment="KITCHEN_TIPS_ROOT=Hobbies/做饭/厨房技巧"`.
+  The existing `.env`, writable flag, vault roots, identity, and Serve routes were
+  not edited. `daemon-reload` + restart completed; port-manager observed a new
+  uvicorn listener on loopback 8007 (PID 1421038).
+- Live detail `GET /api/recipes/预制croissant` reports the original kitchen-tip
+  path and instructions, `pantryItemId=57`, `matchMethod=exact_name`,
+  `inStock=true`, and `stockJoinState=joined`.
+- The **first** ceiling run exited **1**: condition 4 assumed the first recipe
+  had Ingredients, which is not true for all kitchen tips. `5501914` removes
+  that sampling assumption: it validates every recipe and every Ingredient,
+  still fails when there are zero Ingredients to check, and catches malformed
+  later entries. Regression tests prove those failure paths. No baseline or
+  weakened schema was used.
+- After that fix, the shared floor (with both origins, not `--local-only`)
+  exited **0**, and the ceiling exited **0**, all eleven checks evaluated.
+  The ceiling included `--kitchen-tips-root Hobbies/做饭/厨房技巧`.
+  Backend start fingerprint: `2026-11-07T04:55:43.958291Z`.
+  This is the **new Linux origin**; it does not revise the historical Mac
+  origin's exit-3 observations. Linux's gate reported ingress as pass-through
+  and supplied `Tailscale-User-Login: syyangv@github` on its probes.
+- A separate **headerless** HTTPS request from the non-serving Mac returned
+  **401 `identity_missing`**. This remains an access limitation of that probe,
+  not a successful participant check. The gate's supplied-header observations
+  do not establish injected identity for that Mac or the phone. Phone launch,
+  asset freshness, and user-visible behavior remain **not observed**.
+
+Rollback: preserve the new drop-in by renaming its suffix away from `.conf`,
+restore the prior checkout `006277f` using a clean detached checkout, then
+`systemctl --user daemon-reload` and restart this same service. Do not restore
+or bootstrap the Mac plist and do not remove unrelated Serve handlers.
